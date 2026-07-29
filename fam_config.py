@@ -254,10 +254,24 @@ if _is_public:
 # app the board can't run or the variant strips (e.g. car apps in a public build).
 # Empty/unset keeps the full board+variant set, so normal builds are unaffected.
 # Core/system apps are not in APPS, so the firmware always boots regardless.
+# Only these user-selectable apps may be dropped by a custom build. Everything else
+# in APPS is a service / settings / system app that non-app code links against
+# (e.g. Settings -> power_reboot from the `power` service), so it's ALWAYS compiled —
+# dropping it breaks the link. This set mirrors the applab catalog.
+OPTIONAL_APPS = {
+    "subghz", "subghz_remote", "esubghz_chat", "lora_monitor", "meshtastic_sniffer",
+    "nfc", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
+    "flipper_xremote", "ibutton", "ble_spam", "wlan", "esp_now", "nrf24",
+    "fz_nrf24_jammer", "lan_attack", "bad_usb", "u2f", "gpio", "pin_config",
+    "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
+    "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
+    "clock", "qrcode", "pocketlab", "defender",
+}
 _apps_env = os.environ.get("FLIPPER_APPS", "").strip()
 if _apps_env:
     _want = {a.strip() for a in _apps_env.split(",") if a.strip()}
-    APPS = [a for a in APPS if a in _want]
+    # Keep every core app; among OPTIONAL apps keep only the requested ones.
+    APPS = [a for a in APPS if a not in OPTIONAL_APPS or a in _want]
 
 EXTRA_EXT_APPS = []
 TARGET_HW = 32
