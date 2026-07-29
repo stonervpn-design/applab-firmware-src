@@ -1,0 +1,18 @@
+App(
+    appid="lora_monitor",
+    name="LoRa Monitor",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    targets=["all"],
+    entry_point="lora_app",
+    requires=[
+        "gui",
+    ],
+    stack_size=4 * 1024,
+    fap_category="Sub-GHz",
+    fap_icon="assets/lora_10px.png",
+    fap_icon_assets="assets",
+    fap_description="LoRa RX/TX monitor for the Cap LoRa-1262 (SX1262, 868-923 MHz)",
+    fap_version="1.0",
+    fap_author="cardputer",
+    icon="I_lora_10px",
+)

@@ -1,0 +1,6 @@
+ADD_SCENE(can_commander, main, Main)
+ADD_SCENE(can_commander, send, Send)
+ADD_SCENE(can_commander, periodic, Periodic)
+ADD_SCENE(can_commander, monitor, Monitor)
+ADD_SCENE(can_commander, presets, Presets)
+ADD_SCENE(can_commander, settings, Settings)

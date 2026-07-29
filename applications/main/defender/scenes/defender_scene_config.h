@@ -1,0 +1,7 @@
+ADD_SCENE(defender, start, Start)
+ADD_SCENE(defender, deauth, Deauth)
+ADD_SCENE(defender, rogue, Rogue)
+ADD_SCENE(defender, ble_tracker, BleTracker)
+ADD_SCENE(defender, ble_spam, BleSpam)
+ADD_SCENE(defender, jammer, Jammer)
+ADD_SCENE(defender, locator, Locator)

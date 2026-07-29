@@ -1,0 +1,8 @@
+App(
+    appid="device_name",
+    name="Device Name",
+    apptype=FlipperAppType.SETTINGS,
+    entry_point="device_name_app",
+    stack_size=2 * 1024,
+    order=75,
+)

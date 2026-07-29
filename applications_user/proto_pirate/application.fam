@@ -1,0 +1,50 @@
+# ProtoPirate — ESP32 static port (RX / decode).
+#
+# Upstream ProtoPirate is built around fal_embedded PLUGIN modules: each RX
+# registry, each TX protocol, and each tool scene ships as a separate .fal ELF
+# loaded at runtime by the Flipper plugin manager. This ESP32 port has NO FAP
+# plugin loader (plugin_manager is a stub), so the whole app is compiled into a
+# single image and the five RX registry plugins are wired statically in
+# helpers/protopirate_protocol_plugin_host.c (calls their _ep() directly).
+#
+# Disabled here (see defines.h): TX/emulate (its 21 protocols are macro-generated
+# one-per-plugin from a single source and cannot be flattened into one image) and
+# the timing tuner. Decoding of received signals is unaffected. The offline
+# sub-decode and PSA brute-force TOOL scenes remain present but are plugin-loaded,
+# so on this port they fail to load gracefully (error toast + back) until/unless
+# their tool-scene host is also ported to static wiring.
+
+App(
+    appid="proto_pirate",
+    name="ProtoPirate",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    targets=["all"],
+    entry_point="protopirate_app",
+    requires=["gui", "subghz"],
+    stack_size=4 * 1024,
+    fap_description="Decode car key fob signals from Sub-GHz",
+    fap_version="3.2",
+    fap_icon="images/protopirate_10px.png",
+    fap_category="Sub-GHz",
+    fap_icon_assets="images",
+    fap_file_assets="keystore",
+    fap_author="RocketGod-git (ProtoPirate) / ESP32 static port",
+    cdefines=["PROTOPIRATE_PROTOCOL_RX_ONLY=1"],
+    sources=[
+        # Everything, recursively — including the five RX registry plugin .c
+        # (protocols/plugins/protopirate_{am,am_vag,fm,fm_f4,fm_honda1}_plugin.c)
+        # and all decoder sources, compiled directly into the app.
+        "*.c*",
+        # Tool-scene + emulate PLUGIN wrappers are separate ELF entry points that
+        # the static build never loads; leaving them in would add stray eps.
+        "!scenes/plugins",
+        # TX protocol plugin template: macro-compiled once-per-protocol on real
+        # Flipper via per-instance cdefines; it can't be built a single time here.
+        "!protocols/plugins/protopirate_tx_protocol_plugin.c",
+        # Emulate (TX) disabled — scene relies on the .fam excluding it.
+        "!scenes/protopirate_scene_emulate.c",
+        # Timing tuner disabled.
+        "!scenes/protopirate_scene_timing_tuner.c",
+        "!protocols/protocol_timings.c",
+    ],
+)

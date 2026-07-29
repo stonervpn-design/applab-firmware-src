@@ -1,0 +1,152 @@
+================================================================================
+  CARDPUTER "MOB" FLIPPER PORT  —  DECODABLE SUB-GHz PROTOCOLS
+  Generated 2026-07-22   |   Firmware build 2026-07-21 (furi_esp32.bin)
+================================================================================
+
+HOW MODES WORK (important — the board has NO PSRAM, ~103 KB free heap):
+  The receiver allocates one decoder per registered protocol at Sub-GHz app
+  entry, so the General set and the Automotive set CANNOT be resident at the
+  same time. You switch between them:
+
+      Sub-GHz  ->  Radio Settings  ->  Automotive  =  ON / OFF
+
+  OFF (default) = GENERAL set below.   ON = AUTOMOTIVE set below.
+  RAW + BinRAW appear in BOTH modes so any undecoded signal can still be
+  captured and replayed.
+
+LEGEND:
+  [TX]  = decode AND emulate/transmit (has an encoder)
+  [RX]  = decode / read only (no transmit)
+  [CAP] = raw capture + replay (no protocol decode)
+
+--------------------------------------------------------------------------------
+  GENERAL MODE  (default)   —   68 registry items
+--------------------------------------------------------------------------------
+
+Gates / garage / barrier / remotes:
+  [TX]  GateTX
+  [TX]  KeeLoq                 (227-key manufacturer keystore on SD)
+  [TX]  Nice FLO
+  [TX]  Nice FloR-S
+  [TX]  CAME
+  [TX]  CAME TWEE
+  [TX]  CAME Atomo
+  [TX]  Faac SLH
+  [TX]  Hormann HSM
+  [TX]  Nero Sketch
+  [TX]  Nero Radio
+  [TX]  Somfy Telis
+  [TX]  Somfy Keytis
+  [TX]  Princeton
+  [TX]  Linear
+  [TX]  LinearDelta3
+  [TX]  Security+ 1.0         <-- Chamberlain/LiftMaster garage (v1 trinary)
+  [TX]  Security+ 2.0         <-- Chamberlain/LiftMaster garage (v2 Manchester)
+  [TX]  MegaCode
+  [TX]  Holtek
+  [TX]  Holtek_HT12X
+  [TX]  Cham_Code             (Chamberlain classic)
+  [TX]  Power Smart
+  [TX]  Marantec
+  [TX]  Marantec24
+  [TX]  BETT
+  [TX]  Doitrand
+  [TX]  Phoenix_V2
+  [TX]  Magellan
+  [TX]  Intertechno_V3
+  [TX]  Clemsa
+  [TX]  Ansonic
+  [TX]  SMC5326
+  [TX]  Dooya
+  [TX]  Alutech AT-4N
+  [TX]  KingGates Stylo4k
+  [TX]  Mastercode
+  [TX]  Legrand
+  [TX]  Dickert_MAHS
+  [TX]  GangQi
+  [TX]  Hollarm
+  [TX]  Hay21
+  [TX]  Revers_RB2
+  [TX]  Feron
+  [TX]  Roger
+  [TX]  Elplast
+  [TX]  Treadmill37
+  [TX]  Beninca ARC
+  [TX]  Jarolift
+  [TX]  Ditec GOL4
+  [TX]  KeyFinder
+  [TX]  Telcoma Edge
+  [TX]  AllStar / FireFly
+  [TX]  Nord ICE
+  [TX]  Hormann BiSecur
+  [RX]  Cardin S508
+  [RX]  X10                   (home automation, 310 MHz AM)
+  [RX]  iDo 117/111
+
+Security / alarm sensors:
+  [TX]  Honeywell Sec
+  [TX]  Honeywell
+
+Tire-pressure sensors (TPMS):
+  [TX]  Schrader GG4
+  [RX]  Ford TPMS
+  [RX]  Renault TPMS
+  [RX]  Citroen TPMS
+  [RX]  Toyota PMV-107J
+
+Pager:
+  [RX]  POCSAG                (pager message decode; needs FM/FSK preset)
+
+Generic:
+  [CAP] RAW
+  [CAP] BinRAW
+
+--------------------------------------------------------------------------------
+  AUTOMOTIVE MODE  (Radio Settings -> Automotive = ON)   —   28 registry items
+  ProtoPirate car RKE decoders. These are DOOR/ID (RKE), not immobilizer/start.
+--------------------------------------------------------------------------------
+
+  [CAP] RAW
+  [CAP] BinRAW
+  [RX]  BMW CAS4
+  [TX]  Hyundai/Kia RIO
+  [TX]  MazdaSiemens
+  [TX]  Sheriff CFM
+  [TX]  Fiat V1               (Hitag2 cipher, 8 known keys)
+  [TX]  Fiat V0
+  [TX]  Chrysler V0
+  [TX]  Ford V0
+  [TX]  Ford V1
+  [TX]  Ford V2
+  [TX]  Ford V3
+  [TX]  Honda Static
+  [TX]  Kia V0
+  [TX]  Kia V1
+  [TX]  Kia V2
+  [TX]  Kia V3/V4
+  [TX]  Kia V5
+  [TX]  Kia V6
+  [TX]  Kia V7
+  [TX]  Land Rover V0
+  [TX]  Mazda V0
+  [TX]  Mitsubishi V0
+  [TX]  Porsche Touareg
+  [TX]  PSA                   (Peugeot/Citroen; on-device brute-force available)
+  [TX]  Scher-Khan            (replay only - no counter roll-forward)
+  [TX]  Star Line
+  [TX]  Subaru
+  [TX]  VAG                   (AUT64 cipher)
+
+--------------------------------------------------------------------------------
+  NOTES
+--------------------------------------------------------------------------------
+  * KeeLoq / KIA / Fiat / VAG / PSA rely on key material loaded at RUNTIME from
+    the microSD:  E:\subghz\assets\keeloq_mfcodes_user  (227 keys).
+    If that file is missing/stubbed, KeeLoq falls back to the 4-key system file
+    and KIA automotive decode breaks. Keep it in sync with the port master:
+      applications\main\subghz\resources\subghz\assets\keeloq_mfcodes_user
+  * Automotive car encoders are RF-UNTESTED (simulation round-trips only) and
+    are RKE (unlock/lock/ID) — not engine immobilizer (that's 125 kHz LF, no HW).
+  * Rainbow-table protocols (Nice FloR-S, Alutech AT-4N) ship IV-header assets
+    only in this port.
+================================================================================

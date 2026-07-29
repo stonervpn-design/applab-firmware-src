@@ -1,0 +1,10 @@
+App(
+    appid="bus_tools",
+    name="Bus Tools",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="bus_tools_app",
+    stack_size=3 * 1024,
+    icon="A_GPIO_14",
+    order=53,
+    fap_libs=["assets"],
+)

@@ -1,0 +1,19 @@
+App(
+    appid="flippergotchi",
+    name="Flippergotchi",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    targets=["all"],
+    entry_point="flippergotchi_app",
+    requires=[
+        "gui",
+        "wlan",
+    ],
+    stack_size=4 * 1024,
+    fap_category="GPIO",
+    fap_icon="assets/gotchi_10px.png",
+    fap_icon_assets="assets",
+    fap_description="AI pwnagotchi: smart-dwell capture, PMKID solicit, pwngrid, XP, GPS loot",
+    fap_version="2.0",
+    fap_author="cardputer",
+    icon="I_gotchi_10px",
+)

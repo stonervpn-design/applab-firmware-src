@@ -1,0 +1,12 @@
+App(
+    appid="qrcode",
+    name="QR Code",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="qrcode_app",
+    stack_size=4 * 1024,
+    icon="A_Clock_14",
+    order=82,
+    fap_icon="icon.png",
+    fap_category="Tools",
+    requires=["gui", "dialogs"],
+)

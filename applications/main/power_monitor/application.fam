@@ -1,0 +1,12 @@
+App(
+    appid="power_monitor",
+    name="Power Monitor",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="power_monitor_app",
+    stack_size=2 * 1024,
+    icon="A_Clock_14",
+    order=90,
+    fap_icon="icon.png",
+    fap_category="Tools",
+    requires=["gui", "power"],
+)

@@ -1,0 +1,18 @@
+App(
+    appid="meshtastic_sniffer",
+    name="Meshtastic Sniffer",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    targets=["all"],
+    entry_point="meshtastic_app",
+    requires=[
+        "gui",
+    ],
+    stack_size=4 * 1024,
+    fap_category="Sub-GHz",
+    fap_icon="assets/mesh_10px.png",
+    fap_icon_assets="assets",
+    fap_description="Sniff + decrypt (default key) Meshtastic LoRa traffic via the Cap LoRa-1262",
+    fap_version="1.0",
+    fap_author="cardputer",
+    icon="I_mesh_10px",
+)

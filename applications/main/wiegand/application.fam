@@ -1,0 +1,10 @@
+App(
+    appid="wiegand",
+    name="Wiegand Reader",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="wiegand_app",
+    stack_size=3 * 1024,
+    icon="A_GPIO_14",
+    order=52,
+    fap_libs=["assets"],
+)

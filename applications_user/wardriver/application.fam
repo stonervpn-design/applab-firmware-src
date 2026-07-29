@@ -1,0 +1,19 @@
+App(
+    appid="wardriver",
+    name="GPS Wardriver",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    targets=["all"],
+    entry_point="wardriver_app",
+    requires=[
+        "gui",
+        "storage",
+    ],
+    stack_size=4 * 1024,
+    fap_category="Tools",
+    fap_icon="assets/wardrive_10px.png",
+    fap_icon_assets="assets",
+    fap_description="WiFi wardriving with GPS (Cap LoRa-1262 GNSS) -> Wigle CSV on SD",
+    fap_version="1.0",
+    fap_author="cardputer",
+    icon="I_wardrive_10px",
+)

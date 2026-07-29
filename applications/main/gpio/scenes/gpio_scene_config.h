@@ -1,0 +1,6 @@
+ADD_SCENE(gpio, start, Start)
+ADD_SCENE(gpio, manual, Manual)
+ADD_SCENE(gpio, manual_edit, ManualEdit)
+ADD_SCENE(gpio, usb_uart, UsbUart)
+ADD_SCENE(gpio, usb_uart_cfg, UsbUartCfg)
+ADD_SCENE(gpio, usb_uart_close_rpc, UsbUartCloseRpc)

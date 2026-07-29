@@ -1,0 +1,10 @@
+App(
+    appid="pin_config",
+    name="Pin Config",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="pin_config_app",
+    stack_size=4 * 1024,
+    icon="A_GPIO_14",
+    order=51,
+    fap_libs=["assets"],
+)

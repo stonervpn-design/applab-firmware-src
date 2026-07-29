@@ -1,0 +1,10 @@
+App(
+    appid="lan_attack",
+    name="LAN Attack",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="lan_attack_app",
+    stack_size=8 * 1024,
+    icon="A_Plugins_14",
+    order=70,
+    fap_libs=["assets"],
+)

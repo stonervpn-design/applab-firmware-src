@@ -1,0 +1,152 @@
+name: Custom firmware build
+
+# On-demand per-app firmware builder for the applab catalog.
+#
+# Triggered by the applab site (via a small proxy that calls the GitHub API with a
+# repository_dispatch of type "custom-build"), or manually for testing.
+#
+# SAFETY:
+#   * The variant is FORCED to "public" — this service must NEVER hand out the
+#     private car-key firmware. `FLIPPER_APPS` can only NARROW the public app set
+#     (fam_config applies it after the public/board filters), so it can't re-add
+#     stripped apps either.
+#   * `build_id` is sanitized to [a-z0-9-] before it's used as a path.
+#
+# PREREQUISITES (one-time setup):
+#   * This (private) repo must contain the full firmware source.
+#   * A SEPARATE PUBLIC repo hosts the built bins over Pages, e.g.
+#     stonervpn-design/applab-builds  (Settings -> Pages -> main / root).
+#   * Repo secret BUILDS_REPO_TOKEN = a fine-grained PAT with Contents:write on
+#     the applab-builds repo.
+#   * Repo variable BUILDS_REPO = "stonervpn-design/applab-builds".
+#   * For the M5Stick S3 (SD-less) the pre-baked /ext image lives at
+#     ci/ext_m5stick_s3.bin (same sd_content baked once; app choice doesn't change it).
+
+on:
+  workflow_dispatch:
+    inputs:
+      board:
+        description: "m5stick_s3 | m5stack_cardputer_adv"
+        required: true
+        default: "m5stack_cardputer_adv"
+      apps:
+        description: "Comma-separated appids to include (empty = full public set)"
+        required: false
+        default: ""
+      build_id:
+        description: "Unique id for this build (used as the output folder)"
+        required: true
+  repository_dispatch:
+    types: [custom-build]
+
+concurrency:
+  group: custom-build-${{ github.event.client_payload.build_id || inputs.build_id }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.4.1
+    timeout-minutes: 40
+    steps:
+      - name: Checkout firmware source
+        uses: actions/checkout@v4
+
+      - name: Resolve & validate inputs
+        id: cfg
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOARD="${{ github.event.client_payload.board || inputs.board }}"
+          APPS="${{ github.event.client_payload.apps || inputs.apps }}"
+          BID="${{ github.event.client_payload.build_id || inputs.build_id }}"
+
+          # board allowlist
+          case "$BOARD" in
+            m5stick_s3|m5stack_cardputer_adv) ;;
+            *) echo "::error::unknown board '$BOARD'"; exit 1 ;;
+          esac
+          # build_id: keep only safe chars, cap length (no path traversal)
+          BID="$(printf '%s' "$BID" | tr -cd 'a-zA-Z0-9-' | cut -c1-40)"
+          [ -n "$BID" ] || { echo "::error::empty build_id"; exit 1; }
+          # apps: keep only appid-safe chars and commas
+          APPS="$(printf '%s' "$APPS" | tr -cd 'a-zA-Z0-9_,-')"
+
+          if [ "$BOARD" = "m5stick_s3" ]; then
+            SDKDEF="sdkconfig.defaults;sdkconfig.defaults.m5stick_s3"
+            NAME="applab M5Stick S3 (custom)"
+          else
+            SDKDEF="sdkconfig.defaults;sdkconfig.defaults.m5stack_cardputer_adv"
+            NAME="applab Cardputer ADV (custom)"
+          fi
+          {
+            echo "board=$BOARD"; echo "apps=$APPS"; echo "bid=$BID"
+            echo "sdkdef=$SDKDEF"; echo "name=$NAME"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $BOARD (public) id=$BID apps=[$APPS]"
+
+      - name: Build firmware (public variant, selected apps)
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          export FLIPPER_BOARD="${{ steps.cfg.outputs.board }}"
+          export FLIPPER_VARIANT="public"                      # forced — never private
+          export FLIPPER_APPS="${{ steps.cfg.outputs.apps }}"  # narrows the public set
+          rm -f sdkconfig
+          idf.py -B build \
+            -DIDF_TARGET=esp32s3 \
+            -DFLIPPER_BOARD="${{ steps.cfg.outputs.board }}" \
+            -DFLIPPER_VARIANT=public \
+            -DSDKCONFIG_DEFAULTS="${{ steps.cfg.outputs.sdkdef }}" \
+            build
+
+      - name: Merge single-file image
+        shell: bash
+        run: |
+          set -euo pipefail
+          . "$IDF_PATH/export.sh"
+          B=build
+          ARGS=( --chip esp32s3 merge_bin -o firmware.bin --flash_mode dio --flash_size 8MB --flash_freq 80m
+                 0x0    "$B/bootloader/bootloader.bin"
+                 0x8000 "$B/partition_table/partition-table.bin"
+                 0x10000 "$B/furi_esp32.bin" )
+          if [ "${{ steps.cfg.outputs.board }}" = "m5stick_s3" ]; then
+            # SD-less board: bake the pre-built /ext FAT image at the storage partition.
+            test -f ci/ext_m5stick_s3.bin || { echo "::error::missing ci/ext_m5stick_s3.bin"; exit 1; }
+            ARGS+=( 0x390000 ci/ext_m5stick_s3.bin )
+          fi
+          python -m esptool "${ARGS[@]}"
+          ls -l firmware.bin
+
+      - name: Publish to the public builds repo
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.BUILDS_REPO_TOKEN }}
+          BUILDS_REPO: ${{ vars.BUILDS_REPO }}
+        run: |
+          set -euo pipefail
+          BID="${{ steps.cfg.outputs.bid }}"
+          test -n "$TOKEN" || { echo "::error::BUILDS_REPO_TOKEN not set"; exit 1; }
+          test -n "$BUILDS_REPO" || { echo "::error::BUILDS_REPO var not set"; exit 1; }
+          git config --global user.email "ci@applab"
+          git config --global user.name "applab-ci"
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${BUILDS_REPO}.git" out
+          DEST="out/builds/$BID"
+          mkdir -p "$DEST"
+          cp firmware.bin "$DEST/firmware.bin"
+          cat > "$DEST/manifest.json" <<JSON
+          {
+            "name": "${{ steps.cfg.outputs.name }}",
+            "version": "$BID",
+            "new_install_prompt_erase": true,
+            "builds": [
+              { "chipFamily": "ESP32-S3", "parts": [ { "path": "firmware.bin", "offset": 0 } ] }
+            ]
+          }
+          JSON
+          cd out
+          git add -A
+          git commit -q -m "custom build $BID (${{ steps.cfg.outputs.board }})"
+          git push -q origin HEAD
+          echo "Published: https://$(echo "$BUILDS_REPO" | cut -d/ -f1).github.io/$(echo "$BUILDS_REPO" | cut -d/ -f2)/builds/$BID/manifest.json"

@@ -1,0 +1,10 @@
+# Name,   Type, SubType, Offset,  Size,     Flags
+# Standalone single-app layout for the LilyGO T-Embed CC1101 (16 MB flash).
+# No Bruce ota_1 partition — this firmware owns the whole chip. /ext lives on the
+# microSD card; /int is NVS. Offsets are auto-computed from the 0x8000 table.
+#   factory app @ 0x10000 (after nvs 0x6000 + phy 0x1000), 8 MB — generous headroom
+#   over the ~3 MB merged image, room to grow. Rest of the 16 MB is unused flash.
+nvs,      data, nvs,     ,        0x6000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        0x800000,
+coredump, data, coredump,,        0x40000,

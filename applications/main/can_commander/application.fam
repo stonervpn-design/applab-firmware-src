@@ -1,0 +1,10 @@
+App(
+    appid="can_commander",
+    name="CAN Commander",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="can_commander_app",
+    stack_size=6 * 1024,
+    icon="A_GPIO_14",
+    order=54,
+    fap_libs=["assets"],
+)

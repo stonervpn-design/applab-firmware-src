@@ -1,0 +1,9 @@
+App(
+    appid="st25r_nfc_diag",
+    name="NFC Diag (ST25R)",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="st25r_nfc_diag_app",
+    requires=["gui"],
+    stack_size=4 * 1024,
+    fap_category="Tools",
+)

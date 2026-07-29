@@ -1,0 +1,10 @@
+App(
+    appid="defender",
+    name="Defender",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="defender_app",
+    stack_size=8 * 1024,
+    icon="A_Plugins_14",
+    order=68,
+    fap_libs=["assets"],
+)

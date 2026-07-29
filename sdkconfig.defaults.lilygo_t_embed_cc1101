@@ -1,0 +1,91 @@
+# =============================================================================
+# LilyGO T-Embed CC1101 board overrides.
+#
+# Applied AFTER sdkconfig.defaults and its auto-merged sdkconfig.defaults.esp32s3
+# variant (which already sets 16 MB flash, 8 MB OPI PSRAM, BLE and USB tuning for
+# this exact board). This file only changes what the "standalone" (non-multiboot)
+# choice and the console require.
+# =============================================================================
+
+# Standalone: take the whole flash for a single app image (no Bruce ota_1). This
+# overrides the multiboot table that sdkconfig.defaults.esp32s3 selects.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_lilygo_t_embed.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions_lilygo_t_embed.csv"
+
+# Console on the internal USB-Serial-JTAG controller (NOT UART0). On the S3, UART0
+# defaults to GPIO43/44 — which are the nRF24 CSN/CE pins on this board — so a UART
+# console would fight the radio and never reach the USB port. USB-Serial-JTAG uses
+# the dedicated internal controller and frees GPIO43/44. The esp32s3 profile omits
+# this, so it must be set here.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# BLE host: NimBLE, not Bluedroid. The port's ble_hid / ble_serial components are
+# written against NimBLE (esp_nimble_hci.h). The esp32s3 profile leaves the BT-stack
+# choice to the board file, so without this the build inherits the base config's
+# Bluedroid and ble_hid.c fails to compile. Selecting NimBLE deselects Bluedroid
+# (Kconfig choice). Mirrors the proven Cardputer-ADV / StickS3 configuration.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
+
+# Optimize for size (-Os), matching the proven Cardputer-ADV / StickS3 builds.
+# Neither the base nor the esp32s3 profile sets an optimization level, so the build
+# otherwise defaults to -Og (debug), under which GCC's format-truncation analysis
+# raises -Werror=format-truncation on code that is fine at -Os (e.g. can_commander).
+# -Os also shrinks the image.
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+
+# Keep ALL code / rodata / BSS out of PSRAM — REQUIRED for stable boot. The esp32s3
+# profile offloads instructions (SPIRAM_FETCH_INSTRUCTIONS), rodata (SPIRAM_RODATA)
+# and bt/lwip/net80211 BSS (SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY) into PSRAM for RAM
+# headroom. But PSRAM shares the flash cache: during any flash write (e.g. the NVS
+# settings save at startup) the cache is disabled, so PSRAM-resident code/rodata is
+# unreachable — an ISR or the flash path that touches it faults, and because the
+# panic handler is also unreachable the chip resets SILENTLY via the interrupt
+# watchdog (TG1WDT), with no backtrace and no coredump. That was the boot loop
+# (resets the instant "Saving bt.settings" writes NVS). The StickS3 — the other
+# PSRAM S3 board, which boots fine — keeps SPIRAM in MODE_OCT but sets none of these
+# offloads. PSRAM heap (SPIRAM_USE_MALLOC) stays on; main.lf has no extram_bss
+# mappings so nothing depends on them.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=n
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n
+# The decisive one: task stacks MUST stay in internal RAM. With stacks in PSRAM, an
+# interrupt taken while a flash write has the cache disabled makes _xt_context_save
+# write the saved registers to an unreachable PSRAM stack -> hang -> TG1WDT. The
+# reset's Saved PC pointed straight at _xt_context_save. StickS3 leaves this off too.
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=n
+# Keep thread stacks (and other allocations <=16KB) in internal RAM. The esp32s3
+# profile lowered SPIRAM_MALLOC_ALWAYSINTERNAL to 1024, so furi_thread_start's 4KB
+# service stacks were malloc'd into PSRAM — the root of the whole boot loop (silent
+# watchdog crash with stacks-in-PSRAM allowed; xPortcheckValidStackMem assert once
+# disallowed). 16384 (the StickS3's proven value) forces every task stack internal.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+
+# RMT ISR in IRAM — REQUIRED. The WS2812 RGB LED (GPIO14) is driven via RMT by the
+# notification service. If the RMT ISR lives in flash, it faults when it fires while
+# the flash cache is disabled during an NVS write (e.g. saving settings at startup),
+# and — with the panic handler also in flash — the chip resets silently via the
+# interrupt watchdog (TG1WDT) with no backtrace. That was the boot loop. Both proven
+# boards (Cardputer-ADV, StickS3) set this; the esp32s3/base profiles do not.
+CONFIG_RMT_ISR_IRAM_SAFE=y
+CONFIG_RMT_SUPPRESS_DEPRECATE_WARN=y
+
+# Panic coredump to the flash coredump partition, so future crashes leave a decodable
+# backtrace (USB-JTAG serial capture misses cache-disabled panics). Base/esp32s3 omit it.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+
+# DIAGNOSTIC: run the panic handler from IRAM so it prints an exception + PC +
+# backtrace even when the crash happens with the flash cache disabled (the current
+# silent TG1WDT reset leaves no output and no coredump). Reveals the real fault so
+# the boot loop can be root-caused instead of guessed. (Can be removed later.)
+CONFIG_ESP_PANIC_HANDLER_IRAM=y

@@ -1,0 +1,7 @@
+ADD_SCENE(qrcode, start, Start)
+ADD_SCENE(qrcode, text, Text)
+ADD_SCENE(qrcode, wifi, Wifi)
+ADD_SCENE(qrcode, vcard, Vcard)
+ADD_SCENE(qrcode, field_input, FieldInput)
+ADD_SCENE(qrcode, file, File)
+ADD_SCENE(qrcode, display, Display)
