@@ -10,7 +10,9 @@
  *                    long-press >=600ms -> InputKeyBack (SHORT — pops a scene)
  *                    keep holding >=1200ms -> InputKeyBack (LONG — game exit, e.g.
  *                                            Snake; an extension beyond Bruce)
- *   Left/Right:      BMI270 tilt (roll the stick) — see tilt_nav.c.
+ *   Screen wake:     any deliberate BMI270 movement wakes the screen once it has
+ *                    gone dark from inactivity — and does nothing otherwise. There
+ *                    is no tilt navigation.
  *
  * A single-click is confirmed only after the 250ms double-click window closes, so Down
  * has a slight, deliberate lag (Bruce does the same) to distinguish it from Up.
@@ -21,12 +23,12 @@
 #include "target_input.h"
 
 #include <furi.h>
+#include <furi_hal_light.h>
 #include <input.h>
 #include <driver/gpio.h>
 #include <nvs.h>
 #include "boards/board.h"
 #include "bmi270.h"
-#include "tilt_nav.h"
 
 #define TAG "InputStickS3"
 
@@ -37,7 +39,8 @@
  *   KEY1 (GPIO11, "M5"/front button) = Select/Ok.
  *   KEY2 (GPIO12, side button)       = nav: single-click Down, double-click Up,
  *                                      long-press (>=600ms) Back.
- * Left/Right come from the BMI270 tilt (our addition; Bruce has no tilt).
+ * The BMI270 IMU is used only to wake the screen from inactivity (our addition;
+ * Bruce has no tilt); it never injects navigation keys.
  * DW_LONG2 is an extension beyond Bruce: keep holding past it for a LONG Back, which
  * the bundled Flipper games (Snake, ...) require to exit — Bruce's Arduino apps don't
  * use that convention so upstream stops at one Back. */
@@ -87,13 +90,26 @@ static BtnState s_key2;
 
 static bool s_ready = false;
 
-/* ---- BMI270 tilt -> Left/Right ---- */
+/* ---- BMI270 motion -> wake the screen (only; never navigation) ---- */
 static volatile bool s_tilt_enabled = true; /* default on; System settings persists it */
-static TiltState s_tilt;
+
+/* Deliberate-motion detector. We track a slow baseline of the resting accel vector;
+ * a large deviation from it means the stick was picked up / tilted / shaken. The
+ * baseline follows the resting pose on a time gate (not per-sample), so detection
+ * is independent of the input poll rate. At ±2g, 1g ≈ 16384 LSB. */
+#define WAKE_DEV_THRESH    3000   /* L1 deviation to count as movement (~0.18 g) */
+#define WAKE_REFRACTORY_MS 1500U  /* min gap between wakes, and settle time for the baseline */
+#define WAKE_BASE_STEP_MS  100U   /* baseline chases the resting pose at ~10 Hz */
+#define WAKE_KEY           InputKeyOk /* wake carries a key but only as Press+Release (no Short/Long), so no view acts on it */
+
+static int32_t s_acc_base[3];
+static bool s_acc_base_have = false;
+static uint32_t s_acc_base_at = 0;
+static uint32_t s_wake_last_at = 0;
 
 void target_input_set_tilt_enabled(bool enabled) {
     s_tilt_enabled = enabled;
-    if(!enabled) s_tilt = (TiltState){0}; /* drop any held repeat */
+    if(!enabled) s_acc_base_have = false; /* re-seed the baseline next time it's on */
     /* persist so it survives reboot (read back in target_input_init) */
     nvs_handle_t h;
     if(nvs_open("input", NVS_READWRITE, &h) == ESP_OK) {
@@ -107,10 +123,34 @@ bool target_input_get_tilt_enabled(void) {
     return s_tilt_enabled;
 }
 
-/* Which raw accel axis rolls with Left/Right, and which reads ~1g upright. Confirm
- * on-device by tilting; if reversed, swap these / set TILT_INVERT in tilt_nav.h. */
-#define TILT_ROLL_AXIS(x, y, z) (x) /* a_roll */
-#define TILT_UP_AXIS(x, y, z)   (z) /* a_up */
+/* Returns true once per deliberate movement. A table-resting stick keeps deviation
+ * near zero (no wake); a pick-up/tilt spikes it past the threshold. The refractory
+ * window plus the baseline catching up mean each movement wakes at most once. */
+static bool motion_wake_edge(int16_t x, int16_t y, int16_t z, uint32_t now) {
+    if(!s_acc_base_have) {
+        s_acc_base[0] = x;
+        s_acc_base[1] = y;
+        s_acc_base[2] = z;
+        s_acc_base_have = true;
+        s_acc_base_at = now;
+        return false;
+    }
+    int32_t dx = (int32_t)x - s_acc_base[0];
+    int32_t dy = (int32_t)y - s_acc_base[1];
+    int32_t dz = (int32_t)z - s_acc_base[2];
+    int32_t dev = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) + (dz < 0 ? -dz : dz);
+    if((uint32_t)(now - s_acc_base_at) >= WAKE_BASE_STEP_MS) {
+        s_acc_base[0] += dx / 4;
+        s_acc_base[1] += dy / 4;
+        s_acc_base[2] += dz / 4;
+        s_acc_base_at = now;
+    }
+    if(dev > WAKE_DEV_THRESH && (uint32_t)(now - s_wake_last_at) >= WAKE_REFRACTORY_MS) {
+        s_wake_last_at = now;
+        return true;
+    }
+    return false;
+}
 
 void target_input_init(void) {
     gpio_config_t cfg = {
@@ -130,11 +170,11 @@ void target_input_init(void) {
     FURI_LOG_I(TAG, "StickS3 2-button input init (KEY1=GPIO%d KEY2=GPIO%d)",
                (int)BOARD_PIN_BTN_KEY1, (int)BOARD_PIN_BTN_KEY2);
 
-    s_tilt = (TiltState){0};
+    s_acc_base_have = false;
     if(bmi270_init()) {
-        FURI_LOG_I(TAG, "BMI270 tilt-nav available");
+        FURI_LOG_I(TAG, "BMI270 available; tilt-to-wake enabled");
     } else {
-        FURI_LOG_I(TAG, "BMI270 not available; tilt-nav disabled");
+        FURI_LOG_I(TAG, "BMI270 not available; tilt-to-wake disabled");
     }
 
     /* apply persisted tilt-nav toggle (default ON if unset) */
@@ -229,18 +269,19 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
         s_key2.waiting = false;
     }
 
-    /* ---- BMI270 tilt -> Left/Right ---- */
+    /* ---- BMI270 motion -> wake the screen (never navigation) ---- */
     if(s_tilt_enabled && bmi270_is_present()) {
         int16_t ax = 0, ay = 0, az = 0;
         if(bmi270_read_accel(&ax, &ay, &az)) {
-            (void)ay; /* only the roll+up axes are used; keep all three for easy remap */
             /* CONFIG_FREERTOS_HZ=1000 -> 1 tick == 1 ms, so `now` is already ms. */
-            TiltDir d = tilt_eval(
-                TILT_ROLL_AXIS(ax, ay, az), TILT_UP_AXIS(ax, ay, az), now, &s_tilt);
-            if(d == TiltLeft) {
-                publish_tap(pubsub, InputKeyLeft, sequence_counter);
-            } else if(d == TiltRight) {
-                publish_tap(pubsub, InputKeyRight, sequence_counter);
+            if(motion_wake_edge(ax, ay, az, now) && furi_hal_light_get_backlight() == 0) {
+                /* Screen is dark: emit one wake. A bare Press+Release (no Short/Long)
+                 * turns the backlight back on via the notification service and resets
+                 * the desktop idle timer, but no view treats it as a keypress — so tilt
+                 * wakes the screen and does nothing else. The backlight==0 gate makes
+                 * tilt completely inert whenever the screen is lit. */
+                publish(pubsub, WAKE_KEY, InputTypePress, sequence_counter);
+                publish(pubsub, WAKE_KEY, InputTypeRelease, sequence_counter);
             }
         }
     }

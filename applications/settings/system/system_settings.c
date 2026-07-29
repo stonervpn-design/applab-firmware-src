@@ -274,7 +274,7 @@ SystemSettings* system_settings_alloc(void) {
 
 #ifdef BOARD_HAS_TILT_NAV
     item = variable_item_list_add(
-        app->var_item_list, "Tilt Nav", COUNT_OF(tilt_nav_text), tilt_nav_changed, app);
+        app->var_item_list, "Tilt Wake", COUNT_OF(tilt_nav_text), tilt_nav_changed, app);
     value_index = target_input_get_tilt_enabled() ? 1 : 0;
     variable_item_set_current_value_index(item, value_index);
     variable_item_set_current_value_text(item, tilt_nav_text[value_index]);

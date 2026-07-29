@@ -24,6 +24,12 @@ void furi_hal_light_init(void);
  */
 void furi_hal_light_set(Light light, uint8_t value);
 
+/** Get the last backlight value written via furi_hal_light_set.
+ *
+ * @return backlight brightness [0-255]; 0 means the screen is currently dark.
+ */
+uint8_t furi_hal_light_get_backlight(void);
+
 /** Start hardware LED blinking mode
  *
  * @param      light  Light

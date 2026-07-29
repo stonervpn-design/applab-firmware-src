@@ -11,12 +11,10 @@ endif()
 
 set(INPUT_SRCS "input.c" "${TARGET_INPUT_DIR}/target_input.c")
 
-# Optional per-board tilt-nav (BMI270 IMU). Only boards that ship these files
-# (currently m5stick_s3) get them; other boards build unchanged.
+# Optional per-board BMI270 IMU (used for tilt-to-wake). Only boards that ship the
+# driver (currently m5stick_s3) get it; other boards build unchanged.
 if(EXISTS "${TARGET_INPUT_DIR}/bmi270.c")
-    list(APPEND INPUT_SRCS
-        "${TARGET_INPUT_DIR}/bmi270.c"
-        "${TARGET_INPUT_DIR}/tilt_nav.c")
+    list(APPEND INPUT_SRCS "${TARGET_INPUT_DIR}/bmi270.c")
 endif()
 
 idf_component_register(
