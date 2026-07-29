@@ -90,6 +90,9 @@ jobs:
         run: |
           set -euo pipefail
           . "$IDF_PATH/export.sh"
+          # The app-icon generator (tools/fam/compile_icons.py) needs Pillow, which
+          # isn't in the esp-idf container image.
+          pip install --quiet pillow
           export FLIPPER_BOARD="${{ steps.cfg.outputs.board }}"
           export FLIPPER_VARIANT="public"                      # forced — never private
           export FLIPPER_APPS="${{ steps.cfg.outputs.apps }}"  # narrows the public set
