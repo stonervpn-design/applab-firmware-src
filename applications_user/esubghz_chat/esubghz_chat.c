@@ -86,16 +86,27 @@ static void post_rx(ESubGhzChatState *state, size_t rx_size)
 		memcpy(state->rx_str_buffer, state->rx_buffer, rx_size);
 		state->rx_str_buffer[rx_size] = 0;
 
-		/* remove trailing newline if it is there, for compat with CLI
-		 * Sub-GHz chat */
-		if (state->rx_str_buffer[rx_size - 1] == '\n') {
-			state->rx_str_buffer[rx_size - 1] = 0;
+		/* Strip ALL trailing CR/LF. A real Flipper Zero (and the built-in
+		 * Sub-GHz CLI chat) ends messages with "\r\n"; the old code removed
+		 * only one '\n', leaving a stray '\r' that rendered as a blank/garbled
+		 * line. Stripping both also collapses a newline-only packet to "" so
+		 * it is dropped below instead of showing as a blank message. */
+		while (rx_size > 0 &&
+				(state->rx_str_buffer[rx_size - 1] == '\n' ||
+				 state->rx_str_buffer[rx_size - 1] == '\r')) {
+			state->rx_str_buffer[--rx_size] = 0;
 		}
 	} else {
 		/* if decryption fails output an error message */
 		if (!post_rx_decrypt(state, rx_size)) {
 			strcpy(state->rx_str_buffer, "ERR: Decryption failed!");
 		}
+	}
+
+	/* Drop empty messages so a stray CR/LF-only packet (common with a real
+	 * Flipper Zero's chat framing) never shows as a blank line. */
+	if (state->rx_str_buffer[0] == 0) {
+		return;
 	}
 
 	/* append message to text box and prepare message preview */
