@@ -1,6 +1,7 @@
 #include "subghz_tx_rx_worker.h"
 
 #include <furi.h>
+#include <furi_hal_power.h>
 
 #define TAG "SubGhzTxRxWorker"
 
@@ -168,6 +169,14 @@ static int32_t subghz_tx_rx_worker_thread(void* context) {
     furi_check(instance->device);
     FURI_LOG_I(TAG, "Worker start");
 
+    /* Pin the CPU at max frequency for the whole worker lifetime. This worker
+     * polls the CC1101 GDO0 line and reads its FIFO with tick delays; with DFS
+     * enabled the CPU drops to 80 MHz when "idle" (which a chat waiting for
+     * messages looks like), slowing the SPI + polling enough to corrupt/drop
+     * received packets so peer messages never render. The async-capture RX path
+     * already holds this lock, but this worker does not go through it. */
+    furi_hal_power_perf_lock_acquire();
+
     subghz_devices_begin(instance->device);
     instance->device_data_gpio = subghz_devices_get_data_gpio(instance->device);
     subghz_devices_reset(instance->device);
@@ -233,6 +242,9 @@ static int32_t subghz_tx_rx_worker_thread(void* context) {
 
     subghz_devices_sleep(instance->device);
     subghz_devices_end(instance->device);
+
+    /* release the CPU-max hold acquired at worker start */
+    furi_hal_power_perf_lock_release();
 
     FURI_LOG_I(TAG, "Worker stop");
     return 0;
