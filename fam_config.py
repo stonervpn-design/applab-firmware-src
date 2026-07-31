@@ -110,6 +110,14 @@ APPS = [
     "esubghz_chat",
     "grove_i2c_scan",
     "st25r_nfc_diag",
+    # Flipper Share NFC (ISO14443-3A device-to-device file transfer over the
+    # ST25R3916 backend, same HAL as st25r_nfc_diag/bus_tools above). Phase 4,
+    # 2026-07-31 — send+receive engine complete; on-device acceptance pending.
+    # NOTE: this appid was missing from APPS entirely until this point, so it
+    # had never actually been compiled into any firmware build (Tasks 1-4's
+    # "SENTINEL_OK / clean grep" results only proved the file list; the app
+    # source itself was never part of the build).
+    "nfc_share",
     "asteroids",
     "game15",
     "flipper_pong",
