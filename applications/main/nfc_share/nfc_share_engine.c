@@ -56,7 +56,22 @@ struct NfcShareEngine {
     uint8_t exp_md5[16];
     char dest[NFC_SHARE_PATH_MAX];
     uint32_t loop; /* exchange counter, for request pacing */
+
+    uint32_t t0; /* tick at first transition into NfcShareStateRunning, for kbps calc */
 };
+
+/* Throughput helper: stamp t0 once when the transfer first starts running,
+ * then derive kbps_x10 (tenths of KB/s) from bytes_done and elapsed ms.
+ * Caller must hold e->lock. bytes_done is capped well under 16 MB, so the
+ * intermediate product is done in 64-bit to avoid uint32 overflow. */
+static void update_throughput(NfcShareEngine* e) {
+    uint32_t now = furi_get_tick();
+    if(e->t0 == 0) e->t0 = now;
+    uint32_t elapsed_ms = now - e->t0;
+    if(elapsed_ms == 0) elapsed_ms = 1;
+    e->st.kbps_x10 =
+        (uint32_t)((uint64_t)e->st.bytes_done * 10000ULL / elapsed_ms / 1024ULL);
+}
 
 /* Streaming md5 over the open file; seeks to 0 first and restores afterwards
  * so build_data_from_file() can keep reading from the same handle. */
@@ -156,6 +171,7 @@ static int32_t send_worker(void* ctx) {
             if(e->st.bytes_done > e->st.file_size) e->st.bytes_done = e->st.file_size;
             e->st.state = (e->st.blocks_done >= e->total_blocks) ? NfcShareStateDoneOk :
                                                                     NfcShareStateRunning;
+            update_throughput(e);
             furi_mutex_release(e->lock);
         }
     }
@@ -273,6 +289,8 @@ static bool recv_handle(NfcShareEngine* e, const uint8_t* resp, uint8_t rn) {
         strncpy(e->st.name, leaf, sizeof(e->st.name) - 1);
         e->st.name[sizeof(e->st.name) - 1] = '\0';
         e->st.state = NfcShareStateRunning;
+        e->t0 = furi_get_tick(); /* stamp the Running-transition start for kbps */
+        e->st.kbps_x10 = 0;
         furi_mutex_release(e->lock);
         return false;
     }
@@ -303,6 +321,7 @@ static bool recv_handle(NfcShareEngine* e, const uint8_t* resp, uint8_t rn) {
                 e->st.bytes_done += valid;
                 if(e->st.bytes_done > e->st.file_size) e->st.bytes_done = e->st.file_size;
                 e->st.blocks_done = e->blocks_got;
+                update_throughput(e);
                 furi_mutex_release(e->lock);
             }
             if(e->blocks_got >= e->total_blocks) {

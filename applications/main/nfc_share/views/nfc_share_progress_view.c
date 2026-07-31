@@ -29,7 +29,9 @@ static void nfc_share_progress_view_draw(Canvas* canvas, void* model) {
     if(progress > 1.0f) progress = 1.0f;
     elements_progress_bar(canvas, 8, 32, 112, progress);
 
-    char line[40];
+    /* Worst case: two 10-digit uint32 byte counts + " B  " + a 10-digit
+     * kbps_x10 integer part + ".N KB/s" + NUL — sized generously above that. */
+    char line[64];
     snprintf(
         line,
         sizeof(line),
@@ -40,11 +42,13 @@ static void nfc_share_progress_view_draw(Canvas* canvas, void* model) {
         (unsigned long)(m->status.kbps_x10 % 10));
     canvas_draw_str(canvas, 2, 48, line);
 
+    char status_buf[32];
     const char* status_line = NULL;
     if(m->status.state == NfcShareStateDoneOk) {
         status_line = "Done - md5 OK";
     } else if(m->status.state == NfcShareStateFail) {
-        status_line = "Failed";
+        snprintf(status_buf, sizeof(status_buf), "Failed (err %u)", m->status.err);
+        status_line = status_buf;
     } else if(m->status.state == NfcShareStateWaiting) {
         status_line = "Waiting...";
     } else if(m->status.state == NfcShareStateRunning) {
