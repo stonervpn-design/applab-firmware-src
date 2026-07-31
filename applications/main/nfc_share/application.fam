@@ -1,0 +1,10 @@
+App(
+    appid="nfc_share",
+    name="NFC Share",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="nfc_share_app",
+    stack_size=4 * 1024,
+    icon="A_NFC_14",
+    order=54,
+    fap_libs=["assets"],
+)
