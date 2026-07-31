@@ -286,7 +286,16 @@ static bool recv_handle(NfcShareEngine* e, const uint8_t* resp, uint8_t rn) {
             uint32_t valid = e->st.file_size - off;
             if(valid > NSH_DATA_LENGTH) valid = NSH_DATA_LENGTH;
             if(valid > dn) valid = dn;
-            storage_file_seek(e->file, off, true);
+            if(!storage_file_seek(e->file, off, true)) {
+                storage_file_close(e->file);
+                storage_file_free(e->file);
+                e->file = NULL;
+                furi_mutex_acquire(e->lock, FuriWaitForever);
+                e->st.state = NfcShareStateFail;
+                e->st.err = 1;
+                furi_mutex_release(e->lock);
+                return true;
+            }
             if(storage_file_write(e->file, dp, valid) == valid) {
                 bitmap_mark(e, block);
                 e->blocks_got++;
@@ -376,8 +385,9 @@ static int32_t recv_worker(void* ctx) {
             continue;
         }
 
-        if(recv_handle(e, resp, rn)) {
-            furi_delay_ms(10); /* transfer finished (ok or fail): idle */
+        recv_handle(e, resp, rn);
+        if(e->st.state == NfcShareStateDoneOk || e->st.state == NfcShareStateFail) {
+            furi_delay_ms(10); /* transfer finished (ok or fail): idle every loop */
         }
     }
 
