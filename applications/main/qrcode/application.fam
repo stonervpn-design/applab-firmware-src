@@ -9,4 +9,12 @@ App(
     fap_icon="icon.png",
     fap_category="Tools",
     requires=["gui", "dialogs"],
+    # The bundled qrcodegen implementation lives in lib/qrcode/. App `sources`
+    # exclude any /lib/ path (fam gather_sources), so it must be declared as a
+    # private lib to be compiled — same mechanism nfc/doom/mp3_player use.
+    fap_private_libs=[
+        Lib(
+            name="qrcode",
+        ),
+    ],
 )
