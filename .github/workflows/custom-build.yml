@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Checkout firmware source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Resolve & validate inputs
         id: cfg
