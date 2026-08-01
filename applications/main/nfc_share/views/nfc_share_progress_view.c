@@ -20,7 +20,13 @@ static void nfc_share_progress_view_draw(Canvas* canvas, void* model) {
     canvas_draw_str(canvas, 2, 10, m->sending ? "NFC Send" : "NFC Receive");
 
     canvas_set_font(canvas, FontSecondary);
-    canvas_draw_str(canvas, 2, 22, m->status.name[0] ? m->status.name : "-");
+    if(!m->sending && m->status.dest_name[0]) {
+        char name_line[sizeof("nfc_share/") - 1 + sizeof(m->status.dest_name)];
+        snprintf(name_line, sizeof(name_line), "nfc_share/%s", m->status.dest_name);
+        canvas_draw_str(canvas, 2, 22, name_line);
+    } else {
+        canvas_draw_str(canvas, 2, 22, m->status.name[0] ? m->status.name : "-");
+    }
     canvas_draw_line(canvas, 0, 25, 127, 25);
 
     float progress = (m->status.file_size > 0) ?
@@ -45,7 +51,7 @@ static void nfc_share_progress_view_draw(Canvas* canvas, void* model) {
     char status_buf[32];
     const char* status_line = NULL;
     if(m->status.state == NfcShareStateDoneOk) {
-        status_line = "Done - md5 OK";
+        status_line = m->sending ? "Done - md5 OK" : "Saved to SD - md5 OK";
     } else if(m->status.state == NfcShareStateFail) {
         snprintf(status_buf, sizeof(status_buf), "Failed (err %u)", m->status.err);
         status_line = status_buf;

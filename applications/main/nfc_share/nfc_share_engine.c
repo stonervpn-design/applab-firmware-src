@@ -288,6 +288,11 @@ static bool recv_handle(NfcShareEngine* e, const uint8_t* resp, uint8_t rn) {
         e->st.blocks_done = 0;
         strncpy(e->st.name, leaf, sizeof(e->st.name) - 1);
         e->st.name[sizeof(e->st.name) - 1] = '\0';
+        /* Actual saved leaf (post-dedup) = basename of the resolved dest path. */
+        const char* dleaf = strrchr(e->dest, '/');
+        dleaf = dleaf ? dleaf + 1 : e->dest;
+        strncpy(e->st.dest_name, dleaf, sizeof(e->st.dest_name) - 1);
+        e->st.dest_name[sizeof(e->st.dest_name) - 1] = '\0';
         e->st.state = NfcShareStateRunning;
         e->t0 = furi_get_tick(); /* stamp the Running-transition start for kbps */
         e->st.kbps_x10 = 0;

@@ -10,6 +10,7 @@ typedef enum {
 typedef struct {
     NfcShareState state;
     char     name[40];
+    char     dest_name[40];     // receive: actual saved leaf (post-dedup); empty on send
     uint32_t file_size;
     uint32_t bytes_done;
     uint32_t blocks_total;
