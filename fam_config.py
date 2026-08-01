@@ -45,6 +45,7 @@ APPS = [
     "passport",
     "nfc",
     "infrared",
+    "tagtinker",
     "lfrfid",
     "wlan",
     "nrf24",
@@ -56,6 +57,8 @@ APPS = [
     "device_name",
     "defender",
     "lan_attack",
+    "camera_hunter",
+    "doorbell_brute",
     "js_app",
     "js_event_loop",
     "js_gui",
@@ -246,6 +249,14 @@ if _board in _boards_without_wolf3d:
 if _is_public:
     _car_apps = {"can_commander"}
     APPS = [a for a in APPS if a not in _car_apps]
+    # TagTinker (IR ESL / e-ink shelf-label tool) is PRIVATE-only per the owner's
+    # scope; never ship it in public webflasher builds.
+    APPS = [a for a in APPS if a != "tagtinker"]
+    # Camera Hunter (Wi-Fi IP-camera discovery + default-credential testing) is
+    # PRIVATE-only: an aggressive authorized-audit tool kept out of public bins.
+    APPS = [a for a in APPS if a != "camera_hunter"]
+    # Doorbell Brute (Sub-GHz doorbell chime brute-forcer) is PRIVATE-only.
+    APPS = [a for a in APPS if a != "doorbell_brute"]
     # Public build is meant to ship the community-published ProtoPirate app (its
     # OWN decoders, from github.com/RocketGod-git/ProtoPirate) as a standalone
     # MENUEXTERNAL app — none of the private in-tree SubGhz Automotive decoders.
