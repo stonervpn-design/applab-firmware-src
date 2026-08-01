@@ -35,8 +35,6 @@ BusToolsApp* bus_tools_app_alloc(void) {
     app->uart_baud = 115200;
     app->uart_view = bus_tools_uart_view_alloc();
     view_dispatcher_add_view(app->view_dispatcher, BusToolsViewUartMonitor, app->uart_view);
-    app->nfc_view = bus_tools_nfc_view_alloc();
-    view_dispatcher_add_view(app->view_dispatcher, BusToolsViewStNfc, app->nfc_view);
     scene_manager_next_scene(app->scene_manager, BusToolsSceneStart);
     return app;
 }
@@ -46,8 +44,6 @@ void bus_tools_app_free(BusToolsApp* app) {
     view_dispatcher_remove_view(app->view_dispatcher, BusToolsViewSubmenu);
     view_dispatcher_remove_view(app->view_dispatcher, BusToolsViewUartMonitor);
     bus_tools_uart_view_free(app->uart_view);
-    view_dispatcher_remove_view(app->view_dispatcher, BusToolsViewStNfc);
-    bus_tools_nfc_view_free(app->nfc_view);
     submenu_free(app->submenu);
     view_dispatcher_free(app->view_dispatcher);
     scene_manager_free(app->scene_manager);

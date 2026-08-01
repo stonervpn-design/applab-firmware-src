@@ -5,7 +5,6 @@
 #include "scenes/bus_tools_scene.h"
 #include "uart_monitor_fmt.h"
 #include "bus_tools_uart_view.h"
-#include "bus_tools_nfc_view.h"
 #include <furi.h>
 #include <gui/gui.h>
 #include <gui/view_dispatcher.h>
@@ -15,7 +14,6 @@
 typedef enum {
     BusToolsViewSubmenu,
     BusToolsViewUartMonitor,
-    BusToolsViewStNfc,
     // More views added in later tasks
 } BusToolsView;
 
@@ -30,7 +28,4 @@ struct BusToolsApp {
     View* uart_view;
     UartRing uart_ring;
     uint32_t uart_baud;
-
-    /* ST25R3916 NFC-A "prove it reads" test. */
-    View* nfc_view;
 };

@@ -18,8 +18,6 @@ void bus_tools_scene_start_on_enter(void* context) {
      * callbacks) and this board has no external SPI-flash target — the only SPI
      * bus is SPI3, shared with the SD card + CC1101. Re-enable once a real target
      * + dedicated CS exists. */
-    submenu_add_item(
-        app->submenu, "NFC Read (ST25R)", 3, bus_tools_scene_start_submenu_callback, app);
     view_dispatcher_switch_to_view(app->view_dispatcher, BusToolsViewSubmenu);
 }
 
@@ -36,8 +34,6 @@ bool bus_tools_scene_start_on_event(void* context, SceneManagerEvent event) {
             scene_manager_next_scene(scene_manager, BusToolsSceneUartConsole);
         } else if(submenu_index == 2) {
             scene_manager_next_scene(scene_manager, BusToolsSceneSpiFlashReader);
-        } else if(submenu_index == 3) {
-            scene_manager_next_scene(scene_manager, BusToolsSceneStNfc);
         }
         consumed = true;
     }
