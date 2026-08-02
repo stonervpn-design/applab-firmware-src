@@ -419,10 +419,11 @@ SubGhzProtocolStatus
 // Decoder
 //
 void* subghz_protocol_decoder_jarolift_alloc(SubGhzEnvironment* environment) {
-    SubGhzProtocolDecoderJarolift* instance = malloc(sizeof(SubGhzProtocolDecoderJarolift));
+    SubGhzProtocolDecoderJarolift* instance = calloc(1, sizeof(SubGhzProtocolDecoderJarolift));
     instance->base.protocol = &subghz_protocol_jarolift;
     instance->generic.protocol_name = instance->base.protocol->name;
     instance->keystore = subghz_environment_get_keystore(environment);
+    instance->header_count = 0;
     return instance;
 }
 
@@ -436,6 +437,7 @@ void subghz_protocol_decoder_jarolift_reset(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderJarolift* instance = context;
     instance->decoder.parser_step = JaroliftDecoderStepReset;
+    instance->header_count = 0;
 }
 
 void subghz_protocol_decoder_jarolift_feed(void* context, bool level, uint32_t duration) {

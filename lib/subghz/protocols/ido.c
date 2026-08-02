@@ -128,7 +128,10 @@ void subghz_protocol_decoder_ido_feed(void* context, bool level, uint32_t durati
             if(duration >= ((uint32_t)subghz_protocol_ido_const.te_short * 5 +
                             subghz_protocol_ido_const.te_delta)) {
                 instance->decoder.parser_step = IDoDecoderStepFoundPreambula;
-                if(instance->decoder.decode_count_bit >=
+                /* Require the exact bit count (siblings use ==). With >=, a long
+                 * burst overflows the uint64 decode_data past 64 bits and
+                 * get_string's shift-by-(nbits-1) becomes undefined behavior. */
+                if(instance->decoder.decode_count_bit ==
                    subghz_protocol_ido_const.min_count_bit_for_found) {
                     instance->generic.data = instance->decoder.decode_data;
                     instance->generic.data_count_bit = instance->decoder.decode_count_bit;

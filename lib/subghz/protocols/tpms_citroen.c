@@ -83,9 +83,10 @@ const SubGhzProtocol tpms_protocol_citroen = {
 
 void* tpms_protocol_decoder_citroen_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
-    TPMSProtocolDecoderCitroen* instance = malloc(sizeof(TPMSProtocolDecoderCitroen));
+    TPMSProtocolDecoderCitroen* instance = calloc(1, sizeof(TPMSProtocolDecoderCitroen));
     instance->base.protocol = &tpms_protocol_citroen;
     instance->generic.protocol_name = instance->base.protocol->name;
+    instance->manchester_saved_state = ManchesterStateStart1;
     return instance;
 }
 
@@ -102,6 +103,7 @@ void tpms_protocol_decoder_citroen_reset(void* context) {
     instance->decoder.decode_count_bit = 0;
     instance->head_64_bit = 0;
     instance->header_shift = 0;
+    instance->manchester_saved_state = ManchesterStateStart1;
 }
 
 static ManchesterEvent citroen_evt(bool level, uint32_t duration) {

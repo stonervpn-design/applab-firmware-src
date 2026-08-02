@@ -594,6 +594,13 @@ static bool ford_v0_process_data(SubGhzProtocolDecoderFordV0* instance) {
         uint16_t key2_raw = (uint16_t)(instance->data_low & 0xFFFF);
         uint16_t key2 = ~key2_raw;
 
+        /* Reject frames whose CRC doesn't check out instead of surfacing a
+         * garbage Sn/Btn/Cnt. Previously the CRC was only evaluated for the
+         * CRC:OK/BAD display string, so any ~80-transition burst decoded. */
+        if(!ford_v0_verify_crc(instance->key1, key2)) {
+            return false;
+        }
+
         decode_ford_v0(
             instance->key1, key2, &instance->serial, &instance->button, &instance->count);
 

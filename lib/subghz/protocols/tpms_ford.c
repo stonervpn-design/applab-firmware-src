@@ -83,9 +83,10 @@ const SubGhzProtocol tpms_protocol_ford = {
 
 void* tpms_protocol_decoder_ford_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
-    TPMSProtocolDecoderFord* instance = malloc(sizeof(TPMSProtocolDecoderFord));
+    TPMSProtocolDecoderFord* instance = calloc(1, sizeof(TPMSProtocolDecoderFord));
     instance->base.protocol = &tpms_protocol_ford;
     instance->generic.protocol_name = instance->base.protocol->name;
+    instance->manchester_saved_state = ManchesterStateStart1;
     return instance;
 }
 
@@ -102,6 +103,7 @@ void tpms_protocol_decoder_ford_reset(void* context) {
     instance->decoder.decode_data = 0;
     instance->decoder.decode_count_bit = 0;
     instance->header_shift = 0;
+    instance->manchester_saved_state = ManchesterStateStart1;
 }
 
 static ManchesterEvent ford_level_and_duration_to_event(bool level, uint32_t duration) {

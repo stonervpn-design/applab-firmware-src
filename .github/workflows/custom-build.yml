@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       board:
-        description: "m5stick_s3 | m5stack_cardputer_adv"
+        description: "m5stick_s3 | m5stack_cardputer_adv | lilygo_t_embed_cc1101"
         required: true
         default: "m5stack_cardputer_adv"
       apps:
@@ -63,7 +63,7 @@ jobs:
 
           # board allowlist
           case "$BOARD" in
-            m5stick_s3|m5stack_cardputer_adv) ;;
+            m5stick_s3|m5stack_cardputer_adv|lilygo_t_embed_cc1101) ;;
             *) echo "::error::unknown board '$BOARD'"; exit 1 ;;
           esac
           # build_id: keep only safe chars, cap length (no path traversal)
@@ -72,16 +72,20 @@ jobs:
           # apps: keep only appid-safe chars and commas
           APPS="$(printf '%s' "$APPS" | tr -cd 'a-zA-Z0-9_,-')"
 
-          if [ "$BOARD" = "m5stick_s3" ]; then
-            SDKDEF="sdkconfig.defaults;sdkconfig.defaults.m5stick_s3"
-            NAME="applab M5Stick S3 (custom)"
-          else
-            SDKDEF="sdkconfig.defaults;sdkconfig.defaults.m5stack_cardputer_adv"
-            NAME="applab Cardputer ADV (custom)"
-          fi
+          case "$BOARD" in
+            m5stick_s3)
+              SDKDEF="sdkconfig.defaults;sdkconfig.defaults.m5stick_s3"
+              NAME="applab M5Stick S3 (custom)"; FLASHSIZE="8MB" ;;
+            lilygo_t_embed_cc1101)
+              SDKDEF="sdkconfig.defaults;sdkconfig.defaults.lilygo_t_embed_cc1101"
+              NAME="applab T-Embed CC1101+ (custom)"; FLASHSIZE="16MB" ;;
+            *)
+              SDKDEF="sdkconfig.defaults;sdkconfig.defaults.m5stack_cardputer_adv"
+              NAME="applab Cardputer ADV (custom)"; FLASHSIZE="8MB" ;;
+          esac
           {
             echo "board=$BOARD"; echo "apps=$APPS"; echo "bid=$BID"
-            echo "sdkdef=$SDKDEF"; echo "name=$NAME"
+            echo "sdkdef=$SDKDEF"; echo "name=$NAME"; echo "flashsize=$FLASHSIZE"
           } >> "$GITHUB_OUTPUT"
           echo "Building $BOARD (public) id=$BID apps=[$APPS]"
 
@@ -110,7 +114,7 @@ jobs:
           set -euo pipefail
           . "$IDF_PATH/export.sh"
           B=build
-          ARGS=( --chip esp32s3 merge_bin -o firmware.bin --flash_mode dio --flash_size 8MB --flash_freq 80m
+          ARGS=( --chip esp32s3 merge_bin -o firmware.bin --flash_mode dio --flash_size ${{ steps.cfg.outputs.flashsize }} --flash_freq 80m
                  0x0    "$B/bootloader/bootloader.bin"
                  0x8000 "$B/partition_table/partition-table.bin"
                  0x10000 "$B/furi_esp32.bin" )

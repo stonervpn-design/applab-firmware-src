@@ -184,9 +184,9 @@ static bool subaru_process_data(SubGhzProtocolDecoderSubaru* instance) {
                     ((uint64_t)b[3] << 32) | ((uint64_t)b[4] << 24) | ((uint64_t)b[5] << 16) |
                     ((uint64_t)b[6] << 8) | ((uint64_t)b[7]);
 
-    (void)subaru_decode_fields_exact(b, &instance->serial, &instance->btn, &instance->cnt);
-
-    return true;
+    /* Return the self-consistency result instead of discarding it, so a frame
+     * that doesn't validate no longer fires the callback with garbage fields. */
+    return subaru_decode_fields_exact(b, &instance->serial, &instance->btn, &instance->cnt);
 }
 
 static uint8_t subghz_protocol_decoder_subaru_get_hash_data(void* context) {

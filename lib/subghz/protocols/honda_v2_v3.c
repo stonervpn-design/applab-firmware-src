@@ -595,6 +595,11 @@ static void honda_process_frame(SubGhzProtocolDecoderHondaV2V3* instance) {
         uint8_t counter = d[1]; // raw byte: counter(6bit) << 2 | tx_flag(1) << 1 | bit0(1)
         uint8_t crc = d[14];
 
+        /* Gate on the frame CRC. Previously an aligned 0x6A sync byte alone was
+         * enough to accept a frame, so ~120-bit FSK noise containing a 0x6A
+         * surfaced a bogus "Honda V3" with a false CRC:OK. */
+        if(honda_v3_compute_crc(d) != crc) return;
+
         // Classify frame type: Type A (fixed) vs Type B (hopping)
         // Fixed frames: d[2..3]=serial, d[4]=button (0x8x), d[5]=flags (0x82/0x83)
         // Hopping frames: d[2..13] are fully encrypted, no readable button/serial

@@ -207,9 +207,14 @@ static void ook_decoder_reset_state(SubGhzProtocolDecoderHondaV7* inst) {
 static bool ook_validate_frame(SubGhzProtocolDecoderHondaV7* inst) {
     if(inst->bit_count < HV7_MIN_BITS) return false;
 
-    uint8_t natural[HV7_FRAME_BYTES];
+    uint8_t natural[HV7_FRAME_BYTES] = {0};
     uint8_t num_bytes = (inst->bit_count + 7u) / 8u;
     if(num_bytes > HV7_FRAME_BYTES) num_bytes = HV7_FRAME_BYTES;
+
+    /* The checksum lives at natural[8]; require the capture to actually cover it
+     * so we don't validate against an uninitialized/zero-padded scratch byte
+     * (a truncated burst previously passed ~1/28 of the time). */
+    if(num_bytes < 9) return false;
 
     for(uint8_t i = 0; i < num_bytes; i++)
         natural[i] = hv7_bit_rev8(inst->data_buf[i]);

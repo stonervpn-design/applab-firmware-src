@@ -426,8 +426,15 @@ void subghz_protocol_decoder_opel_v0_feed(void* context, bool level, uint32_t du
 uint8_t subghz_protocol_decoder_opel_v0_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderOpelV0* instance = context;
-    return subghz_protocol_blocks_get_hash_data(
-        &instance->decoder, (instance->decoder.decode_count_bit / 8) + 1);
+    /* This decoder fills generic.data, not decoder.decode_data, so hashing the
+     * latter returned the same value for every frame and distinct captures were
+     * dropped as duplicates in RX history. Hash the actual payload + seed. */
+    uint64_t v = instance->generic.data ^ ((uint64_t)instance->generic.seed << 1);
+    uint8_t hash = 0;
+    for(uint8_t i = 0; i < 8; i++) {
+        hash ^= (uint8_t)(v >> (i * 8));
+    }
+    return hash;
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_opel_v0_serialize(

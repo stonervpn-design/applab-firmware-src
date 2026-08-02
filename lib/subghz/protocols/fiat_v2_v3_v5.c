@@ -879,6 +879,9 @@ static void fiat_process_frame(SubGhzProtocolDecoderFiat* instance) {
             (btn == FIAT_V2_BTN_LOCK || btn == FIAT_V2_BTN_UNLOCK || btn == FIAT_V2_BTN_TRUNK);
         instance->generic.extra_check = valid_btn;
         instance->generic.crc_check = valid_btn && (tail != 0);
+        /* Drop frames with an unrecognized button instead of firing the shared
+         * callback on a ~90-bit noise burst (V3/V5 already early-return). */
+        if(!valid_btn) return;
     } break;
 
     case FiatVariantV3: {
