@@ -479,6 +479,15 @@ St25rNfcaStatus st25r3916_nfca_poll(St25rNfcaTag* out) {
     (void)out;
     return St25rNfcaErrInit;
 }
+St25rNfcaStatus st25r3916_nfca_poller_txrx(
+    const uint8_t* tx, uint8_t tx_len, uint8_t* rx, uint8_t rx_cap, uint8_t* rx_len) {
+    (void)tx;
+    (void)tx_len;
+    (void)rx;
+    (void)rx_cap;
+    (void)rx_len;
+    return St25rNfcaErrInit;
+}
 void st25r3916_nfca_deinit(void) {
 }
 const char* st25r3916_nfca_status_str(St25rNfcaStatus s) {
