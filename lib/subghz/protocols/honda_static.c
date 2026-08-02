@@ -269,12 +269,19 @@ static bool
     const uint8_t button = honda_static_get_bits(reversed, 0, 4);
     const uint32_t serial = honda_static_get_bits_u32(reversed, 4, 28);
     const uint32_t counter = honda_static_get_bits_u32(reversed, 32, 24);
+    const uint8_t checksum = honda_static_get_bits(reversed, 56, 8);
 
-    uint8_t checksum = 0U;
+    uint8_t checksum_calc = 0U;
     for(size_t i = 0; i < 7; i++) {
-        checksum ^= reversed[i];
+        checksum_calc ^= reversed[i];
     }
 
+    /* Compare the received checksum, like the forward path. Previously the
+     * reverse path computed the XOR but accepted on button+serial alone, so
+     * noise that reversed to a plausible button/serial passed as a decode. */
+    if(checksum != checksum_calc) {
+        return false;
+    }
     if(!honda_static_is_valid_button(button)) {
         return false;
     }

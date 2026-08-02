@@ -309,11 +309,25 @@ void subghz_protocol_decoder_marantec_feed(void* context, bool level, volatile u
                              subghz_protocol_marantec_const.te_delta)) {
                 if(instance->decoder.decode_count_bit ==
                    subghz_protocol_marantec_const.min_count_bit_for_found) {
-                    instance->generic.data = instance->decoder.decode_data;
-                    instance->generic.data_count_bit = instance->decoder.decode_count_bit;
+                    /* Gate on the CRC (the same check get_string prints as
+                     * Valid/Invalid) so a bit-count match on noise doesn't surface
+                     * a bogus decode. */
+                    uint64_t d = instance->decoder.decode_data;
+                    uint8_t tdata[6] = {
+                        (uint8_t)(d >> 48),
+                        (uint8_t)(d >> 40),
+                        (uint8_t)(d >> 32),
+                        (uint8_t)(d >> 24),
+                        (uint8_t)(d >> 16),
+                        (uint8_t)(d >> 8)};
+                    if(subghz_protocol_marantec_crc8(tdata, sizeof(tdata)) ==
+                       (uint8_t)(d & 0xFF)) {
+                        instance->generic.data = d;
+                        instance->generic.data_count_bit = instance->decoder.decode_count_bit;
 
-                    if(instance->base.callback)
-                        instance->base.callback(&instance->base, instance->base.context);
+                        if(instance->base.callback)
+                            instance->base.callback(&instance->base, instance->base.context);
+                    }
                 }
                 instance->decoder.decode_data = 1;
                 instance->decoder.decode_count_bit = 1;
