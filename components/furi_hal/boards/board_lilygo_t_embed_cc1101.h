@@ -196,14 +196,15 @@
 #define BOARD_PIN_RFID_TX       UINT16_MAX
 #define BOARD_RFID_UART_NUM     1
 
-/* ---- NFC (PN532 @0x24 on QWIIC/Grove I2C; IRQ/RST unmanaged -> polling mode) ---- */
+/* ---- NFC on QWIIC/Grove I2C; IRQ/RST unmanaged -> polling mode.
+ * Auto-detects any of: PN532 @0x24, WS1850S/M5 RFID2 @0x28, ST25R3916 @0x50. ---- */
 #define BOARD_PIN_NFC_SCL       BOARD_PIN_QWIIC_SCL
 #define BOARD_PIN_NFC_SDA       BOARD_PIN_QWIIC_SDA
 #define BOARD_PIN_NFC_IRQ       UINT16_MAX
 #define BOARD_PIN_NFC_RST       UINT16_MAX
 #define BOARD_NFC_I2C_PORT      I2C_NUM_0
 #define BOARD_NFC_I2C_ADDR      0x24
-#define BOARD_HAS_ST25R3916     0
+#define BOARD_HAS_ST25R3916     1  /* probe an ST25R3916 unit @0x50 too (QWIIC) */
 #define BOARD_ST25R3916_I2C_ADDR 0x50
 
 /* ---- Grove / Qwiic I2C (== the main I2C bus on this board) ---- */

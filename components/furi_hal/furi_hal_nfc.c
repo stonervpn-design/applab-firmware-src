@@ -44,7 +44,13 @@ static NfcBackend nfc_backend = NfcBackendPn532;
 
 /* ──────────────────────────── PN532 Protocol Constants ──────────────────── */
 
-#define PN532_I2C_ADDR          0x24
+#define PN532_I2C_ADDR          0x24   /* standard PN532 breakout (Elechouse/Adafruit) */
+#define WS1850S_I2C_ADDR        0x28   /* M5 RFID2 / WS1850S — PN532-command compatible */
+
+/* Runtime I2C address for the PN532-protocol frontend, selected by the probe:
+ * 0x24 = a plain PN532, 0x28 = a WS1850S / M5 RFID2 unit. Both speak the PN532
+ * command set, just at different addresses, so one code path serves both. */
+static uint8_t pn532_addr = PN532_I2C_ADDR;
 
 #define PN532_PREAMBLE          0x00
 #define PN532_STARTCODE1        0x00
@@ -252,7 +258,7 @@ static bool pn532_wait_ready(uint32_t timeout_ms) {
     uint32_t start = furi_get_tick();
     while((furi_get_tick() - start) < timeout_ms) {
         esp_err_t err = i2c_master_read_from_device(
-            BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, &status, 1, pdMS_TO_TICKS(10));
+            BOARD_NFC_I2C_PORT, pn532_addr, &status, 1, pdMS_TO_TICKS(10));
         if(err == ESP_OK && (status & 0x01)) return true;
         furi_delay_ms(5);
     }
@@ -277,7 +283,7 @@ static FuriHalNfcError pn532_read_response(uint8_t* response, size_t* response_l
 
     uint8_t rx_buf[read_len];
     esp_err_t err = i2c_master_read_from_device(
-        BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, rx_buf, read_len, pdMS_TO_TICKS(200));
+        BOARD_NFC_I2C_PORT, pn532_addr, rx_buf, read_len, pdMS_TO_TICKS(200));
     if(err != ESP_OK) return FuriHalNfcErrorCommunication;
 
     /* Validate: [RDY=0x01] [00] [00] [FF] [LEN] [LCS] [TFI=0xD5] ... */
@@ -336,7 +342,7 @@ static FuriHalNfcError pn532_send_command(
     i2c_reset_rx_fifo(BOARD_NFC_I2C_PORT);
 
     esp_err_t err = i2c_master_write_to_device(
-        BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, frame, idx, pdMS_TO_TICKS(1000));
+        BOARD_NFC_I2C_PORT, pn532_addr, frame, idx, pdMS_TO_TICKS(1000));
     if(err != ESP_OK) {
         /* DEBUG: log which PN532 command failed (cmd[0] = opcode, e.g.
          * 0x8C TgInitAsTarget, 0x86 TgGetData, 0x4A InListPassiveTarget) so
@@ -354,7 +360,7 @@ static FuriHalNfcError pn532_send_command(
 
     uint8_t ack_buf[PN532_ACK_LENGTH];
     err = i2c_master_read_from_device(
-        BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, ack_buf, sizeof(ack_buf), pdMS_TO_TICKS(200));
+        BOARD_NFC_I2C_PORT, pn532_addr, ack_buf, sizeof(ack_buf), pdMS_TO_TICKS(200));
     if(err != ESP_OK) return FuriHalNfcErrorCommunication;
 
     /* Verify ACK: [RDY=0x01] [00 00 FF 00 FF 00] */
@@ -508,32 +514,44 @@ FuriHalNfcError furi_hal_nfc_init(void) {
      * settle + retries below fix that. */
     furi_delay_ms(300);
 
-    /* Verify PN532 with GetFirmwareVersion. Retry (re-sending the command) so a PN532
-     * that was still powering up on the first send gets another chance on battery. */
+    /* Verify a PN532-protocol frontend with GetFirmwareVersion. Probe BOTH known
+     * addresses — 0x24 (a plain PN532 breakout) and 0x28 (WS1850S / M5 RFID2 unit) —
+     * and keep whichever answers, so either chip works with no config. Retry each so
+     * a module still powering up on battery gets another chance. */
     uint8_t cmd[] = {PN532_CMD_GETFIRMWAREVERSION};
     uint8_t resp[4];
     FuriHalNfcError nfc_err = FuriHalNfcErrorCommunication;
-    int nack_streak = 0;
-    for(int attempt = 0; attempt < 4; attempt++) {
-        size_t resp_len = sizeof(resp);
-        nfc_err = pn532_send_command(cmd, sizeof(cmd), resp, &resp_len, 500);
-        if(nfc_err == FuriHalNfcErrorNone) break;
-        /* Fast-boot without weakening detection: a write-NACK (Communication) means
-         * nothing ACKed the 0x24 address. After the 300ms settle a PRESENT PN532 always
-         * ACKs its address (only its firmware response is slow -> that surfaces as a
-         * Timeout, which we keep retrying). So two NACKs in a row = truly absent -> stop
-         * early instead of burning the remaining retry delays (~300ms faster boot for the
-         * no-module majority). A Timeout resets the streak and keeps all 4 retries. */
-        if(nfc_err == FuriHalNfcErrorCommunication) {
-            if(++nack_streak >= 2) {
-                FURI_LOG_I(TAG, "PN532 not ACKing @0x24 (2x NACK) - absent, skipping retries");
-                break;
+    static const uint8_t pn532_candidates[] = {PN532_I2C_ADDR, WS1850S_I2C_ADDR};
+    for(size_t ci = 0; ci < sizeof(pn532_candidates) && nfc_err != FuriHalNfcErrorNone; ci++) {
+        pn532_addr = pn532_candidates[ci];
+        int nack_streak = 0;
+        for(int attempt = 0; attempt < 4; attempt++) {
+            size_t resp_len = sizeof(resp);
+            nfc_err = pn532_send_command(cmd, sizeof(cmd), resp, &resp_len, 500);
+            if(nfc_err == FuriHalNfcErrorNone) break;
+            /* Fast-boot without weakening detection: a write-NACK (Communication) means
+             * nothing ACKed this address. After the 300ms settle a PRESENT module always
+             * ACKs its address (only its firmware response is slow -> Timeout, which we
+             * keep retrying). Two NACKs in a row = absent at THIS address -> move on to
+             * the next candidate instead of burning the remaining retry delays. */
+            if(nfc_err == FuriHalNfcErrorCommunication) {
+                if(++nack_streak >= 2) {
+                    FURI_LOG_I(TAG, "No PN532-family ACK @0x%02X (2x NACK) - absent", pn532_addr);
+                    break;
+                }
+            } else {
+                nack_streak = 0;
             }
-        } else {
-            nack_streak = 0;
+            FURI_LOG_I(
+                TAG,
+                "PN532 GetFirmwareVersion @0x%02X attempt %d/4 failed; retrying",
+                pn532_addr,
+                attempt + 1);
+            furi_delay_ms(150);
         }
-        FURI_LOG_I(TAG, "PN532 GetFirmwareVersion attempt %d/4 failed; retrying", attempt + 1);
-        furi_delay_ms(150);
+    }
+    if(nfc_err == FuriHalNfcErrorNone) {
+        FURI_LOG_I(TAG, "PN532-family frontend detected @0x%02X", pn532_addr);
     }
     if(nfc_err != FuriHalNfcErrorNone) {
         /* No PN532 on the bus — try the ST25R3916 (M5Stack NFC Universal Unit)
