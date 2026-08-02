@@ -39,8 +39,32 @@
 typedef enum {
     NfcBackendPn532 = 0,
     NfcBackendSt25r3916,
+    NfcBackendRfid2, /* WS1850S / M5 RFID2 — MFRC522 register interface @0x28 */
 } NfcBackend;
 static NfcBackend nfc_backend = NfcBackendPn532;
+
+/* MFRC522 / WS1850S (RFID2) reader backend. Declared extern rather than via
+ * #include "rfid2/rfid2.h" to avoid a component-dependency CYCLE: the rfid2
+ * driver includes <boards/board.h> from furi_hal, so furi_hal can't REQUIRE
+ * rfid2. These symbols resolve at final link (the rfid2 component is always
+ * built for the standalone rfid2_reader app). NFC-A / MIFARE only; hardware
+ * Crypto1 (MFAuthent) so auth goes through the PN532-style hardware path. */
+extern bool rfid2_init(void);
+extern uint8_t rfid2_version(void);
+extern int rfid2_transceive(
+    const uint8_t* tx, int tx_len, int tx_last_bits, uint8_t* rx, int rx_max);
+extern bool rfid2_classic_auth(
+    uint8_t block, const uint8_t key[6], bool keyB, const uint8_t* uid, size_t uid_len);
+extern bool rfid2_halt(void);
+extern void rfid2_field_off(void);
+
+/* Route an rfid2 transceive byte-count result through the shared staging path
+ * (same pn532_rx_buf + event flags the ST25R3916 backend uses). n<=0 => no card. */
+static FuriHalNfcError st25r_stage_result_bits(St25rHalStatus s, const uint8_t* rx, uint16_t rx_bits);
+static inline FuriHalNfcError rfid2_stage(int n, const uint8_t* rx) {
+    return st25r_stage_result_bits(
+        (n > 0) ? St25rHalOk : St25rHalNoCard, rx, (n > 0) ? (uint16_t)(n * 8) : 0);
+}
 
 /* ──────────────────────────── PN532 Protocol Constants ──────────────────── */
 
@@ -565,7 +589,20 @@ FuriHalNfcError furi_hal_nfc_init(void) {
             return FuriHalNfcErrorNone;
         }
 #endif
-        FURI_LOG_E(TAG, "No NFC frontend found (PN532 @0x24, ST25R3916 @0x50)");
+        /* Last resort: an MFRC522-register unit (WS1850S / M5 RFID2) @0x28. It
+         * does NOT speak the PN532 command set, so the PN532 probe above misses
+         * it — read its VersionReg directly (0x00/0xFF = no chip). */
+        uint8_t rfver = rfid2_version();
+        if(rfver != 0x00 && rfver != 0xFF && rfid2_init()) {
+            nfc_backend = NfcBackendRfid2;
+            nfc_hal_ready = true;
+            pn532_target_number = 0;
+            FURI_LOG_I(
+                TAG, "WS1850S/MFRC522 detected @0x28 (ver 0x%02X) - using RFID2 backend", rfver);
+            return FuriHalNfcErrorNone;
+        }
+        FURI_LOG_E(
+            TAG, "No NFC frontend found (PN532 @0x24/0x28, ST25R3916 @0x50, MFRC522 @0x28)");
         /* Leave the Grove 5V boost ON. Cutting it here turned a slow/flaky battery
          * power-up into a HARD failure (the PN532 then had no power at all and only a
          * lucky reboot recovered it — it worked on USB VBUS but died on battery). The
@@ -657,6 +694,10 @@ bool furi_hal_nfc_supports_raw_crypto1(void) {
 
 FuriHalNfcError furi_hal_nfc_low_power_mode_start(void) {
     if(!nfc_hal_ready) return FuriHalNfcErrorNone;
+    if(nfc_backend == NfcBackendRfid2) {
+        rfid2_field_off();
+        return FuriHalNfcErrorNone;
+    }
     if(nfc_backend == NfcBackendSt25r3916) {
         st25r3916_hal_field_off();
         return FuriHalNfcErrorNone;
@@ -670,6 +711,10 @@ FuriHalNfcError furi_hal_nfc_low_power_mode_start(void) {
 
 FuriHalNfcError furi_hal_nfc_low_power_mode_stop(void) {
     if(!nfc_hal_ready) return FuriHalNfcErrorNone;
+    if(nfc_backend == NfcBackendRfid2) {
+        rfid2_init(); /* re-configure + antenna back on */
+        return FuriHalNfcErrorNone;
+    }
     if(nfc_backend == NfcBackendSt25r3916) {
         /* Field is (re)configured in poller_field_on; nothing to wake here. */
         return FuriHalNfcErrorNone;
@@ -681,6 +726,13 @@ FuriHalNfcError furi_hal_nfc_low_power_mode_stop(void) {
 
 FuriHalNfcError furi_hal_nfc_set_mode(FuriHalNfcMode mode, FuriHalNfcTech tech) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
+    if(nfc_backend == NfcBackendRfid2) {
+        /* MFRC522 is NFC-A / MIFARE only; the upper stack drives activation.
+         * Just record mode/tech (other techs simply won't activate). */
+        nfc_current_mode = mode;
+        nfc_current_tech = tech;
+        return FuriHalNfcErrorNone;
+    }
     if(nfc_backend == NfcBackendSt25r3916) {
         /* ST25R3916 drives real RF; the upper stack runs activation itself.
          * Record mode/tech and select the RF technology — the front end is
@@ -773,6 +825,9 @@ bool furi_hal_nfc_field_is_present(void) {
 
 FuriHalNfcError furi_hal_nfc_poller_field_on(void) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
+    if(nfc_backend == NfcBackendRfid2) {
+        return FuriHalNfcErrorNone; /* antenna already on from init; no per-cycle re-arm */
+    }
     if(nfc_backend == NfcBackendSt25r3916) {
         return (st25r3916_hal_field_on() == St25rHalOk) ? FuriHalNfcErrorNone :
                                                           FuriHalNfcErrorOscillator;
@@ -1503,6 +1558,15 @@ FuriHalNfcError furi_hal_nfc_poller_tx(const uint8_t* tx_data, size_t tx_bits) {
     size_t tx_bytes = (tx_bits + 7) / 8;
     pn532_rx_bits = 0;
 
+    if(nfc_backend == NfcBackendRfid2) {
+        /* MFRC522 raw transceive: software already appended CRC-A, we send it raw
+         * and keep the card's CRC for the stack. tx_bits%8 carries the valid-bit
+         * count for sub-byte frames (e.g. a 7-bit magic wakeup). */
+        static uint8_t rx[64];
+        int n = rfid2_transceive(tx_data, (int)tx_bytes, (int)(tx_bits % 8), rx, sizeof(rx));
+        return rfid2_stage(n, rx);
+    }
+
     if(nfc_backend == NfcBackendSt25r3916) {
         if(nfc_current_tech == FuriHalNfcTechIso15693) {
             /* NFC-V: 1-out-of-4 encode the frame, transceive the OOK stream, then
@@ -2051,6 +2115,12 @@ FuriHalNfcError furi_hal_nfc_listener_enable_rx(void) {
  */
 FuriHalNfcError furi_hal_nfc_iso14443a_poller_trx_short_frame(FuriHalNfcaShortFrame frame) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
+    if(nfc_backend == NfcBackendRfid2) {
+        uint8_t req = (frame == FuriHalNfcaShortFrameAllReq) ? 0x52 : 0x26; /* WUPA / REQA */
+        uint8_t rx[8];
+        int n = rfid2_transceive(&req, 1, 7, rx, sizeof(rx)); /* 7-bit short frame */
+        return rfid2_stage(n, rx);
+    }
     if(nfc_backend == NfcBackendSt25r3916) {
         bool wupa = (frame == FuriHalNfcaShortFrameAllReq);
         uint8_t rx[8];
@@ -2173,6 +2243,13 @@ FuriHalNfcError furi_hal_nfc_iso14443a_poller_trx_short_frame(FuriHalNfcaShortFr
 FuriHalNfcError furi_hal_nfc_iso14443a_tx_sdd_frame(const uint8_t* tx_data, size_t tx_bits) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
 
+    if(nfc_backend == NfcBackendRfid2) {
+        /* Anticollision frame ([SEL][NVB]) — no CRC either direction. */
+        size_t tx_bytes = (tx_bits + 7) / 8;
+        uint8_t rx[16];
+        int n = rfid2_transceive(tx_data, (int)tx_bytes, (int)(tx_bits % 8), rx, sizeof(rx));
+        return rfid2_stage(n, rx);
+    }
     if(nfc_backend == NfcBackendSt25r3916) {
         /* Anticollision frame ([SEL][NVB]) — no CRC either direction. */
         size_t tx_bytes = (tx_bits + 7) / 8;
@@ -2482,6 +2559,14 @@ FuriHalNfcError furi_hal_nfc_pn532_mf_auth(
     /* ST25R3916 does real Crypto1 via custom-parity frames — decline native auth
      * so the mf_classic poller falls through to the standard Crypto1 handshake. */
     if(nfc_backend == NfcBackendSt25r3916) return FuriHalNfcErrorCommunication;
+    if(nfc_backend == NfcBackendRfid2) {
+        /* MFRC522 does Crypto1 in HARDWARE (MFAuthent) — the win over ST25R3916.
+         * The card is already selected by the upper stack; authenticate directly.
+         * Stays in crypto until the next HALT so the following block READ decrypts. */
+        if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
+        bool ok = rfid2_classic_auth(block_num, key, (key_type == 1), uid, uid_len);
+        return ok ? FuriHalNfcErrorNone : FuriHalNfcErrorCommunication;
+    }
     if(!nfc_hal_ready || pn532_target_number == 0) return FuriHalNfcErrorCommunication;
 
     /* PN532 InDataExchange Mifare auth format:

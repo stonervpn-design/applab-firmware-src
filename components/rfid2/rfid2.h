@@ -78,6 +78,19 @@ bool rfid2_read16(uint8_t block, uint8_t out[16]);
 bool rfid2_halt(void);
 
 /**
+ * Low-level ISO14443-A transceive for the unified furi_hal_nfc MFRC522 backend.
+ * Sends `tx_len` bytes (`tx_last_bits` = valid bits in the final byte for short
+ * frames like the 7-bit REQA; 0 = whole bytes), collects up to `rx_max` reply
+ * bytes. The caller owns CRC (none is appended on TX; RX is returned raw,
+ * including the card's CRC). Returns the reply byte count, or <=0 on no card /
+ * error.
+ */
+int rfid2_transceive(const uint8_t* tx, int tx_len, int tx_last_bits, uint8_t* rx, int rx_max);
+
+/** Turn the RF field (antenna drivers) off for low-power; rfid2_init turns it back on. */
+void rfid2_field_off(void);
+
+/**
  * One-shot full card read. Selects the card in the field, identifies it by SAK,
  * and dumps everything readable into `text` as newline-separated hex rows
  * (MIFARE Classic: per-block, trying a built-in default-key dictionary key A then

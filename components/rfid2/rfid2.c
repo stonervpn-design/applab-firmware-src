@@ -180,6 +180,15 @@ static int transceive(
     return n;
 }
 
+/* ── Public low-level hooks for the unified furi_hal_nfc MFRC522 backend ── */
+int rfid2_transceive(const uint8_t* tx, int tx_len, int tx_last_bits, uint8_t* rx, int rx_max) {
+    return transceive(tx, tx_len, (uint8_t)(tx_last_bits & 0x07), rx, rx_max);
+}
+
+void rfid2_field_off(void) {
+    rd_clrbits(REG_TXCONTROL, 0x03); /* Tx2RFEn | Tx1RFEn off (RF field down) */
+}
+
 // One anticollision cascade level. Returns 5 bytes (4 UID/CT + BCC) into out5.
 static bool anticoll(uint8_t sel_cmd, uint8_t* out5) {
     rd_write(REG_COLL, 0x00); // clear ValuesAfterColl
