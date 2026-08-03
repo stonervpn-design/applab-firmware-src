@@ -668,6 +668,23 @@ static bool
        subghz_block_generic_global.btn_need_override)
         bypass = true;
 
+    // No-desync clone: emit the forward pair [a, b] back-to-back in one upload.
+    // counter_up=false so gen_data uses generic.cnt verbatim (no drift).
+    if(instance->clone_active) {
+        uint16_t a = 0, b = 0;
+        keeloq_clone_next_pair(&instance->clone, (uint16_t)instance->generic.cnt, &a, &b);
+
+        instance->encoder.repeat = 2;
+        instance->generic.cnt = a;
+        upindex = subghz_protocol_encoder_keeloq_encode_to_timings(
+            instance, instance->clone.btn, false, upindex);
+        instance->generic.cnt = b;
+        upindex = subghz_protocol_encoder_keeloq_encode_to_timings(
+            instance, instance->clone.btn, false, upindex);
+        instance->encoder.size_upload = upindex;
+        return true;
+    }
+
     // Create mode7 upload only if counter and button was not changed by SignalSettings menu
     if(keeloq_counter_mode == 7 && !bypass) {
         uint16_t temp_cnt = instance->generic.cnt;
