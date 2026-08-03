@@ -14,6 +14,7 @@
 #include "views/subbrute_attack_view.h"
 #include "views/subghz_view_tpms_info.h"
 #include "views/subghz_view_protoview.h"
+#include "views/subghz_keeloq_fob.h"
 #include "helpers/subghz_rollback.h"
 #include "helpers/subbrute_device.h"
 #include "helpers/subbrute_worker.h"
@@ -85,6 +86,7 @@ struct SubGhz {
     SubGhzFrequencyAnalyzer* subghz_frequency_analyzer;
     SubGhzReadRAW* subghz_read_raw;
     SubGhzJammer* subghz_jammer;
+    SubGhzKeeloqFob* subghz_keeloq_fob;
     SubGhzPlaylist* subghz_playlist;
     SubGhzViewTpmsInfo* subghz_tpms_info;
     SubGhzViewProtoview* subghz_protoview;
