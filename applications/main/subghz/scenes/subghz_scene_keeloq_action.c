@@ -32,7 +32,7 @@ void subghz_scene_keeloq_action_submenu_callback(void* context, uint32_t index) 
         // No-desync clone: set the flow flag and collect the jump before generating.
         subghz->keeloq_mfr_emulate_flow = false;
         subghz->keeloq_clone_flow = true;
-        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSetJump);
+        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
         break;
     default:
         break;

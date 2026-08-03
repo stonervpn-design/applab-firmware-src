@@ -231,7 +231,7 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
         subghz->gen_info->keeloq.manuf = subghz_scene_rolling_analyzer_clone_manuf;
 
         subghz->keeloq_clone_flow = true;
-        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSetJump);
+        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
         return true;
     }
     // Otherwise read-only: Back is handled by the scene manager (returns to receiver-info).
