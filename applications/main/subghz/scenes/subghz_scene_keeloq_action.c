@@ -5,6 +5,7 @@
 typedef enum {
     SubGhzSceneKeeloqActionEmulate = 0,
     SubGhzSceneKeeloqActionSave = 1,
+    SubGhzSceneKeeloqActionClone = 2,
 } SubGhzSceneKeeloqActionIndex;
 
 void subghz_scene_keeloq_action_submenu_callback(void* context, uint32_t index) {
@@ -26,6 +27,12 @@ void subghz_scene_keeloq_action_submenu_callback(void* context, uint32_t index) 
         scene_manager_set_scene_state(
             subghz->scene_manager, SubGhzSceneSetType, SubGhzCustomEventManagerSet);
         scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSaveName);
+        break;
+    case SubGhzSceneKeeloqActionClone:
+        // No-desync clone: set the flow flag and collect the jump before generating.
+        subghz->keeloq_mfr_emulate_flow = false;
+        subghz->keeloq_clone_flow = true;
+        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSetJump);
         break;
     default:
         break;
@@ -50,6 +57,12 @@ void subghz_scene_keeloq_action_on_enter(void* context) {
         SubGhzSceneKeeloqActionSave,
         subghz_scene_keeloq_action_submenu_callback,
         subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "Clone (no desync)",
+        SubGhzSceneKeeloqActionClone,
+        subghz_scene_keeloq_action_submenu_callback,
+        subghz);
 
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdMenu);
 }
@@ -65,4 +78,5 @@ void subghz_scene_keeloq_action_on_exit(void* context) {
     submenu_reset(subghz->submenu);
     // Clear on any exit (incl. Back) so a back-out never leaves the flow armed.
     subghz->keeloq_mfr_emulate_flow = false;
+    subghz->keeloq_clone_flow = false;
 }
