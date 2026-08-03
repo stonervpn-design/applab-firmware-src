@@ -3,6 +3,12 @@
 #include <gui/elements.h>
 #include <furi.h>
 
+/* Board capability flags (BOARD_TWO_BUTTON_INPUT). Guarded so this builds even
+ * where BOARD_INCLUDE is undefined. */
+#ifdef BOARD_INCLUDE
+#include BOARD_INCLUDE
+#endif
+
 static const uint8_t FOB_CODES[4] = {0x1, 0x2, 0x4, 0x8};
 static const char* const FOB_LABELS[4] = {"LOCK", "UNLOCK", "TRUNK", "PANIC"};
 
@@ -51,6 +57,15 @@ static bool keeloq_fob_input_callback(InputEvent* event, void* context) {
     if(event->type != InputTypeShort && event->type != InputTypeRepeat) return false;
     uint8_t navkey = 0xFF;
     switch(event->key) {
+#ifdef BOARD_TWO_BUTTON_INPUT
+    // M5Stick S3 (2-button): side-button tap = InputKeyDown, double-tap = InputKeyUp —
+    // both cycle to the next tile. The front button (InputKeyOk) sends; Back exits.
+    case InputKeyDown:
+    case InputKeyUp:
+        navkey = FOB_CYCLE;
+        break;
+#else
+    // Cardputer / full keyboard: arrows move the highlight spatially.
     case InputKeyLeft:
         navkey = FOB_LEFT;
         break;
@@ -63,6 +78,7 @@ static bool keeloq_fob_input_callback(InputEvent* event, void* context) {
     case InputKeyDown:
         navkey = FOB_DOWN;
         break;
+#endif
     case InputKeyOk:
         with_view_model(inst->view, SubGhzKeeloqFobModel * m, { m->sent = false; }, false);
         if(inst->callback) inst->callback(SubGhzCustomEventViewKeeloqFobSend, inst->context);
