@@ -99,6 +99,8 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
 
     // malloc() does not zero: explicitly clear the by-manufacturer Emulate flag.
     subghz->keeloq_mfr_emulate_flow = false;
+    subghz->keeloq_clone_flow = false;
+    subghz->keeloq_clone_jump = 0;
 
     // GUI
     subghz->gui = furi_record_open(RECORD_GUI);
