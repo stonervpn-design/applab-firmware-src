@@ -1,5 +1,6 @@
 #include "keeloq.h"
 #include "keeloq_common.h"
+#include "subghz_keeloq_clone_core.h"
 
 #include "../subghz_keystore.h"
 #include <m-array.h>
@@ -48,6 +49,11 @@ struct SubGhzProtocolEncoderKeeloq {
     const char* manufacture_name;
 
     FuriString* manufacture_from_file;
+
+    // No-desync clone state (feature: no-desync clone).
+    bool clone_active;         // TRUE when transmitting as a no-desync clone
+    KeeloqClone clone;         // serial/btn/kdev/learn_type/last_cnt/jump/synced
+    uint64_t last_derived_man; // captures the `man` used by the last gen_data (for clone-build)
 };
 
 typedef enum {
@@ -124,6 +130,10 @@ void* subghz_protocol_encoder_keeloq_alloc(SubGhzEnvironment* environment) {
     instance->encoder.is_running = false;
 
     instance->manufacture_from_file = furi_string_alloc();
+
+    instance->clone_active = false;
+    instance->clone = (KeeloqClone){0};
+    instance->last_derived_man = 0;
 
     return instance;
 }
@@ -512,6 +522,19 @@ static bool subghz_protocol_keeloq_gen_data(
                         break;
                     }
                 }
+            // No-desync clone: keystore-independent fallback. The per-mfr `decrypt`
+            // plaintext (assembled above from manufacture_name) is already correct;
+            // if the keystore had no matching key (hop still 0) but this instance holds
+            // a stored device key, encrypt with it directly. Also record the derived
+            // key so clone-build can persist it.
+            if(instance->clone_active && instance->clone.kdev != 0) {
+                if(hop == 0) {
+                    hop = subghz_protocol_keeloq_common_encrypt(decrypt, instance->clone.kdev);
+                }
+                instance->last_derived_man = instance->clone.kdev;
+            } else if(man != 0) {
+                instance->last_derived_man = man; // SIMPLE etc. leave man==0 (key used directly)
+            }
         }
     }
     if(hop || (prog_mode == PROG_MODE_KEELOQ_DEA_MIO) || (prog_mode == PROG_MODE_KEELOQ_BFT)) {
