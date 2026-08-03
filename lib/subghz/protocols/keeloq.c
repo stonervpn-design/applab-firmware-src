@@ -789,6 +789,54 @@ SubGhzProtocolStatus
             keeloq_counter_mode = 0;
         }
 
+        // No-desync clone fields (feature: no-desync clone).
+        instance->clone_active = false;
+        instance->clone = (KeeloqClone){0};
+        if(!flipper_format_rewind(flipper_format)) {
+            FURI_LOG_E(TAG, "Rewind error");
+            break;
+        }
+        uint32_t tmp_clone_mode = 0;
+        if(flipper_format_read_uint32(flipper_format, "CloneMode", &tmp_clone_mode, 1) &&
+           tmp_clone_mode == 1) {
+            uint32_t v = 0;
+            uint8_t kdev_data[sizeof(uint64_t)] = {0};
+
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Serial", &v, 1))
+                instance->clone.serial = v;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Btn", &v, 1))
+                instance->clone.btn = (uint8_t)v;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "Cnt", &v, 1))
+                instance->clone.last_cnt = (uint16_t)v;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "LearnType", &v, 1))
+                instance->clone.learn_type = (uint8_t)v;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "CloneJump", &v, 1))
+                instance->clone.jump = (uint16_t)v;
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_uint32(flipper_format, "CloneSynced", &v, 1))
+                instance->clone.synced = (v != 0);
+            flipper_format_rewind(flipper_format);
+            if(flipper_format_read_hex(flipper_format, "Kdev", kdev_data, sizeof(uint64_t))) {
+                uint64_t k = 0;
+                for(size_t i = 0; i < sizeof(uint64_t); i++) k = (k << 8) | kdev_data[i];
+                instance->clone.kdev = k;
+            }
+            instance->clone.btn = (uint8_t)(instance->clone.btn & 0x0F);
+            instance->generic.serial = instance->clone.serial;
+            instance->generic.btn = instance->clone.btn;
+            instance->generic.cnt = instance->clone.last_cnt;
+            instance->clone_active = true;
+        }
+        if(!flipper_format_rewind(flipper_format)) {
+            FURI_LOG_E(TAG, "Rewind error");
+            break;
+        }
+
         if(!flipper_format_rewind(flipper_format)) {
             FURI_LOG_E(TAG, "Rewind error");
             break;
@@ -818,6 +866,12 @@ SubGhzProtocolStatus
             FURI_LOG_E(TAG, "Unable to add Key");
             ret = SubGhzProtocolStatusErrorParserKey;
             break;
+        }
+        if(instance->clone_active) {
+            uint32_t cnt_v = instance->clone.last_cnt;
+            uint32_t synced_v = instance->clone.synced ? 1 : 0;
+            flipper_format_insert_or_update_uint32(flipper_format, "Cnt", &cnt_v, 1);
+            flipper_format_insert_or_update_uint32(flipper_format, "CloneSynced", &synced_v, 1);
         }
         instance->encoder.front = 0; // reset before start
         instance->encoder.is_running = true;
