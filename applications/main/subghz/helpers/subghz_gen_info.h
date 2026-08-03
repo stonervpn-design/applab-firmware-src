@@ -44,6 +44,7 @@ typedef struct {
             uint8_t btn;
             uint16_t cnt;
             const char* manuf;
+            uint16_t jump;
         } keeloq;
         struct {
             uint32_t serial;

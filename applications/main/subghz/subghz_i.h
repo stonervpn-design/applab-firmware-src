@@ -128,6 +128,12 @@ struct SubGhz {
     // leave this false.
     bool keeloq_mfr_emulate_flow;
 
+    // TRUE only while a KeeLoq no-desync clone is being generated (from a capture
+    // or the By-Manufacturer flow), so the counter/jump path is taken instead of
+    // the normal Emulate. Mirror every clear-site of keeloq_mfr_emulate_flow.
+    bool keeloq_clone_flow;
+    uint16_t keeloq_clone_jump;
+
     SubGhzFileEncoderWorker* decode_raw_file_worker_encoder;
 
     SubGhzThresholdRssi* threshold_rssi;

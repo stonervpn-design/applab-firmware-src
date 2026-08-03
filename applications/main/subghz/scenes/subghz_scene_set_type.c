@@ -104,6 +104,7 @@ void subghz_scene_set_type_on_enter(void* context) {
     // so a normal Add-Manually / hardcoded generation never diverts to the
     // Emulate/Save action scene.
     subghz->keeloq_mfr_emulate_flow = false;
+    subghz->keeloq_clone_flow = false;
 
     for(SetType i = 0; i < SetTypeMAX; i++) {
         submenu_add_item(
