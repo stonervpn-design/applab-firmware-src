@@ -70,20 +70,29 @@ forward pair instead of drifting.
   `instance->generic.cnt` pinned to `target` then `target+1` — modeled on the mode-7 block
   (`keeloq.c:678-702`) but trimmed to 2 frames and driven by the clone counter. `counter_up`
   is forced **false** so no implicit drift (`keeloq.c:245` gate is bypassed).
-- **Counter advance algorithm** (owned by the clone unit, not `gen_data`):
+- **Counter advance algorithm** (owned by the clone unit, not `gen_data`). The initial `jump`
+  establishes the lead over the real fob **once**; every subsequent send advances by the pair
+  width (+2) only, conserving 16-bit counter space:
   ```
-  seen_cnt   = counter recovered from an optional fresh re-capture of the live fob
-               (defaults to stored_last_cnt when re-opening without re-capture)
-  target     = (max(stored_last_cnt, seen_cnt) + jump) & 0xFFFF   ; jump default 100
-  emit frame @ target
-  emit frame @ (target + 1) & 0xFFFF          ; same upload buffer, no RF gap
-  stored_last_cnt = (target + 1) & 0xFFFF     ; persist -> next send continues forward
+  state: stored_last_cnt (persisted), synced (persisted bool), jump (default 100)
+         synced starts false at clone build; resets to false on a fresh re-capture
+
+  on send:
+    if not synced:
+        seen_cnt = counter from an optional fresh re-capture of the live fob,
+                   else stored_last_cnt
+        target   = (max(stored_last_cnt, seen_cnt) + jump) & 0xFFFF   ; one-time lead
+        synced   = true
+    else:
+        target   = (stored_last_cnt + 1) & 0xFFFF                     ; +2 pair advance
+    emit frame @ target
+    emit frame @ (target + 1) & 0xFFFF        ; same upload buffer, no RF gap
+    stored_last_cnt = (target + 1) & 0xFFFF   ; persist stored_last_cnt AND synced
   ```
-  16-bit wrap is modular; the double-window pair resyncs across a wrap. At jump=100 the
-  counter space (65536) covers ~650 sends before wrap — ample; wrap is handled, not an error.
-  Optional refinement (planning): after the first accepted send, later sends may advance by
-  the pair width only (+2) rather than re-jumping, to conserve counter space; the guarantee is
-  identical. Re-capturing the live fob resets the lead (`jump` re-applied over fresh usage).
+  16-bit wrap is modular; the double-window pair resyncs across a wrap. One-time jump then
+  +2/send means the counter advances ~2 per press after the first — thousands of presses
+  before wrap; wrap is handled, not an error. Re-capturing the live fob clears `synced` so the
+  `jump` lead is re-applied over any fresh real-fob usage.
 
 ### B. Clone persistence (`keeloq.c` serialize/deserialize + `.sub` format)
 
@@ -102,7 +111,8 @@ Btn: <4-bit>                  # NEW
 Cnt: <16-bit last_last_cnt>   # NEW  (clone's persisted last-sent counter)
 Kdev: <64-bit derived key>    # NEW  (device key; enables keystore-independent TX)
 LearnType: <KEELOQ_LEARNING_* int>   # NEW (for display + optional re-derive)
-CloneJump: <uint16, default 100>     # NEW (user-set lead)
+CloneJump: <uint16, default 100>     # NEW (user-set one-time lead)
+CloneSynced: <0|1>            # NEW (has the one-time jump lead been applied yet)
 Manufacture: <name>           # existing (kept for display; TX no longer depends on it)
 CloneMode: 1                  # NEW sentinel marking this as a no-desync clone
 ```
@@ -113,7 +123,7 @@ CloneMode: 1                  # NEW sentinel marking this as a no-desync clone
 - **Deserialize (TX path)** — extend `subghz_protocol_encoder_keeloq_deserialize`
   (`keeloq.c:712`) to read the new fields (mirror site `keeloq.c:774` for `CounterMode`). When
   `CloneMode` is present: set `clone_active=true`, load `clone_kdev`, `serial`, `btn`,
-  `generic.cnt=Cnt`, `jump`, and **bypass** the keystore-name derivation at
+  `generic.cnt=Cnt`, `jump`, `synced`, and **bypass** the keystore-name derivation at
   `check_remote_controller` (`keeloq.c:1327`) — the clone decrypts/encrypts with `Kdev`.
 - **Counter write-back** — after each send, rewrite `Cnt` in the clone's `fff_data` (pattern:
   the encoder already rewrites `Key` at `keeloq.c:806`), so re-opening resumes forward.
