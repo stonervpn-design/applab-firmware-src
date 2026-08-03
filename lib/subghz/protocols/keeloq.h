@@ -108,3 +108,23 @@ SubGhzProtocolStatus
  * @param output Resulting text
  */
 void subghz_protocol_decoder_keeloq_get_string(void* context, FuriString* output);
+
+/**
+ * Returns the device key (`man`) that gen_data derived on its most recent run for
+ * this encoder instance, or 0 if the manufacturer uses the key directly (SIMPLE etc.).
+ * @param context Pointer to a SubGhzProtocolEncoderKeeloq instance
+ * @return uint64_t Derived device key, or 0
+ */
+uint64_t subghz_protocol_keeloq_encoder_last_kdev(void* context);
+
+/**
+ * Look up the raw manufacturer key + learning type by name from the keystore, so a
+ * clone can persist a usable kdev for SIMPLE-type mfrs (key used directly as kdev).
+ * @param context Pointer to a SubGhzProtocolEncoderKeeloq instance
+ * @param manufacture_name Name of manufacturer's key
+ * @param out_key Pointer to receive the raw key
+ * @param out_type Pointer to receive the KEELOQ_LEARNING_* type
+ * @return bool True if found
+ */
+bool subghz_protocol_keeloq_encoder_lookup_key(
+    void* context, const char* manufacture_name, uint64_t* out_key, uint8_t* out_type);

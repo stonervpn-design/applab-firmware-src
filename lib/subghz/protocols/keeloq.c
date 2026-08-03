@@ -568,6 +568,31 @@ bool subghz_protocol_keeloq_create_data(
     return false;
 }
 
+// Returns the device key (`man`) that gen_data derived on its most recent run for
+// this encoder instance, or 0 if the manufacturer uses the key directly (SIMPLE etc.).
+uint64_t subghz_protocol_keeloq_encoder_last_kdev(void* context) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKeeloq* instance = context;
+    return instance->last_derived_man;
+}
+
+// Look up the raw manufacturer key + learning type by name from the keystore, so a
+// clone can persist a usable kdev for SIMPLE-type mfrs (key used directly as kdev).
+bool subghz_protocol_keeloq_encoder_lookup_key(
+    void* context, const char* manufacture_name, uint64_t* out_key, uint8_t* out_type) {
+    furi_assert(context);
+    SubGhzProtocolEncoderKeeloq* instance = context;
+    for
+        M_EACH(mc, *subghz_keystore_get_data(instance->keystore), SubGhzKeyArray_t) {
+            if(strcmp(furi_string_get_cstr(mc->name), manufacture_name) == 0) {
+                *out_key = mc->key;
+                *out_type = mc->type;
+                return true;
+            }
+        }
+    return false;
+}
+
 bool subghz_protocol_keeloq_bft_create_data(
     void* context,
     FlipperFormat* flipper_format,

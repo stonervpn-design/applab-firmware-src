@@ -63,6 +63,32 @@ bool subghz_txrx_gen_keeloq_protocol(
     uint16_t cnt,
     const char* manufacture_name);
 
+/**
+ * Generate a no-desync clone: runs the normal keystore path to produce a valid
+ * base frame, captures the derived device key (kdev), and writes the clone
+ * fields (CloneMode, Serial, Btn, Cnt, LearnType, CloneJump, CloneSynced, Kdev)
+ * into fff_data so the encoder can deserialize it as a clone later.
+ *
+ * @param instance Pointer to a SubGhzTxRx
+ * @param preset_name Name of preset
+ * @param frequency Frequency in Hz
+ * @param serial Serial number
+ * @param btn Button
+ * @param cnt Counter
+ * @param jump One-time forward lead applied until synced
+ * @param manufacture_name Name of Keeloq system
+ * @return bool True if success
+ */
+bool subghz_txrx_gen_keeloq_clone(
+    SubGhzTxRx* instance,
+    const char* preset_name,
+    uint32_t frequency,
+    uint32_t serial,
+    uint8_t btn,
+    uint16_t cnt,
+    uint16_t jump,
+    const char* manufacture_name);
+
 bool subghz_txrx_gen_keeloq_bft_protocol(
     void* context,
     const char* preset_name,

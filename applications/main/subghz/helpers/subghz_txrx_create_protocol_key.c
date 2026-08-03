@@ -125,6 +125,66 @@ bool subghz_txrx_gen_keeloq_protocol( //TODO lead to a general appearance
     return res;
 }
 
+bool subghz_txrx_gen_keeloq_clone(
+    SubGhzTxRx* instance,
+    const char* preset_name,
+    uint32_t frequency,
+    uint32_t serial,
+    uint8_t btn,
+    uint16_t cnt,
+    uint16_t jump,
+    const char* manufacture_name) {
+    furi_assert(instance);
+    bool res = false;
+
+    instance->transmitter =
+        subghz_transmitter_alloc_init(instance->environment, SUBGHZ_PROTOCOL_KEELOQ_NAME);
+    subghz_txrx_set_preset(instance, preset_name, frequency, NULL, 0);
+
+    if(instance->transmitter) {
+        void* proto = subghz_transmitter_get_protocol_instance(instance->transmitter);
+        // Produce a valid base frame via the normal keystore path (also runs the
+        // per-mfr plaintext assembly + derivation once).
+        if(subghz_protocol_keeloq_create_data(
+               proto, instance->fff_data, serial, btn, cnt, manufacture_name, instance->preset)) {
+            // Capture kdev: derived `man` for NORMAL/SECURE/MAGIC..., else the raw key.
+            uint64_t kdev = subghz_protocol_keeloq_encoder_last_kdev(proto);
+            uint8_t learn_type = 0;
+            if(kdev == 0) {
+                uint64_t raw = 0;
+                if(subghz_protocol_keeloq_encoder_lookup_key(
+                       proto, manufacture_name, &raw, &learn_type)) {
+                    kdev = raw; // SIMPLE-type: key is used directly as the encrypt key
+                }
+            } else {
+                uint64_t raw = 0;
+                subghz_protocol_keeloq_encoder_lookup_key(
+                    proto, manufacture_name, &raw, &learn_type);
+            }
+
+            flipper_format_write_string_cstr(instance->fff_data, "Manufacture", manufacture_name);
+            uint32_t one = 1, serial_v = serial, btn_v = btn, cnt_v = cnt, jump_v = jump,
+                     lt_v = learn_type, synced_v = 0;
+            flipper_format_insert_or_update_uint32(instance->fff_data, "CloneMode", &one, 1);
+            flipper_format_insert_or_update_uint32(instance->fff_data, "Serial", &serial_v, 1);
+            flipper_format_insert_or_update_uint32(instance->fff_data, "Btn", &btn_v, 1);
+            flipper_format_insert_or_update_uint32(instance->fff_data, "Cnt", &cnt_v, 1);
+            flipper_format_insert_or_update_uint32(instance->fff_data, "LearnType", &lt_v, 1);
+            flipper_format_insert_or_update_uint32(instance->fff_data, "CloneJump", &jump_v, 1);
+            flipper_format_insert_or_update_uint32(instance->fff_data, "CloneSynced", &synced_v, 1);
+
+            uint8_t kdev_data[sizeof(uint64_t)] = {0};
+            for(size_t i = 0; i < sizeof(uint64_t); i++)
+                kdev_data[sizeof(uint64_t) - i - 1] = (kdev >> (i * 8)) & 0xFF;
+            flipper_format_insert_or_update_hex(
+                instance->fff_data, "Kdev", kdev_data, sizeof(uint64_t));
+            res = true;
+        }
+    }
+    subghz_transmitter_free(instance->transmitter);
+    return res;
+}
+
 bool subghz_txrx_gen_keeloq_bft_protocol(
     void* context,
     const char* preset_name,
