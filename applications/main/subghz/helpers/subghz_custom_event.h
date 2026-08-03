@@ -83,6 +83,9 @@ typedef enum {
     SubGhzCustomEventViewProtoviewBack,
 
     SubGhzCustomEventScenePsaBfTick, /* PSA brute-force progress tick */
+
+    SubGhzCustomEventViewKeeloqFobSend,
+    SubGhzCustomEventViewKeeloqFobBack,
 } SubGhzCustomEvent;
 
 typedef enum {
