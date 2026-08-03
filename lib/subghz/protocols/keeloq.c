@@ -842,8 +842,13 @@ SubGhzProtocolStatus
             break;
         }
 
-        subghz_protocol_keeloq_check_remote_controller(
-            &instance->generic, instance->keystore, &instance->manufacture_name);
+        // Clones carry authoritative serial/btn/cnt/manufacture in their own fields
+        // (set above); re-deriving from Key would clobber the clone counter and can
+        // set manufacture_name to "Unknown", defeating the kdev encryption path.
+        if(!instance->clone_active) {
+            subghz_protocol_keeloq_check_remote_controller(
+                &instance->generic, instance->keystore, &instance->manufacture_name);
+        }
 
         // Optional value
         flipper_format_read_uint32(
