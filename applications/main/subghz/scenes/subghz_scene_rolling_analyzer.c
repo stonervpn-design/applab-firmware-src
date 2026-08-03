@@ -1,6 +1,7 @@
 #include "../subghz_i.h"
 
 #include "applications/main/subghz/helpers/subghz_txrx_i.h"
+#include "../helpers/subghz_txrx_create_protocol_key.h"
 #include "../helpers/subghz_rollback.h"
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/protocols/keeloq.h>
@@ -77,6 +78,9 @@ static void subghz_scene_rolling_analyzer_button_callback(
     if((result == GuiButtonTypeCenter) && (type == InputTypeShort)) {
         view_dispatcher_send_custom_event(
             subghz->view_dispatcher, SubGhzCustomEventSceneRollingAnalyzerClone);
+    } else if((result == GuiButtonTypeRight) && (type == InputTypeShort)) {
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventSceneRollingAnalyzerSave);
     }
 }
 
@@ -161,6 +165,12 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
             "Clone",
             subghz_scene_rolling_analyzer_button_callback,
             subghz);
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeRight,
+            "Save",
+            subghz_scene_rolling_analyzer_button_callback,
+            subghz);
     }
 
     furi_string_free(body);
@@ -172,7 +182,9 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
 bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent event) {
     SubGhz* subghz = context;
     if(event.type == SceneManagerEventTypeCustom &&
-       event.event == SubGhzCustomEventSceneRollingAnalyzerClone) {
+       (event.event == SubGhzCustomEventSceneRollingAnalyzerClone ||
+        event.event == SubGhzCustomEventSceneRollingAnalyzerSave)) {
+        bool do_save = (event.event == SubGhzCustomEventSceneRollingAnalyzerSave);
         // Stop RX/hopper before handing off — SetJump's byte-input result calls
         // subghz_txrx_gen_keeloq_clone() and routes to the Transmitter, so the
         // radio needs to be idle (mirrors receiver-info's Save handler).
@@ -230,7 +242,33 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
         subghz->gen_info->keeloq.cnt = (uint16_t)cnt;
         subghz->gen_info->keeloq.manuf = subghz_scene_rolling_analyzer_clone_manuf;
 
-        subghz->keeloq_clone_flow = true;
+        if(do_save) {
+            // Build the clone into fff_data and persist it to the Garage, then open
+            // the fob on the just-built clone (from_garage => no rebuild).
+            if(subghz_txrx_gen_keeloq_clone(
+                   subghz->txrx,
+                   subghz->gen_info->mod,
+                   subghz->gen_info->freq,
+                   subghz->gen_info->keeloq.serial,
+                   subghz->gen_info->keeloq.btn,
+                   subghz->gen_info->keeloq.cnt,
+                   subghz->keeloq_clone_jump ? subghz->keeloq_clone_jump : 100,
+                   subghz->gen_info->keeloq.manuf)) {
+                FuriString* path = furi_string_alloc();
+                furi_string_printf(
+                    path,
+                    "%s/garage/%s_%08lX.sub",
+                    SUBGHZ_APP_FOLDER,
+                    (mf[0] ? mf : "Car"),
+                    (unsigned long)(fix & 0x0FFFFFFF));
+                subghz_save_protocol_to_file(
+                    subghz, subghz_txrx_get_fff_data(subghz->txrx), furi_string_get_cstr(path));
+                furi_string_free(path);
+                subghz->keeloq_fob_from_garage = true;
+            }
+        } else {
+            subghz->keeloq_clone_flow = true;
+        }
         scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
         return true;
     }

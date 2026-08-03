@@ -53,6 +53,8 @@
 
 #include "helpers/subghz_txrx.h"
 
+#include "helpers/subghz_decode_dedup.h"
+
 #define SUBGHZ_MAX_LEN_NAME      64
 #define SUBGHZ_EXT_PRESET_NAME   true
 #define SUBGHZ_RAW_THRESHOLD_MIN (-90.0f)
@@ -136,11 +138,17 @@ struct SubGhz {
     bool keeloq_clone_flow;
     uint16_t keeloq_clone_jump;
 
+    // Car Keys hub: prior automotive mode, restored on hub exit.
+    uint8_t car_keys_prev_car_mode;
+    // TRUE when the fob scene is opened from a saved Garage clone (skip rebuild).
+    bool keeloq_fob_from_garage;
+
     SubGhzFileEncoderWorker* decode_raw_file_worker_encoder;
 
     SubGhzThresholdRssi* threshold_rssi;
     SubGhzRxKeyState rx_key_state;
     SubGhzHistory* history;
+    SubGhzDecodeDedup dedup;
 
     uint16_t idx_menu_chosen;
     SubGhzLoadTypeFile load_type_file;

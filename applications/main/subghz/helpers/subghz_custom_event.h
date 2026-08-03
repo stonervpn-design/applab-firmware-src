@@ -70,7 +70,8 @@ typedef enum {
     SubGhzCustomEventTpmsEditId,
     SubGhzCustomEventTpmsToggleBattery,
 
-    SubGhzCustomEventSceneRollingAnalyzerClone, /* Rolling-Code Analyzer -> KeeLoq no-desync clone */
+    SubGhzCustomEventSceneRollingAnalyzerClone,
+    SubGhzCustomEventSceneRollingAnalyzerSave, /* Rolling-Code Analyzer -> KeeLoq no-desync clone */
 
     SubGhzCustomEventSceneRollbackUpdate,
     SubGhzCustomEventSceneRollbackDone,
@@ -83,6 +84,8 @@ typedef enum {
     SubGhzCustomEventViewProtoviewBack,
 
     SubGhzCustomEventScenePsaBfTick, /* PSA brute-force progress tick */
+
+    SubGhzCustomEventSceneAnalyzeDetails, /* Signal-ID -> deeper tool (rolling/PSA) */
 
     SubGhzCustomEventViewKeeloqFobSend,
     SubGhzCustomEventViewKeeloqFobBack,

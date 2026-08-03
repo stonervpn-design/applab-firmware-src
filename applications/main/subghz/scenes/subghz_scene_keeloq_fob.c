@@ -25,31 +25,59 @@ void subghz_scene_keeloq_fob_on_enter(void* context) {
     SubGhz* subghz = context;
     if(subghz->keeloq_clone_jump == 0) subghz->keeloq_clone_jump = 100;
 
-    // Build the no-desync clone into fff_data from the gen_info the Clone action populated.
-    bool ok = subghz_txrx_gen_keeloq_clone(
-        subghz->txrx,
-        subghz->gen_info->mod,
-        subghz->gen_info->freq,
-        subghz->gen_info->keeloq.serial,
-        subghz->gen_info->keeloq.btn,
-        subghz->gen_info->keeloq.cnt,
-        subghz->keeloq_clone_jump,
-        subghz->gen_info->keeloq.manuf);
-    subghz->keeloq_clone_flow = false;
-    if(!ok) {
-        furi_string_set(
-            subghz->error_str, "Function requires\nan SD card with\nfresh databases.");
-        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneShowError);
-        return;
+    uint8_t real_btn;
+    uint16_t cnt;
+    uint16_t jump;
+
+    if(subghz->keeloq_fob_from_garage) {
+        // Re-opened from the Garage: fff_data already holds the loaded CloneMode .sub.
+        subghz->keeloq_fob_from_garage = false;
+        FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
+        uint32_t v = 0;
+        flipper_format_rewind(fff);
+        if(!(flipper_format_read_uint32(fff, "CloneMode", &v, 1) && v == 1)) {
+            furi_string_set(subghz->error_str, "Not a saved fob\n(no CloneMode).");
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneShowError);
+            return;
+        }
+        flipper_format_rewind(fff);
+        v = 0;
+        flipper_format_read_uint32(fff, "Btn", &v, 1);
+        real_btn = (uint8_t)(v & 0x0F);
+        flipper_format_rewind(fff);
+        v = 0;
+        flipper_format_read_uint32(fff, "Cnt", &v, 1);
+        cnt = (uint16_t)v;
+        flipper_format_rewind(fff);
+        v = subghz->keeloq_clone_jump;
+        flipper_format_read_uint32(fff, "CloneJump", &v, 1);
+        jump = (uint16_t)v;
+    } else {
+        // Build the no-desync clone into fff_data from the gen_info the Clone action set.
+        bool ok = subghz_txrx_gen_keeloq_clone(
+            subghz->txrx,
+            subghz->gen_info->mod,
+            subghz->gen_info->freq,
+            subghz->gen_info->keeloq.serial,
+            subghz->gen_info->keeloq.btn,
+            subghz->gen_info->keeloq.cnt,
+            subghz->keeloq_clone_jump,
+            subghz->gen_info->keeloq.manuf);
+        subghz->keeloq_clone_flow = false;
+        if(!ok) {
+            furi_string_set(
+                subghz->error_str, "Function requires\nan SD card with\nfresh databases.");
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneShowError);
+            return;
+        }
+        real_btn = (uint8_t)(subghz->gen_info->keeloq.btn & 0x0F);
+        cnt = (uint16_t)subghz->gen_info->keeloq.cnt;
+        jump = subghz->keeloq_clone_jump;
     }
 
     subghz_keeloq_fob_set_callback(
         subghz->subghz_keeloq_fob, subghz_scene_keeloq_fob_callback, subghz);
-    subghz_keeloq_fob_set_state(
-        subghz->subghz_keeloq_fob,
-        (uint8_t)(subghz->gen_info->keeloq.btn & 0x0F),
-        (uint16_t)subghz->gen_info->keeloq.cnt,
-        subghz->keeloq_clone_jump);
+    subghz_keeloq_fob_set_state(subghz->subghz_keeloq_fob, real_btn, cnt, jump);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdKeeloqFob);
 }
 
