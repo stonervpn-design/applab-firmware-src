@@ -36,6 +36,16 @@ int main(void) {
     keeloq_clone_next_pair(&c4, 0, &a, &b);
     assert(a == 0x00F0 && b == 0x00F1);
 
+    // Synced branch IGNORES seen_cnt even when it is far ahead (regression for the fix).
+    KeeloqClone c5 = mk(50, 100, true);
+    keeloq_clone_next_pair(&c5, 1000, &a, &b);
+    assert(a == 51 && b == 52 && c5.last_cnt == 52);
+
+    // out_b-only wrap: target itself does not wrap, target+1 does.
+    KeeloqClone c6 = mk(0xFFFE, 100, true);
+    keeloq_clone_next_pair(&c6, 0, &a, &b);
+    assert(a == 0xFFFF && b == 0x0000 && c6.last_cnt == 0x0000);
+
     printf("test_keeloq_clone_core OK\n");
     return 0;
 }
