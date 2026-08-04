@@ -5,6 +5,8 @@
 #include "../helpers/subghz_rollback.h"
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/protocols/keeloq.h>
+#include <lib/subghz/protocols/vag.h>
+#include <lib/flipper_format/flipper_format.h>
 #include <string.h>
 
 #define TAG "SubGhzSceneRollingAnalyzer"
@@ -67,6 +69,17 @@ static bool
     return strstr(decoded_text, "MF:Unknown") == NULL &&
            strstr(decoded_text, "MF:BFT") == NULL && strstr(decoded_text, "MF:Erreka") == NULL &&
            strstr(decoded_text, "Cnt:") != NULL && strstr(decoded_text, "Cnt:????") == NULL;
+}
+
+// VAG (AUT64) save gate. VAG's get_string carries "Ser:" only when the frame
+// decrypted with a known key; an undecrypted frame prints "Key2:.. (corrupted)".
+// True for a decrypted VAG capture (all fields present for a full .sub + emulate).
+static bool subghz_scene_rolling_analyzer_can_save_vag(
+    const char* protocol_name,
+    const char* decoded_text) {
+    if(!protocol_name || strcmp(protocol_name, VAG_PROTOCOL_NAME) != 0) return false;
+    if(!decoded_text) return false;
+    return strstr(decoded_text, "Ser:") != NULL && strstr(decoded_text, "corrupted") == NULL;
 }
 
 static void subghz_scene_rolling_analyzer_button_callback(
@@ -137,6 +150,23 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
     uint8_t btn = (uint8_t)((fix >> 28) & 0x0F);
     uint32_t cnt = subghz_rollback_hex_after(decoded_text, "Cnt:");
 
+    // VAG (AUT64) uses a different get_string format (no Fix:/MF: markers), so the
+    // KeeLoq parse above yields SN:0 / "key unknown". Parse VAG's own Ser:/Cnt:/Btn:
+    // and show the vehicle name so the summary is correct for VAG captures.
+    if(protocol_name && strcmp(protocol_name, VAG_PROTOCOL_NAME) == 0) {
+        decoded = (strstr(decoded_text, "Ser:") != NULL) &&
+                  (strstr(decoded_text, "corrupted") == NULL);
+        serial = subghz_rollback_hex_after(decoded_text, "Ser:");
+        cnt = subghz_rollback_hex_after(decoded_text, "Cnt:");
+        btn = (uint8_t)subghz_rollback_hex_after(decoded_text, "Btn:");
+        snprintf(
+            manufacturer,
+            sizeof(manufacturer),
+            "%.*s",
+            (int)strcspn(decoded_text, " \r\n"),
+            decoded_text); // vehicle name = leading token (VW/Audi/Seat/Skoda)
+    }
+
     FuriString* body = furi_string_alloc();
     furi_string_cat_printf(body, "Proto: %s\n", protocol_name ? protocol_name : "?");
     furi_string_cat_printf(body, "MF: %s\n", decoded ? manufacturer : "key unknown");
@@ -165,6 +195,14 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
             "Clone",
             subghz_scene_rolling_analyzer_button_callback,
             subghz);
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeRight,
+            "Save",
+            subghz_scene_rolling_analyzer_button_callback,
+            subghz);
+    } else if(subghz_scene_rolling_analyzer_can_save_vag(protocol_name, decoded_text)) {
+        // VAG: Save == clone-to-Garage-and-emulate (no separate KeeLoq gen step).
         widget_add_button_element(
             subghz->widget,
             GuiButtonTypeRight,
@@ -212,6 +250,43 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
         FuriString* text = furi_string_alloc();
         subghz_protocol_decoder_base_get_string(decoder, text);
         const char* t = furi_string_get_cstr(text);
+
+        // VAG: serialize the decrypted frame straight to the Garage (no KeeLoq gen
+        // step), load it back into fff_data, and open the fob on it (no-desync
+        // emulate resumes from there). Both Clone and Save land here for VAG.
+        if(subghz_scene_rolling_analyzer_can_save_vag(decoder->protocol->name, t)) {
+            uint32_t vser = subghz_rollback_hex_after(t, "Ser:");
+            char vmake[24];
+            snprintf(vmake, sizeof(vmake), "%.*s", (int)strcspn(t, " \r\n"), t);
+            furi_string_free(text);
+
+            SubGhzRadioPreset* hp =
+                subghz_history_get_radio_preset(subghz->history, subghz->idx_menu_chosen);
+            SubGhzRadioPreset preset = hp ? *hp : subghz_txrx_get_preset(subghz->txrx);
+            FlipperFormat* ff = flipper_format_string_alloc();
+            bool ok =
+                (subghz_protocol_decoder_base_serialize(decoder, ff, &preset) ==
+                 SubGhzProtocolStatusOk);
+            if(ok) {
+                FuriString* path = furi_string_alloc();
+                furi_string_printf(
+                    path,
+                    "%s/garage/%s_%08lX.sub",
+                    SUBGHZ_APP_FOLDER,
+                    (vmake[0] ? vmake : "VAG"),
+                    (unsigned long)vser);
+                ok = subghz_save_protocol_to_file(subghz, ff, furi_string_get_cstr(path)) &&
+                     subghz_key_load(subghz, furi_string_get_cstr(path), false);
+                if(ok) subghz->keeloq_fob_from_garage = true;
+                furi_string_free(path);
+            }
+            flipper_format_free(ff);
+            if(ok) {
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
+                return true;
+            }
+            return false;
+        }
 
         if(!subghz_scene_rolling_analyzer_can_clone(decoder->protocol->name, t)) {
             furi_string_free(text);

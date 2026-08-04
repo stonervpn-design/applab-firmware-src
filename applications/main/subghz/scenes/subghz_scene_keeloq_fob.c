@@ -3,6 +3,7 @@
 #include "applications/main/subghz/helpers/subghz_txrx_i.h"
 #include "lib/subghz/blocks/generic.h"
 #include <lib/subghz/devices/devices.h>
+#include <lib/subghz/protocols/vag.h>
 
 #define TAG "SubGhzKeeloqFob"
 
@@ -12,18 +13,68 @@ static void subghz_scene_keeloq_fob_callback(SubGhzCustomEvent event, void* cont
     view_dispatcher_send_custom_event(subghz->view_dispatcher, event);
 }
 
-// Refresh the on-screen counter from the (just re-serialized) clone fff_data.
+// Refresh the on-screen counter from fff_data after TX. Both the KeeLoq clone and the
+// VAG encoder advance AND persist the counter into fff_data during subghz_tx_start, so
+// we only read the post-TX value here — no manual +1 (that would double-advance VAG).
 static void subghz_scene_keeloq_fob_refresh_cnt(SubGhz* subghz) {
     FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
     uint32_t cnt = 0;
     flipper_format_rewind(fff);
     flipper_format_read_uint32(fff, "Cnt", &cnt, 1);
-    subghz_keeloq_fob_set_sent(subghz->subghz_keeloq_fob, (uint16_t)cnt);
+    subghz_keeloq_fob_set_sent(subghz->subghz_keeloq_fob, cnt);
 }
 
 void subghz_scene_keeloq_fob_on_enter(void* context) {
     SubGhz* subghz = context;
     if(subghz->keeloq_clone_jump == 0) subghz->keeloq_clone_jump = 100;
+
+    // Detect the loaded frame's protocol, but ONLY on a from_garage entry. VAG is
+    // always reached via Save->Garage. A fresh KeeLoq clone flow (keeloq_clone_flow,
+    // from_garage=false) reaches this scene with STALE fff_data that may still hold
+    // "Protocol: VAG" from a prior VAG emulate; reading it there would mis-route the
+    // KeeLoq clone into the VAG branch and skip gen_keeloq_clone. KeeLoq Garage entries
+    // are also from_garage but carry a fresh "Protocol: KeeLoq", so the string check
+    // keeps them on the KeeLoq path below.
+    bool is_vag = false;
+    if(subghz->keeloq_fob_from_garage) {
+        FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
+        FuriString* proto = furi_string_alloc();
+        flipper_format_rewind(fff);
+        if(flipper_format_read_string(fff, "Protocol", proto) &&
+           furi_string_equal_str(proto, VAG_PROTOCOL_NAME)) {
+            is_vag = true;
+        }
+        furi_string_free(proto);
+    }
+
+    if(is_vag) {
+        subghz->keeloq_fob_from_garage = false; // consume the flag
+        FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
+        uint32_t btn = 0, cnt_file = 0;
+        flipper_format_rewind(fff);
+        flipper_format_read_uint32(fff, "Btn", &btn, 1);
+        flipper_format_rewind(fff);
+        flipper_format_read_uint32(fff, "Cnt", &cnt_file, 1);
+
+        // Normalize VAG button code to the low-nibble form (0x1/0x2/0x4) the fob
+        // tiles use; some captures carry the 0x10/0x20/0x40 alternate encoding.
+        uint8_t rb = (uint8_t)btn;
+        if(rb & 0x70) rb >>= 4;
+        rb &= 0x07;
+
+        // Jump ahead of the real fob (forward window), then +1 per press this
+        // session. KeyIdx/Type stay in fff; the encoder re-encrypts from Cnt/Btn.
+        uint16_t vjump = subghz->keeloq_clone_jump ? subghz->keeloq_clone_jump : 100;
+        uint32_t cnt_start = cnt_file + vjump;
+        flipper_format_update_uint32(fff, "Cnt", &cnt_start, 1);
+
+        subghz_keeloq_fob_set_callback(
+            subghz->subghz_keeloq_fob, subghz_scene_keeloq_fob_callback, subghz);
+        subghz_keeloq_fob_set_state(
+            subghz->subghz_keeloq_fob, SubGhzFobKindVag, rb, cnt_start, vjump);
+        view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdKeeloqFob);
+        return;
+    }
 
     uint8_t real_btn;
     uint16_t cnt;
@@ -77,7 +128,8 @@ void subghz_scene_keeloq_fob_on_enter(void* context) {
 
     subghz_keeloq_fob_set_callback(
         subghz->subghz_keeloq_fob, subghz_scene_keeloq_fob_callback, subghz);
-    subghz_keeloq_fob_set_state(subghz->subghz_keeloq_fob, real_btn, cnt, jump);
+    subghz_keeloq_fob_set_state(
+        subghz->subghz_keeloq_fob, SubGhzFobKindKeeloq, real_btn, cnt, jump);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdKeeloqFob);
 }
 
