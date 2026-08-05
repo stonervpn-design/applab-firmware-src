@@ -327,7 +327,7 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
                    subghz->gen_info->keeloq.serial,
                    subghz->gen_info->keeloq.btn,
                    subghz->gen_info->keeloq.cnt,
-                   subghz->keeloq_clone_jump ? subghz->keeloq_clone_jump : 100,
+                   subghz->keeloq_clone_jump, /* 0 = no lead (desync-safe default) */
                    subghz->gen_info->keeloq.manuf)) {
                 FuriString* path = furi_string_alloc();
                 furi_string_printf(

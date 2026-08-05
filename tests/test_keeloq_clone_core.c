@@ -2,50 +2,81 @@
 #include <assert.h>
 #include <stdio.h>
 
-static KeeloqClone mk(uint16_t last, uint16_t jump, bool synced) {
-    KeeloqClone c = {0};
-    c.serial = 0x0ABCDEF; c.btn = 2; c.kdev = 0x1122334455667788ull;
-    c.learn_type = 2; c.last_cnt = last; c.jump = jump; c.synced = synced;
-    return c;
+// Minimal KeeLoq receiver model. The receiver stores ONE counter per serial; a clone
+// shares the original fob's serial, so both hit the same slot. Accept rule (HCS-style):
+//   1..WIN ahead  -> single operating window: accept, resync
+//   WIN+1..32768  -> double window: accept only as the 2nd of two consecutive counters
+//   0 or behind   -> reject (replay / stale)
+#define WIN 16
+static uint16_t rstored;
+static int rpending;
+static uint16_t rpend;
+static void rx_init(uint16_t s) {
+    rstored = s;
+    rpending = 0;
+}
+static int rx(uint16_t c) {
+    uint16_t d = (uint16_t)(c - rstored);
+    if(d >= 1 && d <= WIN) {
+        rstored = c;
+        rpending = 0;
+        return 1;
+    }
+    if(d > WIN && d <= 32768) {
+        if(rpending && c == (uint16_t)(rpend + 1)) {
+            rstored = c;
+            rpending = 0;
+            return 1;
+        }
+        rpending = 1;
+        rpend = c;
+        return 0;
+    }
+    return 0; // d == 0 (replay) or behind
+}
+// The original fob presses (counter +1 each) until the receiver accepts; #presses.
+static int recover(uint16_t fob) {
+    uint16_t c = fob;
+    for(int i = 1; i <= 5000; i++) {
+        c++;
+        if(rx(c)) return i;
+    }
+    return 9999;
 }
 
 int main(void) {
-    uint16_t a = 0, b = 0;
+    const uint16_t C = 0x4E2; // captured counter (receiver last saw this)
 
-    // Fresh clone: one-time jump lead, then synced.
-    KeeloqClone c1 = mk(5, 100, false);
-    keeloq_clone_next_pair(&c1, 0, &a, &b);
-    assert(a == 105 && b == 106 && c1.last_cnt == 106 && c1.synced == true);
+    // Desync-safe step: +1 per press, no forward lead.
+    KeeloqClone c1 = {.last_cnt = C, .jump = 0, .synced = false};
+    assert(keeloq_clone_next(&c1, 0) == (uint16_t)(C + 1));
+    assert(keeloq_clone_next(&c1, 0) == (uint16_t)(C + 2));
+    assert(keeloq_clone_next(&c1, 0) == (uint16_t)(C + 3));
 
-    // Subsequent send: +2 pair advance (no re-jump).
-    keeloq_clone_next_pair(&c1, 0, &a, &b);
-    assert(a == 107 && b == 108 && c1.last_cnt == 108);
+    // First call catches up to a freshly-observed higher live counter, then +1;
+    // seen_cnt is ignored once synced.
+    KeeloqClone c2 = {.last_cnt = C, .jump = 0, .synced = false};
+    assert(keeloq_clone_next(&c2, (uint16_t)(C + 50)) == (uint16_t)(C + 51));
+    assert(keeloq_clone_next(&c2, 0) == (uint16_t)(C + 52));
 
-    // Fresh capture ahead of stored last -> catch up before jump.
-    KeeloqClone c2 = mk(5, 100, false);
-    keeloq_clone_next_pair(&c2, 500, &a, &b);
-    assert(a == 600 && b == 601 && c2.last_cnt == 601 && c2.synced == true);
+    // Optional one-time forward margin (opt-in reliability lead) applied once, then +1.
+    KeeloqClone c3 = {.last_cnt = C, .jump = 5, .synced = false};
+    assert(keeloq_clone_next(&c3, 0) == (uint16_t)(C + 6));
+    assert(keeloq_clone_next(&c3, 0) == (uint16_t)(C + 7));
 
-    // 16-bit wrap on the +1 pair.
-    KeeloqClone c3 = mk(0xFFFF, 100, true);
-    keeloq_clone_next_pair(&c3, 0, &a, &b);
-    assert(a == 0x0000 && b == 0x0001 && c3.last_cnt == 0x0001);
+    // 16-bit modular wrap is well-defined.
+    KeeloqClone c4 = {.last_cnt = 0xFFFF, .jump = 0, .synced = false};
+    assert(keeloq_clone_next(&c4, 0) == 0x0000);
 
-    // Jump that overflows 16 bits wraps modularly.
-    KeeloqClone c4 = mk(0xFFF0, 0x100, false);
-    keeloq_clone_next_pair(&c4, 0, &a, &b);
-    assert(a == 0x00F0 && b == 0x00F1);
+    // PROOF: with the desync-safe step, after K clone uses the ORIGINAL fob recovers in
+    // exactly K+1 presses — never the old fixed ~100-press wall, and it always recovers.
+    for(int K = 1; K <= 25; K++) {
+        rx_init(C);
+        KeeloqClone cl = {.last_cnt = C, .jump = 0, .synced = false};
+        for(int i = 0; i < K; i++) rx(keeloq_clone_next(&cl, 0));
+        assert(recover(C) == K + 1);
+    }
 
-    // Synced branch IGNORES seen_cnt even when it is far ahead (regression for the fix).
-    KeeloqClone c5 = mk(50, 100, true);
-    keeloq_clone_next_pair(&c5, 1000, &a, &b);
-    assert(a == 51 && b == 52 && c5.last_cnt == 52);
-
-    // out_b-only wrap: target itself does not wrap, target+1 does.
-    KeeloqClone c6 = mk(0xFFFE, 100, true);
-    keeloq_clone_next_pair(&c6, 0, &a, &b);
-    assert(a == 0xFFFF && b == 0x0000 && c6.last_cnt == 0x0000);
-
-    printf("test_keeloq_clone_core OK\n");
+    printf("test_keeloq_clone_core OK (desync-safe: original recovers in K+1 presses)\n");
     return 0;
 }

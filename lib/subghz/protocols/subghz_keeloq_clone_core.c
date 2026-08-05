@@ -1,16 +1,12 @@
 #include "subghz_keeloq_clone_core.h"
 
-void keeloq_clone_next_pair(KeeloqClone* c, uint16_t seen_cnt, uint16_t* out_a, uint16_t* out_b) {
-    uint16_t target;
+uint16_t keeloq_clone_next(KeeloqClone* c, uint16_t seen_cnt) {
     if(!c->synced) {
         uint16_t base = c->last_cnt;
-        if(seen_cnt > base) base = seen_cnt; // one-time catch-up before the jump lead
-        target = (uint16_t)(base + c->jump);
+        if(seen_cnt > base) base = seen_cnt;      // catch up to a freshly-observed live counter
+        c->last_cnt = (uint16_t)(base + c->jump); // one-time forward margin (default 0 = no lead)
         c->synced = true;
-    } else {
-        target = (uint16_t)(c->last_cnt + 1); // +2 pair advance; seen_cnt ignored once synced
     }
-    *out_a = target;
-    *out_b = (uint16_t)(target + 1);
-    c->last_cnt = *out_b;
+    c->last_cnt = (uint16_t)(c->last_cnt + 1);    // +1 per press — exactly a real fob's step
+    return c->last_cnt;
 }

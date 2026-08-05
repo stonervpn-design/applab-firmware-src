@@ -12,7 +12,9 @@ void subghz_scene_set_jump_byte_input_callback(void* context) {
 
 void subghz_scene_set_jump_on_enter(void* context) {
     SubGhz* subghz = context;
-    if(subghz->keeloq_clone_jump == 0) subghz->keeloq_clone_jump = 100; // default lead
+    // Desync-safe default: no lead (0). Dial in a lead here only if you want the clone to
+    // tolerate the real fob having been used since capture — it costs the original a few
+    // catch-up presses. 0 = the original never gets stranded.
     subghz->keeloq_clone_jump = __bswap16(subghz->keeloq_clone_jump); // show big-endian
 
     ByteInput* byte_input = subghz->byte_input;

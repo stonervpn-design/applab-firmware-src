@@ -26,7 +26,11 @@ static void subghz_scene_keeloq_fob_refresh_cnt(SubGhz* subghz) {
 
 void subghz_scene_keeloq_fob_on_enter(void* context) {
     SubGhz* subghz = context;
-    if(subghz->keeloq_clone_jump == 0) subghz->keeloq_clone_jump = 100;
+    // Desync-safe default: NO forward lead (jump stays 0). A clone advances the shared
+    // rolling counter by +1 like the real fob, so the original never gets stranded — its
+    // worst-case catch-up is only as many presses as the clone was used. (Was 100; that
+    // +100 leap is exactly what desynced the original fob. The SetJump scene can still
+    // opt into a small lead for reliability at the cost of a few original catch-up presses.)
 
     // Detect the loaded frame's protocol, but ONLY on a from_garage entry. VAG is
     // always reached via Save->Garage. A fresh KeeLoq clone flow (keeloq_clone_flow,
@@ -62,9 +66,10 @@ void subghz_scene_keeloq_fob_on_enter(void* context) {
         if(rb & 0x70) rb >>= 4;
         rb &= 0x07;
 
-        // Jump ahead of the real fob (forward window), then +1 per press this
-        // session. KeyIdx/Type stay in fff; the encoder re-encrypts from Cnt/Btn.
-        uint16_t vjump = subghz->keeloq_clone_jump ? subghz->keeloq_clone_jump : 100;
+        // Desync-safe: no forward lead by default (vjump 0) — start at the captured
+        // counter and let the encoder advance +1 per press, so the original recovers in
+        // 1-2 presses. KeyIdx/Type stay in fff; the encoder re-encrypts from Cnt/Btn.
+        uint16_t vjump = subghz->keeloq_clone_jump; // 0 = no lead
         uint32_t cnt_start = cnt_file + vjump;
         flipper_format_update_uint32(fff, "Cnt", &cnt_start, 1);
 

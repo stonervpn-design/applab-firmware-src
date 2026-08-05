@@ -355,6 +355,8 @@ static bool subghz_protocol_keeloq_gen_data(
             hop = instance->generic.cnt << 16 | (btn & 0xF) << 12 | 0x000;
         } else {
             // Protocols that use encryption
+            // Note: btn is uint8_t; cast to (uint32_t) before "<< 28" so the shift runs in
+            // unsigned space (btn>=8 would otherwise set bit 31 -> signed left-shift UB).
             uint32_t decrypt = (uint32_t)btn << 28 |
                                (instance->generic.serial & 0x3FF)
                                    << 16 | //ToDo in some protocols the discriminator is 0
@@ -373,10 +375,11 @@ static bool subghz_protocol_keeloq_gen_data(
                 if(apr1 % 2 == 0) {
                     apri_serial |= 0b110000000000;
                 }
-                decrypt = btn << 28 | (apri_serial & 0xFFF) << 16 | instance->generic.cnt;
+                decrypt = (uint32_t)btn << 28 | (apri_serial & 0xFFF) << 16 | instance->generic.cnt;
             } else if(
                 (strcmp(instance->manufacture_name, "DTM_Neo") == 0) ||
                 (strcmp(instance->manufacture_name, "FAAC_RC,XT") == 0) ||
+                (strcmp(instance->manufacture_name, "Clemsa_Mutancode") == 0) ||
                 (strcmp(instance->manufacture_name, "Mutanco_Mutancode") == 0) ||
                 (strcmp(instance->manufacture_name, "Came_Space") == 0) ||
                 (strcmp(instance->manufacture_name, "Genius_Bravo") == 0) ||
@@ -386,40 +389,50 @@ static bool subghz_protocol_keeloq_gen_data(
                 (strcmp(instance->manufacture_name, "Pecinin") == 0) ||
                 (strcmp(instance->manufacture_name, "Steelmate") == 0) ||
                 (strcmp(instance->manufacture_name, "Cardin_S449") == 0) ||
-                (strcmp(instance->manufacture_name, "Stilmatic") == 0)) {
+                (strcmp(instance->manufacture_name, "Stilmatic") == 0) ||
+                (strcmp(instance->manufacture_name, "Wisniowski") == 0) ||
+                (strcmp(instance->manufacture_name, "ATA_PTX4") == 0) ||
+                (strcmp(instance->manufacture_name, "Fadini") == 0) ||
+                (strcmp(instance->manufacture_name, "Seav") == 0)) {
                 // DTM Neo, Came_Space uses 12bit serial -> simple learning
+                // Wisniowski/ATA_PTX4/Seav -> 12bit normal; Fadini -> 12bit simple (upstream parity)
+                // Clemsa_Mutancode alias added alongside Mutanco_Mutancode
                 // FAAC_RC,XT , Mutanco_Mutancode, Genius_Bravo, GSN 12bit serial -> normal learning
                 // Rosh, Rossi, Pecinin -> 12bit serial - simple learning
                 // Steelmate -> 12bit serial - normal learning
                 // Cardin_S449 -> 12bit serial - normal learning
                 // Stilmatic (r-tech) -> 12bit serial - normal learning
-                decrypt = btn << 28 | (instance->generic.serial & 0xFFF) << 16 |
+                decrypt = (uint32_t)btn << 28 | (instance->generic.serial & 0xFFF) << 16 |
                           instance->generic.cnt;
             } else if(
                 (strcmp(instance->manufacture_name, "NICE_Smilo") == 0) ||
                 (strcmp(instance->manufacture_name, "NICE_MHOUSE") == 0) ||
-                (strcmp(instance->manufacture_name, "JCM_Tech") == 0)) {
+                (strcmp(instance->manufacture_name, "JCM_Tech") == 0) ||
+                (strcmp(instance->manufacture_name, "Pujol_Vario") == 0) ||
+                (strcmp(instance->manufacture_name, "Pujol") == 0) ||
+                (strcmp(instance->manufacture_name, "Erreka") == 0)) {
                 // Nice Smilo, MHouse, JCM -> 8bit serial - simple learning
-                decrypt = btn << 28 | (instance->generic.serial & 0xFF) << 16 |
+                // Pujol_Vario -> 8bit simple; Pujol -> 8bit special; Erreka -> 8bit secure+seed (upstream parity)
+                decrypt = (uint32_t)btn << 28 | (instance->generic.serial & 0xFF) << 16 |
                           instance->generic.cnt;
             } else if(
                 (strcmp(instance->manufacture_name, "Beninca") == 0) ||
                 (strcmp(instance->manufacture_name, "Merlin") == 0)) {
-                decrypt = btn << 28 | (0x000) << 16 | instance->generic.cnt;
+                decrypt = (uint32_t)btn << 28 | (0x000) << 16 | instance->generic.cnt;
                 // Beninca / Allmatic -> no serial - simple XOR
                 // Merlin -> no serial - simple XOR
             } else if(strcmp(instance->manufacture_name, "Centurion") == 0) {
-                decrypt = btn << 28 | (0x1CE) << 16 | instance->generic.cnt;
+                decrypt = (uint32_t)btn << 28 | (0x1CE) << 16 | instance->generic.cnt;
                 // Centurion -> no serial in hop, uses fixed value 0x1CE - normal learning
             } else if(strcmp(instance->manufacture_name, "Monarch") == 0) {
-                decrypt = btn << 28 | (0x100) << 16 | instance->generic.cnt;
+                decrypt = (uint32_t)btn << 28 | (0x100) << 16 | instance->generic.cnt;
                 // Monarch -> no serial in hop, uses fixed value 0x100 - normal learning
             } else if(strcmp(instance->manufacture_name, "Dea_Mio") == 0) {
                 uint8_t first_disc_num = (instance->generic.serial >> 8) & 0xF;
                 uint8_t result_disc = (0xC + (first_disc_num % 4));
                 uint32_t dea_serial = (instance->generic.serial & 0xFF) |
                                       (((uint32_t)result_disc) << 8);
-                decrypt = btn << 28 | (dea_serial & 0xFFF) << 16 | instance->generic.cnt;
+                decrypt = (uint32_t)btn << 28 | (dea_serial & 0xFFF) << 16 | instance->generic.cnt;
                 // Dea_Mio -> modified serial in hop, uses last 3 digits modifying first one (example - 419 -> C19)
                 // (see formula in result_disc var) - simple learning
             }
@@ -492,7 +505,7 @@ static bool subghz_protocol_keeloq_gen_data(
                             break;
                         case KEELOQ_LEARNING_SIMPLE_JCM:
                             //Simple Learning 8 bit serial
-                            decrypt = btn << 28 | (instance->generic.serial & 0xFF) << 16 |
+                            decrypt = (uint32_t)btn << 28 | (instance->generic.serial & 0xFF) << 16 |
                                       instance->generic.cnt;
                             hop = subghz_protocol_keeloq_common_encrypt(
                                 decrypt, manufacture_code->key);
@@ -619,6 +632,22 @@ bool subghz_protocol_keeloq_bft_create_data(
     return false;
 }
 
+// Upstream/external-API compatibility alias: the canonical upstream symbol is
+// subghz_protocol_keeloq_seed_create_data; this port renamed the implementation to
+// subghz_protocol_keeloq_bft_create_data. Forward to it so both names resolve identically.
+bool subghz_protocol_keeloq_seed_create_data(
+    void* context,
+    FlipperFormat* flipper_format,
+    uint32_t serial,
+    uint8_t btn,
+    uint16_t cnt,
+    uint32_t seed,
+    const char* manufacture_name,
+    SubGhzRadioPreset* preset) {
+    return subghz_protocol_keeloq_bft_create_data(
+        context, flipper_format, serial, btn, cnt, seed, manufacture_name, preset);
+}
+
 static size_t subghz_protocol_encoder_keeloq_encode_to_timings(
     SubGhzProtocolEncoderKeeloq* instance,
     uint8_t btn,
@@ -693,17 +722,15 @@ static bool
        subghz_block_generic_global.btn_need_override)
         bypass = true;
 
-    // No-desync clone: emit the forward pair [a, b] back-to-back in one upload.
-    // counter_up=false so gen_data uses generic.cnt verbatim (no drift).
+    // Desync-safe clone: emit a SINGLE frame at the next counter (+1), exactly like a
+    // genuine spare fob — never leaps the shared counter, so the original fob always
+    // recovers (worst-case catch-up = how many times the clone was used, not a fixed
+    // jump). counter_up=false so gen_data uses generic.cnt verbatim (no drift).
     if(instance->clone_active) {
-        uint16_t a = 0, b = 0;
-        keeloq_clone_next_pair(&instance->clone, (uint16_t)instance->generic.cnt, &a, &b);
+        uint16_t n = keeloq_clone_next(&instance->clone, (uint16_t)instance->generic.cnt);
 
-        instance->encoder.repeat = 2;
-        instance->generic.cnt = a;
-        upindex = subghz_protocol_encoder_keeloq_encode_to_timings(
-            instance, instance->clone.btn, false, upindex);
-        instance->generic.cnt = b;
+        instance->encoder.repeat = 3; // short burst at ONE counter, real-fob-like
+        instance->generic.cnt = n;
         upindex = subghz_protocol_encoder_keeloq_encode_to_timings(
             instance, instance->clone.btn, false, upindex);
         instance->encoder.size_upload = upindex;
@@ -726,7 +753,7 @@ static bool
                     instance, btn, false, upindex);
                 continue;
             } else if(i == 1) {
-                instance->generic.cnt = temp_cnt + 1;
+                instance->generic.cnt = (uint16_t)(temp_cnt + 1); // wrap at 0xFFFF so +1 doesn't bleed into the discriminator
                 upindex = subghz_protocol_encoder_keeloq_encode_to_timings(
                     instance, btn, false, upindex);
                 continue;
@@ -840,8 +867,11 @@ SubGhzProtocolStatus
             if(flipper_format_read_uint32(flipper_format, "LearnType", &v, 1))
                 instance->clone.learn_type = (uint8_t)v;
             flipper_format_rewind(flipper_format);
-            if(flipper_format_read_uint32(flipper_format, "CloneJump", &v, 1))
-                instance->clone.jump = (uint16_t)v;
+            // Desync-safe: force NO forward lead on EVERY loaded clone, including legacy
+            // saves that stored CloneJump=100. Any leap would strand the original fob, so
+            // a re-opened clone always advances the shared counter by +1 like a real fob.
+            (void)flipper_format_read_uint32(flipper_format, "CloneJump", &v, 1);
+            instance->clone.jump = 0;
             flipper_format_rewind(flipper_format);
             if(flipper_format_read_uint32(flipper_format, "CloneSynced", &v, 1))
                 instance->clone.synced = (v != 0);
@@ -1832,8 +1862,10 @@ void subghz_protocol_decoder_keeloq_get_string(void* context, FuriString* output
             code_found_reverse_lo,
             instance->generic.btn,
             instance->manufacture_name);
-    } else if(strcmp(instance->manufacture_name, "BFT") == 0) {
-        // Allow counter edit
+    } else if(
+        (strcmp(instance->manufacture_name, "BFT") == 0) ||
+        (strcmp(instance->manufacture_name, "Erreka") == 0)) {
+        // Allow counter edit (Erreka shares BFT's seed display, matching upstream)
         subghz_block_generic_global.cnt_is_available = true;
         subghz_block_generic_global.cnt_length_bit = 16;
         subghz_block_generic_global.current_cnt = instance->generic.cnt;
