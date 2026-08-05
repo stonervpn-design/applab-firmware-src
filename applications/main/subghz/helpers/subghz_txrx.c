@@ -6,10 +6,19 @@
 #include <lib/subghz/blocks/custom_btn.h>
 #include <storage/storage.h>
 #include <string.h>
+#ifndef PUBLIC_BUILD
 #include "subghz_keeloq_default_keys.h"
+#endif
 
 #define TAG "SubGhzTxRx"
 
+/* PRIVATE-ONLY: all firmware-embedded car key material — the KeeLoq manufacturer
+ * keystore (keeloq_mfcodes_user), the VAG AUT64 keystore, and the VAG test captures —
+ * plus the functions that provision them to /ext, are compiled out of public builds.
+ * PUBLIC_BUILD (root CMakeLists, FLIPPER_VARIANT=public) must strip this so the keys
+ * never ship in a public webflasher bin. (Regression fixed 2026-08-05 after they had
+ * leaked into the public bins; the guard previously covered only the car DECODERS.) */
+#ifndef PUBLIC_BUILD
 /* Provision the firmware-embedded default keeloq_mfcodes_user (needed on SD-less
  * boards; also brings older devices up to the current key set). Version-gated: a
  * single-char marker file records which embedded set was last written. We (re)write
@@ -127,6 +136,7 @@ static void subghz_txrx_provision_test_subs(void) {
     }
     furi_record_close(RECORD_STORAGE);
 }
+#endif /* !PUBLIC_BUILD — car keystore provisioning is private-only */
 
 static void subghz_txrx_radio_device_power_on(SubGhzTxRx* instance) {
     UNUSED(instance);
@@ -164,8 +174,10 @@ SubGhzTxRx* subghz_txrx_alloc(void) {
     instance->fff_data = flipper_format_string_alloc();
 
     instance->environment = subghz_environment_alloc();
+#ifndef PUBLIC_BUILD
     subghz_txrx_provision_default_keeloq_keys(); /* ensure keys exist on SD-less boards */
     subghz_txrx_provision_test_subs(); /* VAG test captures for replay/decode testing */
+#endif
     user_keystore_loaded =
         subghz_environment_load_keystore(instance->environment, SUBGHZ_KEYSTORE_DIR_USER_NAME);
     if(!user_keystore_loaded) {
@@ -200,9 +212,8 @@ void subghz_txrx_set_car_mode(SubGhzTxRx* instance, uint8_t mode) {
     furi_check(instance);
     if(subghz_protocol_registry_car_mode() == mode) return;
     subghz_protocol_registry_set_car_mode(mode);
-    // Rebuild the receiver from the newly selected registry so the RESIDENT decoder
-    // set swaps wholesale (general / Cars 1 / Cars 2, never combined — the no-PSRAM
-    // board can't hold them together). Caller must have RX stopped.
+    // Rebuild the receiver from the newly selected registry (general vs the single
+    // merged automotive set). Caller must have RX stopped.
     subghz_environment_set_protocol_registry(
         instance->environment, (void*)subghz_protocol_registry_active());
     subghz_receiver_free(instance->receiver);

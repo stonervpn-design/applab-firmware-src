@@ -33,6 +33,9 @@ if errorlevel 1 (>> "%LOG%" echo SENTINEL_BUILD_FAIL & goto :done)
 python -m esptool --chip esp32s3 merge_bin -o "Flipper-m5stick_s3-public-merged.bin" --flash_mode dio --flash_size 8MB --flash_freq 80m 0x0 "build_m5stick_s3_public\bootloader\bootloader.bin" 0x8000 "build_m5stick_s3_public\partition_table\partition-table.bin" 0x10000 "build_m5stick_s3_public\furi_esp32.bin" >> "%LOG%" 2>&1
 if errorlevel 1 (>> "%LOG%" echo SENTINEL_MERGE_FAIL & goto :done)
 
+>> "%LOG%" echo SENTINEL_VERIFY_NOCAR
+python "%~dp0tools\verify_public_no_car.py" "%~dp0Flipper-m5stick_s3-public-merged.bin" >> "%LOG%" 2>&1
+if errorlevel 1 (>> "%LOG%" echo SENTINEL_CARKEY_LEAK & del /f /q "%~dp0Flipper-m5stick_s3-public-merged.bin" >> "%LOG%" 2>&1 & goto :done)
 >> "%LOG%" echo SENTINEL_OK
 :done
 endlocal
