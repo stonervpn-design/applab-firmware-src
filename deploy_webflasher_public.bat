@@ -31,7 +31,14 @@ if errorlevel 1 (echo   FAILED: ext/merge did not reach SENTINEL_OK. See build_e
 echo [5/5] Verifying MERGED bin + staging to webflash\...
 python "%DIR%tools\verify_partition_table.py" "%DIR%Flipper-m5stick_s3-public-merged.bin"
 if errorlevel 1 (echo   Merged bin missing 'storage' - NOT staged. & goto :fail)
+echo [verify] car-key guard (private-only): bin must be car-free...
+python "%DIR%tools\verify_public_no_car.py" "%DIR%Flipper-m5stick_s3-public-merged.bin"
+if errorlevel 1 (echo   ABORT: car key material found in bin - NOT staged. & goto :fail)
 copy /Y "%DIR%Flipper-m5stick_s3-public-merged.bin" "%DIR%webflash\Flipper-m5stick_s3-public-merged.bin" >nul
+
+echo [changelog] posting public-build changelog to webhook (best-effort)...
+python "%DIR%tools\public_changelog.py" --board m5stick
+if errorlevel 1 echo   (changelog webhook post failed - deploy still OK)
 
 echo.
 echo SUCCESS: webflash\Flipper-m5stick_s3-public-merged.bin staged and verified (storage present).
