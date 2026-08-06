@@ -31,6 +31,7 @@
  */
 
 #include "hitag2.h"
+#include "hitag2_cipher.h"
 
 #include "../blocks/const.h"
 #include "../blocks/decoder.h"
@@ -572,6 +573,32 @@ SubGhzProtocolStatus
         uint32_t ks = 0;
         flipper_format_read_uint32(flipper_format, "Ks", &ks, 1);
         instance->generic.cnt = ks;
+
+        // FORGE (known-key emulation): if the .sub carries a 48-bit "Hitag2Key" + a full
+        // 28-bit "Counter", generate the keystream a genuine fob would transmit for that
+        // counter and patch it in (lctr = counter's low 10 bits, Ks = computed by the
+        // cipher), instead of replaying the captured Ks. The key comes from offline
+        // recovery / the shared LF immobilizer side, and Counter from hitag2_recover_counter
+        // (which also proves the key). Field is "Hitag2Key" — NOT "Key", which the generic
+        // serialize already uses for the 64-bit frame data. No key field -> faithful replay.
+        static int ht2_cipher_ok = -1;
+        if(ht2_cipher_ok < 0) ht2_cipher_ok = hitag2_selftest() ? 1 : 0; // refuse forge if broken
+        uint8_t key_bytes[6] = {0};
+        flipper_format_rewind(flipper_format);
+        if(ht2_cipher_ok &&
+           flipper_format_read_hex(flipper_format, "Hitag2Key", key_bytes, sizeof(key_bytes))) {
+            uint64_t key = 0;
+            for(size_t i = 0; i < sizeof(key_bytes); i++) key = (key << 8) | key_bytes[i];
+            uint32_t counter = 0;
+            flipper_format_rewind(flipper_format);
+            flipper_format_read_uint32(flipper_format, "Counter", &counter, 1);
+            uint32_t uid = (uint32_t)(instance->generic.data >> 32);
+            uint8_t btn = (uint8_t)((instance->generic.data >> 28) & 0x0F);
+            instance->generic.cnt = hitag2_rke_ks(key, uid, counter, btn); // forged Ks
+            uint16_t lctr = (uint16_t)(counter & 0x03FFu);
+            instance->generic.data =
+                (instance->generic.data & ~((uint64_t)0x03FFu << 18)) | ((uint64_t)lctr << 18);
+        }
 
         instance->generic.protocol_name = instance->base.protocol->name;
         subghz_protocol_encoder_hitag2_get_upload(instance);
