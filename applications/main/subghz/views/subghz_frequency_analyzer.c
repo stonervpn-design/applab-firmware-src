@@ -8,6 +8,7 @@
 
 #include <assets_icons.h>
 #include <float_tools.h>
+#include <string.h>
 
 #define TAG "frequency_analyzer"
 
@@ -48,6 +49,8 @@ typedef struct {
     bool signal;
     SignalMod mod;
     uint8_t mod_confidence;
+    char id[24];
+    uint8_t id_score;
     float rssi_last;
     float trigger;
     SubGHzFrequencyAnalyzerFeedbackLevel feedback_level;
@@ -196,6 +199,7 @@ void subghz_frequency_analyzer_draw(Canvas* canvas, SubGhzFrequencyAnalyzerModel
     canvas_set_color(canvas, ColorBlack);
     canvas_set_font(canvas, FontSecondary);
 
+#ifndef PUBLIC_BUILD
     // Modulation (OOK/FSK) auto-detected on lock; "?" when low-confidence.
     if(model->signal && model->mod != SIG_MOD_UNK) {
         bool sure = model->mod_confidence >= SMD_CONF_SHOW;
@@ -205,6 +209,14 @@ void subghz_frequency_analyzer_draw(Canvas* canvas, SubGhzFrequencyAnalyzerModel
             7,
             model->mod == SIG_MOD_AM ? (sure ? "OOK" : "OOK?") : (sure ? "FSK" : "FSK?"));
     }
+
+    // Raw-signal identification; empty when nothing matched.
+    if(model->id[0] != '\0') {
+        char id_line[32];
+        snprintf(id_line, sizeof(id_line), "ID:%s", model->id);
+        canvas_draw_str(canvas, 2, 40, id_line);
+    }
+#endif
 
     const uint8_t icon_x = 119;
     switch(model->feedback_level) {
@@ -359,6 +371,8 @@ void subghz_frequency_analyzer_pair_callback(
     SignalMod mod,
     uint8_t confidence) {
     SubGhzFrequencyAnalyzer* instance = (SubGhzFrequencyAnalyzer*)context;
+    char fa_id[24] = {0};
+    uint8_t fa_id_score = 0;
     if(float_is_equal(rssi, 0.f) && instance->locked) {
         if(instance->callback) {
             instance->callback(SubGhzCustomEventSceneAnalyzerUnlock, instance->context);
@@ -441,6 +455,9 @@ void subghz_frequency_analyzer_pair_callback(
         instance->rssi_last = rssi;
     }
 
+#ifndef PUBLIC_BUILD
+    subghz_frequency_analyzer_worker_get_id(instance->worker, fa_id, sizeof(fa_id), &fa_id_score);
+#endif
     instance->locked = !float_is_equal(rssi, 0.f);
     with_view_model(
         instance->view,
@@ -452,6 +469,9 @@ void subghz_frequency_analyzer_pair_callback(
             model->signal = signal;
             model->mod = mod;
             model->mod_confidence = confidence;
+            strncpy(model->id, fa_id, sizeof(model->id) - 1);
+            model->id[sizeof(model->id) - 1] = '\0';
+            model->id_score = fa_id_score;
             model->trigger = subghz_frequency_analyzer_worker_get_trigger_level(instance->worker);
             model->feedback_level = instance->feedback_level;
             model->max_index = instance->max_index;

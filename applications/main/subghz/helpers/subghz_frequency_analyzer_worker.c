@@ -1,11 +1,13 @@
 #include "subghz_frequency_analyzer_worker.h"
 #include "subghz_mod_detect.h"
+#include "subghz_sig_identify.h"
 #include <lib/drivers/cc1101.h>
 #include <furi_hal_subghz.h>
 
 #include <furi.h>
 #include <math.h>
 #include <float_tools.h>
+#include <string.h>
 
 /** Set RF band switch for the given frequency (needed on boards with external RF switch) */
 static void subghz_fa_worker_set_path_for_frequency(uint32_t freq) {
@@ -49,6 +51,11 @@ struct SubGhzFrequencyAnalyzerWorker {
 
     SubGhzFrequencyAnalyzerWorkerPairCallback pair_callback;
     void* context;
+
+    // Raw-signal identify result (PRIVATE builds only; empty/0 otherwise).
+    char id_buf[24];
+    uint8_t id_score;
+    bool id_captured; // identify already attempted for this lock session
 };
 
 static void subghz_frequency_analyzer_worker_load_registers(const uint8_t data[][2]) {
@@ -226,16 +233,39 @@ static int32_t subghz_frequency_analyzer_worker_thread(void* context) {
                     subghz_frequency_analyzer_worker_expRunningAverageAdaptive(
                         instance, frequency_rssi.frequency_fine);
             }
-            // Detect modulation (OOK/FSK) on this locked frequency, then deliver.
-            if(instance->pair_callback) {
+            // Detect modulation (OOK/FSK) + identify the signal, then deliver.
+            // PRIVATE builds only: in public these run nothing (mod stays UNK) and
+            // the detect/identify functions are unreferenced -> dropped by gc-sections.
+            SignalMod fa_mod = SIG_MOD_UNK;
+            uint8_t fa_conf = 0;
+#ifndef PUBLIC_BUILD
+            {
                 SubGhzModDetect md = subghz_mod_detect_run(frequency_rssi.frequency_fine);
+                fa_mod = md.mod;
+                fa_conf = md.confidence;
+                // Identify once per lock session (heavier ~120 ms edge capture).
+                if(!instance->id_captured && fa_mod != SIG_MOD_UNK) {
+                    instance->id_captured = true; // attempt once, hit or miss
+                    if(!subghz_sig_identify_run(
+                           frequency_rssi.frequency_fine,
+                           fa_mod,
+                           instance->id_buf,
+                           sizeof(instance->id_buf),
+                           &instance->id_score)) {
+                        instance->id_buf[0] = '\0';
+                        instance->id_score = 0;
+                    }
+                }
+            }
+#endif
+            if(instance->pair_callback) {
                 instance->pair_callback(
                     instance->context,
                     frequency_rssi.frequency_fine,
                     frequency_rssi.rssi_fine,
                     true,
-                    md.mod,
-                    md.confidence);
+                    fa_mod,
+                    fa_conf);
             }
         } else if( // Deliver results coarse
             (frequency_rssi.rssi_coarse > instance->trigger_level) &&
@@ -275,6 +305,9 @@ static int32_t subghz_frequency_analyzer_worker_thread(void* context) {
                 }
             } else {
                 instance->filVal = 0;
+                instance->id_captured = false; // ready to identify the next signal
+                instance->id_buf[0] = '\0';
+                instance->id_score = 0;
                 if(instance->pair_callback)
                     instance->pair_callback(instance->context, 0, 0, false, SIG_MOD_UNK, 0);
             }
@@ -296,6 +329,9 @@ SubGhzFrequencyAnalyzerWorker* subghz_frequency_analyzer_worker_alloc(void* cont
     // sample_hold_counter are read before being written on the worker path.
     instance->filVal = 0.0f;
     instance->sample_hold_counter = 0;
+    instance->id_captured = false;
+    instance->id_buf[0] = '\0';
+    instance->id_score = 0;
 
     instance->thread = furi_thread_alloc_ex(
         "SubGhzFAWorker", 4096, subghz_frequency_analyzer_worker_thread, instance);
@@ -354,6 +390,20 @@ void subghz_frequency_analyzer_worker_set_trigger_level(
 
 float subghz_frequency_analyzer_worker_get_trigger_level(SubGhzFrequencyAnalyzerWorker* instance) {
     return instance->trigger_level;
+}
+
+bool subghz_frequency_analyzer_worker_get_id(
+    SubGhzFrequencyAnalyzerWorker* instance,
+    char* out,
+    size_t cap,
+    uint8_t* score) {
+    furi_assert(instance);
+    if(out && cap) {
+        strncpy(out, instance->id_buf, cap - 1);
+        out[cap - 1] = '\0';
+    }
+    if(score) *score = instance->id_score;
+    return instance->id_buf[0] != '\0';
 }
 
 uint32_t subghz_frequency_analyzer_get_nearest_frequency(

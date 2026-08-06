@@ -73,6 +73,15 @@ void subghz_frequency_analyzer_worker_set_trigger_level(
     SubGhzFrequencyAnalyzerWorker* instance,
     float value);
 
+// Latest raw-signal identify label for the locked signal (PRIVATE builds; empty
+// otherwise). Writes the label to out (<= cap) + 0..100 score to *score. Returns
+// true when a label is present.
+bool subghz_frequency_analyzer_worker_get_id(
+    SubGhzFrequencyAnalyzerWorker* instance,
+    char* out,
+    size_t cap,
+    uint8_t* score);
+
 /** Get RSSI trigger level
  * 
  * @param instance SubGhzFrequencyAnalyzerWorker instance

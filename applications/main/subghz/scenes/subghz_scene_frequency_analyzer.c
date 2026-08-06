@@ -22,8 +22,10 @@ void subghz_scene_frequency_analyzer_callback(SubGhzCustomEvent event, void* con
     view_dispatcher_send_custom_event(subghz->view_dispatcher, event);
 }
 
+#ifndef PUBLIC_BUILD
 // Auto-select the demodulator preset matching the analyzer's detected modulation,
 // so the Receiver opens in the right mode. No-op on low confidence / unknown.
+// PRIVATE builds only (the analyzer never detects a modulation in public).
 static void subghz_fa_apply_preset_for_mod(SubGhz* subghz) {
     uint8_t conf = 0;
     SignalMod mod = subghz_frequency_analyzer_get_mod(subghz->subghz_frequency_analyzer, &conf);
@@ -38,6 +40,7 @@ static void subghz_fa_apply_preset_for_mod(SubGhz* subghz) {
         }
     }
 }
+#endif
 
 void subghz_scene_frequency_analyzer_on_enter(void* context) {
     SubGhz* subghz = context;
@@ -88,8 +91,10 @@ bool subghz_scene_frequency_analyzer_on_event(void* context, SceneManagerEvent e
 
             return true;
         } else if(event.event == SubGhzCustomEventViewFreqAnalOkLong) {
+#ifndef PUBLIC_BUILD
             // Auto-select the demodulator preset matching the detected modulation.
             subghz_fa_apply_preset_for_mod(subghz);
+#endif
             // Don't need to save, we already saved on short event (and on exit event too)
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);
             scene_manager_previous_scene(subghz->scene_manager); // Stops the worker
