@@ -1,7 +1,9 @@
 #include "../subghz_i.h" // IWYU pragma: keep
 #include "../views/subghz_frequency_analyzer.h"
+#include <string.h>
 
 #define TAG "SubGhzSceneFrequencyAnalyzer"
+#define SMD_CONF_AUTOSELECT 50 // below this confidence, keep the user's preset
 
 static const NotificationSequence sequence_saved = {
     &message_blink_stop,
@@ -18,6 +20,23 @@ void subghz_scene_frequency_analyzer_callback(SubGhzCustomEvent event, void* con
     furi_assert(context);
     SubGhz* subghz = context;
     view_dispatcher_send_custom_event(subghz->view_dispatcher, event);
+}
+
+// Auto-select the demodulator preset matching the analyzer's detected modulation,
+// so the Receiver opens in the right mode. No-op on low confidence / unknown.
+static void subghz_fa_apply_preset_for_mod(SubGhz* subghz) {
+    uint8_t conf = 0;
+    SignalMod mod = subghz_frequency_analyzer_get_mod(subghz->subghz_frequency_analyzer, &conf);
+    if(mod == SIG_MOD_UNK || conf < SMD_CONF_AUTOSELECT) return;
+    const char* want = (mod == SIG_MOD_AM) ? "AM650" : "FM476";
+    SubGhzSetting* setting = subghz_txrx_get_setting(subghz->txrx);
+    for(size_t i = 0; i < subghz_setting_get_preset_count(setting); i++) {
+        if(!strcmp(subghz_setting_get_preset_name(setting, i), want)) {
+            subghz->last_settings->preset_index = i;
+            subghz_last_settings_save(subghz->last_settings);
+            break;
+        }
+    }
 }
 
 void subghz_scene_frequency_analyzer_on_enter(void* context) {
@@ -69,6 +88,8 @@ bool subghz_scene_frequency_analyzer_on_event(void* context, SceneManagerEvent e
 
             return true;
         } else if(event.event == SubGhzCustomEventViewFreqAnalOkLong) {
+            // Auto-select the demodulator preset matching the detected modulation.
+            subghz_fa_apply_preset_for_mod(subghz);
             // Don't need to save, we already saved on short event (and on exit event too)
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);
             scene_manager_previous_scene(subghz->scene_manager); // Stops the worker
