@@ -46,6 +46,8 @@ typedef struct {
     uint32_t history_frequency[MAX_HISTORY];
     uint8_t history_frequency_rx_count[MAX_HISTORY];
     bool signal;
+    SignalMod mod;
+    uint8_t mod_confidence;
     float rssi_last;
     float trigger;
     SubGHzFrequencyAnalyzerFeedbackLevel feedback_level;
@@ -153,6 +155,8 @@ static void subghz_frequency_analyzer_history_frequency_draw(
     }
 }
 
+#define SMD_CONF_SHOW 40 // below this confidence, show "OOK?"/"FSK?"
+
 void subghz_frequency_analyzer_draw(Canvas* canvas, SubGhzFrequencyAnalyzerModel* model) {
     char buffer[64] = {0};
 
@@ -191,6 +195,17 @@ void subghz_frequency_analyzer_draw(Canvas* canvas, SubGhzFrequencyAnalyzerModel
 
     canvas_set_color(canvas, ColorBlack);
     canvas_set_font(canvas, FontSecondary);
+
+    // Modulation (OOK/FSK) auto-detected on lock; "?" when low-confidence.
+    if(model->signal && model->mod != SIG_MOD_UNK) {
+        bool sure = model->mod_confidence >= SMD_CONF_SHOW;
+        canvas_draw_str(
+            canvas,
+            0,
+            7,
+            model->mod == SIG_MOD_AM ? (sure ? "OOK" : "OOK?") : (sure ? "FSK" : "FSK?"));
+    }
+
     const uint8_t icon_x = 119;
     switch(model->feedback_level) {
     case SubGHzFrequencyAnalyzerFeedbackLevelAll:
@@ -340,7 +355,9 @@ void subghz_frequency_analyzer_pair_callback(
     void* context,
     uint32_t frequency,
     float rssi,
-    bool signal) {
+    bool signal,
+    SignalMod mod,
+    uint8_t confidence) {
     SubGhzFrequencyAnalyzer* instance = (SubGhzFrequencyAnalyzer*)context;
     if(float_is_equal(rssi, 0.f) && instance->locked) {
         if(instance->callback) {
@@ -433,6 +450,8 @@ void subghz_frequency_analyzer_pair_callback(
             model->rssi_last = instance->rssi_last;
             model->frequency = frequency;
             model->signal = signal;
+            model->mod = mod;
+            model->mod_confidence = confidence;
             model->trigger = subghz_frequency_analyzer_worker_get_trigger_level(instance->worker);
             model->feedback_level = instance->feedback_level;
             model->max_index = instance->max_index;
@@ -531,6 +550,22 @@ void subghz_frequency_analyzer_free(SubGhzFrequencyAnalyzer* instance) {
 View* subghz_frequency_analyzer_get_view(SubGhzFrequencyAnalyzer* instance) {
     furi_assert(instance);
     return instance->view;
+}
+
+SignalMod subghz_frequency_analyzer_get_mod(SubGhzFrequencyAnalyzer* instance, uint8_t* confidence) {
+    furi_assert(instance);
+    SignalMod mod = SIG_MOD_UNK;
+    uint8_t conf = 0;
+    with_view_model(
+        instance->view,
+        SubGhzFrequencyAnalyzerModel * model,
+        {
+            mod = model->mod;
+            conf = model->mod_confidence;
+        },
+        false);
+    if(confidence) *confidence = conf;
+    return mod;
 }
 
 uint32_t subghz_frequency_analyzer_get_frequency_to_save(SubGhzFrequencyAnalyzer* instance) {

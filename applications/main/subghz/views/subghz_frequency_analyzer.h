@@ -3,6 +3,7 @@
 #include <gui/view.h>
 #include "../helpers/subghz_custom_event.h"
 #include "../helpers/subghz_txrx.h"
+#include "../helpers/signal_fingerprint.h" // SignalMod
 
 typedef enum {
     SubGHzFrequencyAnalyzerFeedbackLevelAll,
@@ -33,3 +34,7 @@ SubGHzFrequencyAnalyzerFeedbackLevel subghz_frequency_analyzer_feedback_level(
     bool update);
 
 float subghz_frequency_analyzer_get_trigger_level(SubGhzFrequencyAnalyzer* instance);
+
+// Latest auto-detected modulation on the locked frequency (SIG_MOD_UNK if none).
+// Writes 0..100 confidence to *confidence when non-NULL.
+SignalMod subghz_frequency_analyzer_get_mod(SubGhzFrequencyAnalyzer* instance, uint8_t* confidence);
