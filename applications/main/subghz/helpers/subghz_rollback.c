@@ -37,6 +37,31 @@ bool subghz_rollback_capture(SubGhz* subghz, SubGhzProtocolDecoderBase* decoder)
         (subghz_protocol_decoder_base_serialize(decoder, ff, &preset) == SubGhzProtocolStatusOk);
     uint8_t next = subghz->rollback_store.count;
     if(ok) {
+        // Non-KeeLoq rolling codes (Honda / Ford / Kia / VAG / ...) do NOT emit KeeLoq's
+        // Fix:/Cnt: text markers — their serial/counter live as explicit fields in the
+        // serialized frame. Read them (only when there's no KeeLoq Fix:, so the KeeLoq path
+        // is untouched) so each capture gets a DISTINCT (serial,counter). Without this,
+        // every such capture parses to (0,0): the 2nd is dropped as an exact duplicate
+        // (rollback_core dedup), RollBack never reaches its 2-slot readiness, and the
+        // RollBack / Rolling-PWN resync-replay silently never fires for Honda etc.
+        if(strstr(t, "Fix:") == NULL) {
+            uint32_t v = 0;
+            flipper_format_rewind(ff);
+            if(flipper_format_read_uint32(ff, "Serial", &v, 1) && v) s.serial = v & 0x0FFFFFFF;
+            v = 0;
+            flipper_format_rewind(ff);
+            if(flipper_format_read_uint32(ff, "Counter", &v, 1)) {
+                s.counter = v;
+            } else {
+                v = 0;
+                flipper_format_rewind(ff);
+                if(flipper_format_read_uint32(ff, "Cnt", &v, 1)) s.counter = v; // VAG/others
+            }
+            v = 0;
+            flipper_format_rewind(ff);
+            if(flipper_format_read_uint32(ff, "Btn", &v, 1)) s.btn = (uint8_t)(v & 0x0F);
+        }
+
         Stream* st = flipper_format_get_raw_stream(ff);
         stream_rewind(st);
         size_t len = stream_read(
