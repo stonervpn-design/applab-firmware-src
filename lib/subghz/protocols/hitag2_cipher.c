@@ -84,3 +84,28 @@ bool hitag2_selftest(void) {
         if(hitag2_byte(&s) != expected[i]) return false;
     return true;
 }
+
+uint32_t hitag2_rke_ks(uint64_t key_onair, uint32_t uid_onair, uint32_t counter, uint8_t button) {
+    uint32_t nonce = ((counter & 0x0FFFFFFFu) << 4) | (button & 0x0Fu);
+    uint64_t s = hitag2_init(
+        hitag2_rev48(key_onair), hitag2_rev32(uid_onair), hitag2_rev32(nonce));
+    return hitag2_ks32(&s);
+}
+
+bool hitag2_recover_counter(
+    uint64_t key_onair,
+    uint32_t uid_onair,
+    uint16_t lctr10,
+    uint8_t button,
+    uint32_t captured_ks,
+    uint32_t* out_counter) {
+    // Low 10 bits of the 28-bit counter are known; brute-force the high 18 bits.
+    for(uint32_t hi = 0; hi < (1u << 18); hi++) {
+        uint32_t counter = (hi << 10) | (uint32_t)(lctr10 & 0x03FFu);
+        if(hitag2_rke_ks(key_onair, uid_onair, counter, button) == captured_ks) {
+            if(out_counter) *out_counter = counter;
+            return true;
+        }
+    }
+    return false;
+}

@@ -27,6 +27,21 @@ int main(void) {
     assert(hitag2_rev32(0x49435769u) == 0x96EAC292u);
     assert(hitag2_rev32(0x656E4572u) == 0x4EA276A6u);
 
-    printf("test_hitag2_cipher OK (MIKRON + all-FF + mixed + rev)\n");
+    // Forge round-trip: generate a ks for a known (key,uid,counter,button), then the
+    // counter-recovery must find exactly that counter from only the low-10 bits + ks.
+    {
+        uint64_t key = 0xA1B2C3D4E5F6ull;
+        uint32_t uid = 0x1234ABCD;
+        uint8_t btn = 0x2;
+        uint32_t counter = 0x0ABCDEF; // 28-bit
+        uint32_t ks = hitag2_rke_ks(key, uid, counter, btn);
+        uint32_t rec = 0;
+        assert(hitag2_recover_counter(key, uid, (uint16_t)(counter & 0x3FF), btn, ks, &rec));
+        assert(rec == counter);
+        // Wrong key must NOT spuriously recover a counter.
+        assert(!hitag2_recover_counter(key ^ 1, uid, (uint16_t)(counter & 0x3FF), btn, ks, &rec));
+    }
+
+    printf("test_hitag2_cipher OK (MIKRON + all-FF + mixed + rev + forge round-trip)\n");
     return 0;
 }

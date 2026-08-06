@@ -25,3 +25,22 @@ uint64_t hitag2_rev48(uint64_t v);
 
 // Boot / first-run self-test: true iff the cipher reproduces the MIKRON vector.
 bool hitag2_selftest(void);
+
+// ---- RKE forge (known-key) ----
+// Compute the 32-bit RKE keystream 'ks' a genuine fob would transmit for a given
+// full 28-bit rolling counter + 4-bit button, given the ON-AIR key (48b) and UID
+// (32b). Nonce = (counter<<4)|button; on-air<->cipher bit-reversal handled inside.
+uint32_t hitag2_rke_ks(uint64_t key_onair, uint32_t uid_onair, uint32_t counter, uint8_t button);
+
+// Recover the FULL 28-bit counter from ONE captured frame (uid, low-10 counter bits,
+// button, captured ks) given the key: brute-force the 18 unknown high bits (~2^18
+// cipher runs, sub-second on-device). A hit simultaneously recovers the counter AND
+// proves the key + nonce/bit-order convention are correct for THIS fob. Returns true
+// and writes *out_counter on success; false if no counter matches (wrong key / variant).
+bool hitag2_recover_counter(
+    uint64_t key_onair,
+    uint32_t uid_onair,
+    uint16_t lctr10,
+    uint8_t button,
+    uint32_t captured_ks,
+    uint32_t* out_counter);
