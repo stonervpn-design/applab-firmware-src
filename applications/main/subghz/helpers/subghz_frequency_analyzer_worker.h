@@ -2,6 +2,7 @@
 
 #include <furi_hal.h>
 #include "../subghz_i.h"
+#include "signal_fingerprint.h" // SignalMod
 
 typedef struct SubGhzFrequencyAnalyzerWorker SubGhzFrequencyAnalyzerWorker;
 
@@ -9,7 +10,9 @@ typedef void (*SubGhzFrequencyAnalyzerWorkerPairCallback)(
     void* context,
     uint32_t frequency,
     float rssi,
-    bool signal);
+    bool signal,
+    SignalMod mod,
+    uint8_t confidence);
 
 typedef struct {
     uint32_t frequency_coarse;

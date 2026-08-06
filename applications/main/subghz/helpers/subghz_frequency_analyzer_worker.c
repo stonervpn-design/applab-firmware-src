@@ -1,4 +1,5 @@
 #include "subghz_frequency_analyzer_worker.h"
+#include "subghz_mod_detect.h"
 #include <lib/drivers/cc1101.h>
 #include <furi_hal_subghz.h>
 
@@ -225,13 +226,16 @@ static int32_t subghz_frequency_analyzer_worker_thread(void* context) {
                     subghz_frequency_analyzer_worker_expRunningAverageAdaptive(
                         instance, frequency_rssi.frequency_fine);
             }
-            // Deliver callback
+            // Detect modulation (OOK/FSK) on this locked frequency, then deliver.
             if(instance->pair_callback) {
+                SubGhzModDetect md = subghz_mod_detect_run(frequency_rssi.frequency_fine);
                 instance->pair_callback(
                     instance->context,
                     frequency_rssi.frequency_fine,
                     frequency_rssi.rssi_fine,
-                    true);
+                    true,
+                    md.mod,
+                    md.confidence);
             }
         } else if( // Deliver results coarse
             (frequency_rssi.rssi_coarse > instance->trigger_level) &&
@@ -256,7 +260,9 @@ static int32_t subghz_frequency_analyzer_worker_thread(void* context) {
                     instance->context,
                     frequency_rssi.frequency_coarse,
                     frequency_rssi.rssi_coarse,
-                    true);
+                    true,
+                    SIG_MOD_UNK,
+                    0);
             }
         } else {
             if(instance->sample_hold_counter > 0) {
@@ -264,13 +270,13 @@ static int32_t subghz_frequency_analyzer_worker_thread(void* context) {
                 if(instance->sample_hold_counter == 18) {
                     if(instance->pair_callback) {
                         instance->pair_callback(
-                            instance->context, frequency_temp, rssi_temp, false);
+                            instance->context, frequency_temp, rssi_temp, false, SIG_MOD_UNK, 0);
                     }
                 }
             } else {
                 instance->filVal = 0;
                 if(instance->pair_callback)
-                    instance->pair_callback(instance->context, 0, 0, false);
+                    instance->pair_callback(instance->context, 0, 0, false, SIG_MOD_UNK, 0);
             }
         }
     }
