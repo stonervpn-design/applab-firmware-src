@@ -37,7 +37,9 @@ ADD_SCENE(subghz, spectrum, Spectrum)
 #endif
 ADD_SCENE(subghz, radio_settings, ExtModuleSettings)
 ADD_SCENE(subghz, read_raw, ReadRAW)
+#ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, jammer, Jammer)
+#endif
 ADD_SCENE(subghz, playlist, Playlist)
 ADD_SCENE(subghz, bf_start, BfStart)
 ADD_SCENE(subghz, bf_setup_attack, BfSetupAttack)

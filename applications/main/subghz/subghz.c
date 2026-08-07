@@ -401,11 +401,16 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
     if(!alloc_for_tx_only) {
         // Jammer — lazy-loaded; normally freed by its scene on exit. Safety net
         // in case the app is torn down while the view is still allocated.
+        // Guarded: the whole Jammer feature is PRIVATE-only; leaving this free()
+        // unguarded would anchor subghz_jammer_free (and the view) into public
+        // even with the scene/menu gated (see the P3 spectrum gc gotcha).
+#ifndef PUBLIC_BUILD
         if(subghz->subghz_jammer) {
             view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdJammer);
             subghz_jammer_free(subghz->subghz_jammer);
             subghz->subghz_jammer = NULL;
         }
+#endif
 
         // Playlist — lazy-loaded; normally freed by its scene on exit. Safety net.
         if(subghz->subghz_playlist) {
