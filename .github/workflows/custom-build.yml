@@ -155,5 +155,17 @@ jobs:
           cd out
           git add -A
           git commit -q -m "custom build $BID (${{ steps.cfg.outputs.board }})"
-          git push -q origin HEAD
+          # Concurrent custom-builds push to this SHARED repo, so a plain push races:
+          # whoever pushes second is rejected non-fast-forward and the build "fails".
+          # Each build writes a UNIQUE builds/$BID/ path (no content conflict), so on a
+          # rejection just rebase our commit onto the latest main and retry.
+          pushed=0
+          for attempt in 1 2 3 4 5 6; do
+            if git push -q origin HEAD; then pushed=1; echo "pushed on attempt $attempt"; break; fi
+            echo "push rejected (another build pushed first); rebase + retry ($attempt)"
+            git fetch -q origin main || true
+            git rebase -q origin/main || { git rebase --abort || true; }
+            sleep $(( (RANDOM % 4) + 1 ))
+          done
+          [ "$pushed" = 1 ] || { echo "::error::publish push failed after retries"; exit 1; }
           echo "Published: https://$(echo "$BUILDS_REPO" | cut -d/ -f1).github.io/$(echo "$BUILDS_REPO" | cut -d/ -f2)/builds/$BID/manifest.json"
