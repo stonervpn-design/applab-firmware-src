@@ -1,5 +1,7 @@
 #include "../subghz_i.h"
 #include "../helpers/subghz_spectrum_worker.h"
+#include "../helpers/subghz_spectrum_util.h"
+#include <furi_hal_subghz.h>
 
 #define TAG "SubGhzSceneSpectrum"
 
@@ -55,9 +57,44 @@ void subghz_scene_spectrum_on_enter(void* context) {
 }
 
 bool subghz_scene_spectrum_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
-    // Custom-event handling (band shift, tune-to-peak) is added in a later task.
+    SubGhz* subghz = context;
+    if(event.type != SceneManagerEventTypeCustom) return false;
+
+    if(event.event == SubGhzCustomEventViewSpectrumBandUp ||
+       event.event == SubGhzCustomEventViewSpectrumBandDown) {
+        if(s_spectrum_worker) {
+            uint32_t band = subghz_spectrum_worker_get_band_start(s_spectrum_worker);
+            uint32_t step = subghz_spectrum_worker_get_bin_step(s_spectrum_worker);
+            uint32_t span = step * SPECTRUM_NBINS;
+            uint32_t shift = span / 4;
+            uint32_t nb = (event.event == SubGhzCustomEventViewSpectrumBandUp) ?
+                              band + shift :
+                              (band > shift ? band - shift : band);
+            // Keep the whole swept span inside an RX-valid window.
+            if(furi_hal_subghz_is_frequency_valid(nb) &&
+               furi_hal_subghz_is_frequency_valid(nb + span)) {
+                subghz_spectrum_worker_set_band_start(s_spectrum_worker, nb);
+            }
+        }
+        return true;
+    }
+
+    if(event.event == SubGhzCustomEventViewSpectrumTune) {
+        uint32_t peak = subghz->subghz_spectrum ?
+                            subghz_view_spectrum_get_peak_freq(subghz->subghz_spectrum) :
+                            0;
+        if(peak && subghz_txrx_radio_device_is_frequency_valid(subghz->txrx, peak)) {
+            subghz->last_settings->frequency = peak;
+            subghz->last_settings->enable_hopping = false;
+            subghz_last_settings_save(subghz->last_settings);
+            // Pop Spectrum (its on_exit stops the worker) then open the Receiver
+            // tuned to the peak (mirrors the frequency analyzer's tune flow).
+            scene_manager_previous_scene(subghz->scene_manager);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiver);
+        }
+        return true;
+    }
+
     return false;
 }
 

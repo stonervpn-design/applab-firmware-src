@@ -41,6 +41,10 @@ void subghz_view_spectrum_set_callback(
     instance->context = context;
 }
 
+static void subghz_view_spectrum_fire(SubGhzViewSpectrum* instance, SubGhzCustomEvent event) {
+    if(instance->callback) instance->callback(event, instance->context);
+}
+
 void subghz_view_spectrum_push_row(
     SubGhzViewSpectrum* instance,
     uint32_t band_start,
@@ -120,17 +124,45 @@ static void subghz_view_spectrum_draw(Canvas* canvas, SubGhzViewSpectrumModel* m
         if(h > SUBGHZ_SPECTRUM_SPEC_H) h = SUBGHZ_SPECTRUM_SPEC_H;
         if(h) canvas_draw_line(canvas, (int)i, SP_SPEC_BASE, (int)i, SP_SPEC_BASE - h);
     }
-    // Waterfall rendering is added in a later task.
+    // Peak tick at the top of the spectrum zone.
+    canvas_draw_line(canvas, (int)model->peak_bin, 11, (int)model->peak_bin, 13);
+
+    canvas_draw_line(canvas, 0, 39, 127, 39); // spectrum / waterfall separator
+
+    // Waterfall: newest sweep at top (y=41), scrolling down; 1-bit thresholded.
+    for(size_t r = 0; r < SUBGHZ_SPECTRUM_WF_ROWS; r++) {
+        int y = 41 + (int)r;
+        if(y > 60) break;
+        size_t src =
+            (model->wf_head + SUBGHZ_SPECTRUM_WF_ROWS - 1 - r) % SUBGHZ_SPECTRUM_WF_ROWS;
+        const uint8_t* row = model->wf[src];
+        for(size_t i = 0; i < SUBGHZ_SPECTRUM_NBINS; i++) {
+            if(row[i >> 3] & (uint8_t)(1u << (i & 7))) canvas_draw_dot(canvas, (int)i, y);
+        }
+    }
+    // Persistent peak-column marker down the waterfall (dashed).
+    for(int y = 41; y <= 60; y += 4) canvas_draw_dot(canvas, (int)model->peak_bin, y);
 
     canvas_draw_str(canvas, 0, 63, "OK:Tune  L/R:Band");
 }
 
 static bool subghz_view_spectrum_input(InputEvent* event, void* context) {
     furi_assert(context);
-    UNUSED(event);
-    // Back exits via the scene-manager navigation handler (input not consumed).
-    // L/R band-shift + OK tune-to-peak are added in a later task.
-    return false;
+    SubGhzViewSpectrum* instance = context;
+    if(event->type != InputTypeShort && event->type != InputTypeLong) return false;
+    switch(event->key) {
+    case InputKeyLeft:
+        subghz_view_spectrum_fire(instance, SubGhzCustomEventViewSpectrumBandDown);
+        return true;
+    case InputKeyRight:
+        subghz_view_spectrum_fire(instance, SubGhzCustomEventViewSpectrumBandUp);
+        return true;
+    case InputKeyOk:
+        subghz_view_spectrum_fire(instance, SubGhzCustomEventViewSpectrumTune);
+        return true;
+    default:
+        return false; // Back -> scene-manager navigation exits the scene
+    }
 }
 
 SubGhzViewSpectrum* subghz_view_spectrum_alloc(void) {
