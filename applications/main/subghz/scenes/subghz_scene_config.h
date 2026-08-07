@@ -26,10 +26,15 @@ ADD_SCENE(subghz, set_button, SetButton)
 ADD_SCENE(subghz, set_counter, SetCounter)
 ADD_SCENE(subghz, set_jump, SetJump)
 ADD_SCENE(subghz, keeloq_fob, KeeloqFob)
+#ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, car_keys, CarKeys)
+#endif
 ADD_SCENE(subghz, garage, Garage)
 ADD_SCENE(subghz, set_seed, SetSeed)
 ADD_SCENE(subghz, frequency_analyzer, FrequencyAnalyzer)
+#ifndef PUBLIC_BUILD
+ADD_SCENE(subghz, spectrum, Spectrum)
+#endif
 ADD_SCENE(subghz, radio_settings, ExtModuleSettings)
 ADD_SCENE(subghz, read_raw, ReadRAW)
 ADD_SCENE(subghz, jammer, Jammer)
@@ -49,7 +54,9 @@ ADD_SCENE(subghz, need_saving, NeedSaving)
 ADD_SCENE(subghz, rpc, Rpc)
 ADD_SCENE(subghz, signal_settings, SignalSettings)
 ADD_SCENE(subghz, tpms_edit, TpmsEdit)
+#ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, vuln_makes, VulnMakes)
 ADD_SCENE(subghz, vuln_list, VulnList)
+#endif
 ADD_SCENE(subghz, toolkit, Toolkit)
 ADD_SCENE(subghz, toolkit_protocols, ToolkitProtocols)

@@ -17,4 +17,5 @@ enum SubmenuIndex {
     SubmenuIndexRollBack,
     SubmenuIndexSignalDecoder,
     SubmenuIndexCarKeys,
+    SubmenuIndexSpectrum,
 };

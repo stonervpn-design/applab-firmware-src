@@ -14,6 +14,7 @@
 #include "views/subbrute_attack_view.h"
 #include "views/subghz_view_tpms_info.h"
 #include "views/subghz_view_protoview.h"
+#include "views/subghz_view_spectrum.h"
 #include "views/subghz_keeloq_fob.h"
 #include "helpers/subghz_rollback.h"
 #include "helpers/subbrute_device.h"
@@ -92,6 +93,7 @@ struct SubGhz {
     SubGhzPlaylist* subghz_playlist;
     SubGhzViewTpmsInfo* subghz_tpms_info;
     SubGhzViewProtoview* subghz_protoview;
+    SubGhzViewSpectrum* subghz_spectrum;
     // TPMS edit-scene state (which field is being edited and the result buffers
     // the NumberInput / ByteInput callbacks write into).
     SubGhzViewTpmsField tpms_edit_field;

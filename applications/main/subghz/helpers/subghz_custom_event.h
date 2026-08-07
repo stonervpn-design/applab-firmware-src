@@ -90,6 +90,11 @@ typedef enum {
 
     SubGhzCustomEventViewKeeloqFobSend,
     SubGhzCustomEventViewKeeloqFobBack,
+
+    SubGhzCustomEventViewSpectrumTune, /* Spectrum -> tune receiver to peak (private) */
+    SubGhzCustomEventViewSpectrumBandUp,
+    SubGhzCustomEventViewSpectrumBandDown,
+    SubGhzCustomEventViewSpectrumBack,
 } SubGhzCustomEvent;
 
 typedef enum {

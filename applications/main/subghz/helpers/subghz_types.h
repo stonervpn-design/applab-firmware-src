@@ -84,6 +84,7 @@ typedef enum {
     SubGhzViewIdTpmsInfo,
     SubGhzViewIdNumberInput,
     SubGhzViewIdProtoview,
+    SubGhzViewIdSpectrum,
     SubGhzViewIdKeeloqFob,
 
 } SubGhzViewId;

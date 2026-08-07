@@ -17,12 +17,14 @@ void subghz_scene_start_on_enter(void* context) {
 
     submenu_add_item(
         subghz->submenu, "Read", SubmenuIndexRead, subghz_scene_start_submenu_callback, subghz);
+#ifndef PUBLIC_BUILD
     submenu_add_item(
         subghz->submenu,
         "Car Keys",
         SubmenuIndexCarKeys,
         subghz_scene_start_submenu_callback,
         subghz);
+#endif
     submenu_add_item(
         subghz->submenu,
         "Read RAW",
@@ -61,12 +63,14 @@ void subghz_scene_start_on_enter(void* context) {
         subghz);
     submenu_add_item(
         subghz->submenu, "Saved", SubmenuIndexSaved, subghz_scene_start_submenu_callback, subghz);
+#ifndef PUBLIC_BUILD
     submenu_add_item(
         subghz->submenu,
         "Vehicle Vulns",
         SubmenuIndexVehicleVulns,
         subghz_scene_start_submenu_callback,
         subghz);
+#endif
     submenu_add_item(
         subghz->submenu,
         "SubGhz Toolkit",
@@ -91,6 +95,14 @@ void subghz_scene_start_on_enter(void* context) {
         SubmenuIndexFrequencyAnalyzer,
         subghz_scene_start_submenu_callback,
         subghz);
+#ifndef PUBLIC_BUILD
+    submenu_add_item(
+        subghz->submenu,
+        "Spectrum",
+        SubmenuIndexSpectrum,
+        subghz_scene_start_submenu_callback,
+        subghz);
+#endif
     submenu_add_item(
         subghz->submenu,
         "Radio Settings",
@@ -123,12 +135,16 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexRead);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiver);
             return true;
-        } else if(event.event == SubmenuIndexCarKeys) {
+        }
+#ifndef PUBLIC_BUILD
+        else if(event.event == SubmenuIndexCarKeys) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexCarKeys);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneCarKeys);
             return true;
-        } else if(event.event == SubmenuIndexPlaylist) {
+        }
+#endif
+        else if(event.event == SubmenuIndexPlaylist) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexPlaylist);
             scene_manager_next_scene(subghz->scene_manager, SubGhzScenePlaylist);
@@ -164,17 +180,28 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneFrequencyAnalyzer);
             dolphin_deed(DolphinDeedSubGhzFrequencyAnalyzer);
             return true;
+#ifndef PUBLIC_BUILD
+        } else if(event.event == SubmenuIndexSpectrum) {
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexSpectrum);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSpectrum);
+            return true;
+#endif
         } else if(event.event == SubmenuIndexExtSettings) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexExtSettings);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneExtModuleSettings);
             return true;
-        } else if(event.event == SubmenuIndexVehicleVulns) {
+        }
+#ifndef PUBLIC_BUILD
+        else if(event.event == SubmenuIndexVehicleVulns) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexVehicleVulns);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneVulnMakes);
             return true;
-        } else if(event.event == SubmenuIndexToolkit) {
+        }
+#endif
+        else if(event.event == SubmenuIndexToolkit) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexToolkit);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneToolkit);

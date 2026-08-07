@@ -217,6 +217,7 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     // ProtoView (universal signal decoder scope + bit editor)
     // Lazy-loaded: allocated in subghz_scene_protoview_on_enter, freed on exit.
     subghz->subghz_protoview = NULL;
+    subghz->subghz_spectrum = NULL; // Spectrum: lazy-loaded in its scene (private)
 
     if(!alloc_for_tx_only) {
         // Jammer — lazy-loaded (see subghz_scene_jammer.c on_enter/on_exit)
@@ -421,6 +422,12 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdProtoview);
         subghz_view_protoview_free(subghz->subghz_protoview);
         subghz->subghz_protoview = NULL;
+    }
+    // Spectrum — lazy-loaded; freed by its scene on exit. Safety net.
+    if(subghz->subghz_spectrum) {
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdSpectrum);
+        subghz_view_spectrum_free(subghz->subghz_spectrum);
+        subghz->subghz_spectrum = NULL;
     }
     if(!alloc_for_tx_only) {
         // Submenu
