@@ -16,6 +16,16 @@ SignalMatch subghz_sig_identify_from_samples(
     const PvSample* samples,
     size_t n);
 
+// PURE (subghz_sig_match.c): aggregate N per-frame matches into one verdict.
+// K-of-N vote on the matched name among frames scoring >= min_score; returns the
+// best-scoring frame of the winning name when it has >= min_votes, else UNKNOWN.
+// Cross-frame corroboration cuts single-noisy-frame mislabels.
+SignalMatch subghz_sig_aggregate(
+    const SignalMatch* frames,
+    size_t n,
+    size_t min_votes,
+    int32_t min_score);
+
 // HW (subghz_sig_identify.c): load the preset matching mod, async-RX capture edges
 // over a window, then subghz_sig_identify_from_samples(). Writes the match label
 // (make if present, else name) into out (<= cap) and 0..100 score to *out_score.

@@ -10,6 +10,8 @@ extern const uint8_t subghz_device_cc1101_preset_2fsk_dev47_6khz_async_regs[];
 #define SIG_CAP_SAMPLES 256
 #define SIG_WINDOW_MS   120
 #define SIG_MIN_SCORE   40
+#define SIG_ID_FRAMES    3 // capture N frames per lock and vote (cuts single-frame misses)
+#define SIG_ID_MIN_VOTES 2 // K-of-N: require this many agreeing frames to accept
 
 typedef struct {
     PvSample* buf;
@@ -40,16 +42,23 @@ bool subghz_sig_identify_run(
                                 subghz_device_cc1101_preset_2fsk_dev47_6khz_async_regs :
                                 subghz_device_cc1101_preset_ook_650khz_async_regs;
 
-    furi_hal_subghz_idle();
-    furi_hal_subghz_load_custom_preset(preset);
-    furi_hal_subghz_set_frequency_and_path(freq);
-    furi_hal_subghz_flush_rx();
-    furi_hal_subghz_start_async_rx(sig_capture_cb, &ctx);
-    furi_delay_ms(SIG_WINDOW_MS);
-    furi_hal_subghz_stop_async_rx();
+    // Capture N back-to-back frames and require K agreeing reads (K-of-N vote)
+    // before labelling, so one noisy frame within the lock can't mislabel.
+    SignalMatch frames[SIG_ID_FRAMES];
+    for(int i = 0; i < SIG_ID_FRAMES; i++) {
+        ctx.n = 0; // reset the shared capture buffer for this frame
+        furi_hal_subghz_idle();
+        furi_hal_subghz_load_custom_preset(preset);
+        furi_hal_subghz_set_frequency_and_path(freq);
+        furi_hal_subghz_flush_rx();
+        furi_hal_subghz_start_async_rx(sig_capture_cb, &ctx);
+        furi_delay_ms(SIG_WINDOW_MS);
+        furi_hal_subghz_stop_async_rx();
+        frames[i] = subghz_sig_identify_from_samples(freq, mod, samples, ctx.n);
+    }
     furi_hal_subghz_idle();
 
-    SignalMatch m = subghz_sig_identify_from_samples(freq, mod, samples, ctx.n);
+    SignalMatch m = subghz_sig_aggregate(frames, SIG_ID_FRAMES, SIG_ID_MIN_VOTES, SIG_MIN_SCORE);
 
     if(out && cap) {
         const char* label = (m.make && m.make[0]) ? m.make : m.name;
