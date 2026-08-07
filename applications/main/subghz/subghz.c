@@ -423,12 +423,15 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
         subghz_view_protoview_free(subghz->subghz_protoview);
         subghz->subghz_protoview = NULL;
     }
+#ifndef PUBLIC_BUILD
     // Spectrum — lazy-loaded; freed by its scene on exit. Safety net.
+    // Guarded so public keeps no reference to the (private) spectrum view -> gc'd.
     if(subghz->subghz_spectrum) {
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdSpectrum);
         subghz_view_spectrum_free(subghz->subghz_spectrum);
         subghz->subghz_spectrum = NULL;
     }
+#endif
     if(!alloc_for_tx_only) {
         // Submenu
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdMenu);
