@@ -86,6 +86,7 @@ typedef enum {
     SubGhzCustomEventScenePsaBfTick, /* PSA brute-force progress tick */
 
     SubGhzCustomEventSceneAnalyzeDetails, /* Signal-ID -> deeper tool (rolling/PSA) */
+    SubGhzCustomEventSceneAnalyzeAttack, /* Signal-ID -> guided SubBrute (fixed-code, private) */
 
     SubGhzCustomEventViewKeeloqFobSend,
     SubGhzCustomEventViewKeeloqFobBack,
