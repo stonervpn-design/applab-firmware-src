@@ -195,6 +195,17 @@ static void setup_extra_opencode_callback(VariableItem* item) {
     variable_item_set_current_value_text(item, opencode_names[value_index]);
 }
 
+#ifndef PUBLIC_BUILD
+static void setup_extra_fast_callback(VariableItem* item) {
+    furi_assert(item);
+    SubGhz* subghz = variable_item_get_context(item);
+    furi_assert(subghz);
+    const uint8_t value_index = variable_item_get_current_value_index(item);
+    subbrute_worker_set_fast(subghz->subbrute_worker, value_index == 1);
+    variable_item_set_current_value_text(item, value_index == 1 ? "On" : "Off");
+}
+#endif
+
 static void subghz_scene_bf_setup_extra_init_var_list(SubGhz* subghz, bool on_extra) {
     furi_assert(subghz);
     char str[6] = {0};
@@ -267,6 +278,15 @@ static void subghz_scene_bf_setup_extra_init_var_list(SubGhz* subghz, bool on_ex
             variable_item_set_current_value_index(item, value_index);
             variable_item_set_current_value_text(item, opencode_names[value_index]);
         }
+
+#ifndef PUBLIC_BUILD
+        item = variable_item_list_add(var_list, "Fast", 2, setup_extra_fast_callback, subghz);
+        {
+            const uint8_t fi = subbrute_worker_is_fast(subghz->subbrute_worker) ? 1 : 0;
+            variable_item_set_current_value_index(item, fi);
+            variable_item_set_current_value_text(item, fi == 1 ? "On" : "Off");
+        }
+#endif
     } else {
         item = variable_item_list_add(var_list, "Show Extra", 0, NULL, NULL);
         variable_item_set_current_value_index(item, 0);
