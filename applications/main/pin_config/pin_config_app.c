@@ -63,26 +63,49 @@ static void pin_config_item_changed(VariableItem* item) {
     if(f < 0) return;
     uint8_t idx = variable_item_get_current_value_index(item);
     if(idx >= pin_config_choices_count) return;
-    uint8_t gpio = pin_config_choices[idx];
 
-    /* Reject remapping onto a pin already used by a bus line (SPI SCK/MISO/MOSI,
-     * I2C SDA/SCL — all on the shared SPI3/SD bus) or another remappable function.
-     * Driving such a pin as a second function corrupts/hangs the shared bus and
-     * watchdog-reboots the device — this was the "changing GPIO crashes" report.
-     * Revert the UI to the current pin and skip apply. */
+    uint8_t cur = pin_config_get((PinFunc)f);
+    uint8_t cur_idx = pin_choice_index(cur);
+
+    /* Assigning two functions to one pin hangs the shared SPI3/SD bus and
+     * watchdog-reboots the device, so a pin already used by a bus line
+     * (SPI SCK/MISO/MOSI, I2C SDA/SCL) or the other radio is never applied.
+     *
+     * But snapping back to the current pin on a conflict trapped the user below
+     * the first used pin: because the list steps one value at a time, any used
+     * pin between the current one and a free one reverted the selection, so a
+     * free higher/lower pin was unreachable (the "can't set a higher number"
+     * bug). Instead, skip forward in the scroll direction to the next FREE pin so
+     * scrolling passes over used pins to reach an assignable one. This lets a
+     * radio be moved off a pin the other radio needs (e.g. NRF24 off 4/6 to 15),
+     * which then frees 4/6 for CC1101. */
+    int dir = (idx >= cur_idx) ? 1 : -1;
+    int scan = (int)idx;
     PinFunc conflict = PinFuncCount;
-    if(pin_config_pin_conflict((PinFunc)f, gpio, &conflict)) {
-        uint8_t cur = pin_config_get((PinFunc)f);
+    while(scan >= 0 && scan < (int)pin_config_choices_count &&
+          pin_config_pin_conflict((PinFunc)f, pin_config_choices[scan], &conflict)) {
+        scan += dir;
+    }
+
+    if(scan < 0 || scan >= (int)pin_config_choices_count) {
+        /* Every pin in this direction is taken — keep the current assignment. */
         FURI_LOG_W(
-            "PinConfig", "reject %s=GPIO%u: in use by %s",
-            pin_config_func_name((PinFunc)f), gpio, pin_config_func_name(conflict));
-        variable_item_set_current_value_index(item, pin_choice_index(cur));
+            "PinConfig", "no free pin for %s past GPIO%u (in use by %s)",
+            pin_config_func_name((PinFunc)f), pin_config_choices[idx],
+            pin_config_func_name(conflict));
+        variable_item_set_current_value_index(item, cur_idx);
         pin_config_set_value_text(item, cur);
         snprintf(
             app->status_hdr, sizeof(app->status_hdr), "In use: %s",
             pin_config_func_name(conflict));
         variable_item_list_set_header(app->vil, app->status_hdr);
         return;
+    }
+
+    uint8_t gpio = pin_config_choices[scan];
+    if(scan != (int)idx) {
+        /* Skipped past used pin(s) — move the selection to the free pin. */
+        variable_item_set_current_value_index(item, (uint8_t)scan);
     }
 
     FURI_LOG_I("PinConfig", "apply %s=GPIO%u", pin_config_func_name((PinFunc)f), gpio);
@@ -141,6 +164,7 @@ int32_t pin_config_app(void* p) {
     pin_config_load_from_nvs();
 
     PinConfigApp* app = malloc(sizeof(PinConfigApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     memset(app, 0, sizeof(PinConfigApp));
     app->gui = furi_record_open(RECORD_GUI);
     app->view_dispatcher = view_dispatcher_alloc();
@@ -172,7 +196,6 @@ int32_t pin_config_app(void* p) {
     variable_item_list_add(app->vil, "Reboot & Apply", 0, NULL, app);
     variable_item_list_set_enter_callback(app->vil, pin_config_enter_cb, app);
 
-    view_dispatcher_enable_queue(app->view_dispatcher);
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_navigation_event_callback(app->view_dispatcher, pin_config_nav_cb);
     view_dispatcher_set_tick_event_callback(app->view_dispatcher, pin_config_tick_cb, 2500);
