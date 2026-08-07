@@ -1,8 +1,14 @@
 #include "../subghz_i.h"
 #include <dolphin/dolphin.h>
 #include <lib/subghz/protocols/bin_raw.h>
+#include "../helpers/subghz_capture_quality.h"
 
 #define TAG "SubGhzSceneReceiver"
+
+// Tick of the last decoder match + window, for the live capture-quality meter
+// (private builds). Ticks are ~ms on this port (matches subghz_decode_dedup).
+#define SQ_DECODE_WINDOW_MS 1500
+static uint32_t s_last_decode_tick = 0;
 
 const NotificationSequence subghz_sequence_rx = {
     &message_green_255,
@@ -103,12 +109,36 @@ static void subghz_scene_add_to_history_callback(
     void* context) {
     furi_assert(context);
     SubGhz* subghz = context;
+    s_last_decode_tick = furi_get_tick(); // a decoder matched -> the signal is decoding
 
     // The check can be moved to /lib/subghz/receiver.c, but may result in false positives
     if((decoder_base->protocol->flag & subghz->ignore_filter) == 0) {
         SubGhzHistory* history = subghz->history;
         FuriString* item_name = furi_string_alloc();
         FuriString* item_time = furi_string_alloc();
+
+        // --- dedup: score this decode and decide keep/replace/suppress ---
+        const char* proto_name = decoder_base->protocol->name;
+        uint16_t bit_count = 0; // no generic bit-count accessor; tier handles disambiguation
+        uint16_t score = subghz_decode_dedup_score(proto_name, bit_count);
+        uint32_t now = furi_get_tick();
+        SubGhzDedupAction act =
+            subghz_decode_dedup_decide(&subghz->dedup, proto_name, score, now);
+
+        if(act == SubGhzDedupSuppress) {
+            subghz_receiver_reset(receiver);
+            furi_string_free(item_name);
+            furi_string_free(item_time);
+            return;
+        }
+        if(act == SubGhzDedupReplace && subghz->dedup.last_history_idx >= 0) {
+            subghz_view_receiver_disable_draw_callback(subghz->subghz_receiver);
+            subghz_history_delete_item(history, subghz->dedup.last_history_idx);
+            subghz_view_receiver_delete_item(
+                subghz->subghz_receiver, subghz->dedup.last_history_idx);
+            subghz_view_receiver_enable_draw_callback(subghz->subghz_receiver);
+        }
+
         uint16_t idx = subghz_history_get_item(history);
 
         SubGhzRadioPreset preset = subghz_txrx_get_preset(subghz->txrx);
@@ -147,6 +177,12 @@ static void subghz_scene_add_to_history_callback(
                 notification_message(subghz->notifications, &sequence_error);
             }
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateAddKey);
+            // record what we committed so the next in-window decode can compare
+            subghz_decode_dedup_commit(&subghz->dedup, proto_name, score, now, idx);
+        } else {
+            // add failed (low heap / history full): drop dedup state so a later
+            // Replace can never reuse a now-stale last_history_idx.
+            subghz_decode_dedup_reset(&subghz->dedup);
         }
         subghz_receiver_reset(receiver);
         furi_string_free(item_name);
@@ -159,6 +195,7 @@ static void subghz_scene_add_to_history_callback(
 void subghz_scene_receiver_on_enter(void* context) {
     SubGhz* subghz = context;
     SubGhzHistory* history = subghz->history;
+    s_last_decode_tick = 0; // reset capture-quality decode tracking
 
     FuriString* item_name = furi_string_alloc();
     FuriString* item_time = furi_string_alloc();
@@ -202,6 +239,7 @@ void subghz_scene_receiver_on_enter(void* context) {
     subghz_view_receiver_set_callback(
         subghz->subghz_receiver, subghz_scene_receiver_callback, subghz);
     subghz_txrx_set_rx_callback(subghz->txrx, subghz_scene_add_to_history_callback, subghz);
+    subghz_decode_dedup_reset(&subghz->dedup);
 
     if(!subghz_history_get_text_space_left(subghz->history, NULL)) {
         subghz->state_notifications = SubGhzNotificationStateRx;
@@ -308,6 +346,18 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
         subghz_receiver_rssi(subghz->subghz_receiver, ret_rssi.rssi);
         subghz_protocol_decoder_bin_raw_data_input_rssi(
             (SubGhzProtocolDecoderBinRAW*)subghz_txrx_get_decoder(subghz->txrx), ret_rssi.rssi);
+
+#ifndef PUBLIC_BUILD
+        // Live capture-quality: strong signal + no recent decode => wrong preset, etc.
+        {
+            float thr = subghz_threshold_rssi_get(subghz->threshold_rssi);
+            bool decoded_recently = s_last_decode_tick != 0 &&
+                                    (furi_get_tick() - s_last_decode_tick) < SQ_DECODE_WINDOW_MS;
+            SubGhzCaptureQuality q =
+                subghz_capture_quality_eval(ret_rssi.rssi, thr, decoded_recently);
+            subghz_view_receiver_set_quality(subghz->subghz_receiver, q.level);
+        }
+#endif
 
         switch(subghz->state_notifications) {
         case SubGhzNotificationStateRx:

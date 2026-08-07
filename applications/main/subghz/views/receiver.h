@@ -3,6 +3,7 @@
 #include <gui/view.h>
 #include "../helpers/subghz_types.h"
 #include "../helpers/subghz_custom_event.h"
+#include "../helpers/subghz_capture_quality.h" // SubGhzQualityLevel
 
 typedef struct SubGhzViewReceiver SubGhzViewReceiver;
 
@@ -38,6 +39,11 @@ void subghz_view_receiver_add_data_statusbar(
 void subghz_view_receiver_set_radio_device_type(
     SubGhzViewReceiver* subghz_receiver,
     SubGhzRadioDeviceType device_type);
+
+// Live capture-quality level for the scanning screen (PRIVATE builds).
+void subghz_view_receiver_set_quality(
+    SubGhzViewReceiver* subghz_receiver,
+    SubGhzQualityLevel level);
 
 void subghz_view_receiver_add_data_progress(
     SubGhzViewReceiver* subghz_receiver,

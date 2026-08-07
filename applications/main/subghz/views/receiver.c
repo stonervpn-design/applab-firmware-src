@@ -71,6 +71,7 @@ typedef struct {
     SubGhzViewReceiverBarShow bar_show;
     SubGhzViewReceiverMode mode;
     uint8_t u_rssi;
+    uint8_t quality_level; // SubGhzQualityLevel (private builds)
 
     SubGhzRadioDeviceType device_type;
 
@@ -244,6 +245,17 @@ void subghz_view_receiver_set_radio_device_type(
         true);
 }
 
+void subghz_view_receiver_set_quality(
+    SubGhzViewReceiver* subghz_receiver,
+    SubGhzQualityLevel level) {
+    furi_assert(subghz_receiver);
+    with_view_model(
+        subghz_receiver->view,
+        SubGhzViewReceiverModel * model,
+        { model->quality_level = (uint8_t)level; },
+        true);
+}
+
 static void subghz_view_receiver_draw_frame(Canvas* canvas, uint16_t idx, bool scrollbar) {
     canvas_set_color(canvas, ColorBlack);
     canvas_draw_box(canvas, 0, 0 + idx * FRAME_HEIGHT, scrollbar ? 122 : 127, FRAME_HEIGHT);
@@ -330,11 +342,17 @@ void subghz_view_receiver_draw(Canvas* canvas, SubGhzViewReceiverModel* model) {
         if(model->mode == SubGhzViewReceiverModeLive) {
             canvas_draw_icon(canvas, 0, 0, &I_Scanning_123x52);
             canvas_set_font(canvas, FontPrimary);
-            if(model->hopping_enabled) {
-                canvas_draw_str(canvas, 59, 46, "Hopper scan...");
-            } else {
-                canvas_draw_str(canvas, 59, 46, "Fixed scan...");
+            const char* scan_txt = model->hopping_enabled ? "Hopper scan..." : "Fixed scan...";
+#ifndef PUBLIC_BUILD
+            // Live capture-quality tag replaces the scan text when a signal is
+            // present but weak / not decoding (usually the wrong preset).
+            if(model->quality_level == SubGhzQualityNoDecode) {
+                scan_txt = "No decode?";
+            } else if(model->quality_level == SubGhzQualityWeak) {
+                scan_txt = "Weak signal";
             }
+#endif
+            canvas_draw_str(canvas, 59, 46, scan_txt);
             canvas_set_font(canvas, FontSecondary);
 
             if(model->bin_raw_enabled) {
