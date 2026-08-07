@@ -339,6 +339,7 @@ bool subbrute_worker_transmit_current_key(SubBruteWorker* instance, uint64_t ste
             instance->opencode);
     }
 
+    instance->radio_ready = false; // manual single-shot always re-configures the radio
     subbrute_worker_subghz_transmit(instance, flipper_format);
 
     result = true;
@@ -482,10 +483,16 @@ void subbrute_worker_subghz_transmit(SubBruteWorker* instance, FlipperFormat* fl
         return;
     }
 
-    subghz_devices_reset(instance->radio_device);
-    subghz_devices_idle(instance->radio_device);
-    subghz_devices_load_preset(instance->radio_device, instance->preset, NULL);
-    subghz_devices_set_frequency(instance->radio_device, instance->frequency);
+    // Fast mode: freq/preset are invariant across a sweep, so configure the radio
+    // ONCE (first code) instead of re-arming every code. radio_ready is reset per
+    // sweep and before manual TX. Non-fast keeps the original per-code config.
+    if(!instance->fast_mode || !instance->radio_ready) {
+        subghz_devices_reset(instance->radio_device);
+        subghz_devices_idle(instance->radio_device);
+        subghz_devices_load_preset(instance->radio_device, instance->preset, NULL);
+        subghz_devices_set_frequency(instance->radio_device, instance->frequency);
+        instance->radio_ready = true;
+    }
 
     // start_async_tx already drives CC1101 into TX state internally; no separate set_tx needed
     // (matches the working playlist TX path).
@@ -557,6 +564,7 @@ int32_t subbrute_worker_thread(void* context) {
     FlipperFormat* flipper_format = flipper_format_string_alloc();
     Stream* stream = flipper_format_get_raw_stream(flipper_format);
 
+    instance->radio_ready = false; // configure the radio once at sweep start (fast mode)
     while(instance->worker_running) {
         if(instance->attack == SubBruteAttackDeBruijn) {
             // One continuous burst covers every code; transmit once and finish.
