@@ -51,6 +51,10 @@ struct SubBruteWorker {
     uint8_t opencode; /**< Opencode */
     bool two_bytes; /**< Two bytes key */
 
+    // Fast sweep (private-only; default false in public builds)
+    bool fast_mode; /**< Clamp repeats + trim delays + configure radio once */
+    bool radio_ready; /**< Radio already configured for this sweep (fast mode) */
+
     // Manual transmit
     uint32_t last_time_tx_data; /**< Last time data was transmitted */
 

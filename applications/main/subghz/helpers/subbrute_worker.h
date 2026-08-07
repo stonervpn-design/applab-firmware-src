@@ -48,6 +48,24 @@ SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device);
 void subbrute_worker_free(SubBruteWorker* instance);
 
 /**
+ * @brief Enable/disable fast sweep (repeat clamp + trimmed delays + configure-once).
+ *
+ * Private-only feature; default true in private builds, false in public.
+ *
+ * @param instance Pointer to the SubBruteWorker instance.
+ * @param fast true to enable fast sweep.
+ */
+void subbrute_worker_set_fast(SubBruteWorker* instance, bool fast);
+
+/**
+ * @brief Whether fast sweep is currently enabled.
+ *
+ * @param instance Pointer to the SubBruteWorker instance.
+ * @return true if fast sweep is enabled.
+ */
+bool subbrute_worker_is_fast(SubBruteWorker* instance);
+
+/**
  * @brief Get the current step of a sub brute force worker.
  *
  * @param instance A pointer to the SubBruteWorker instance.

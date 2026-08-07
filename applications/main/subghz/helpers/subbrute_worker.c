@@ -13,6 +13,7 @@
 #define TAG                               "SubBruteWorker"
 #define SUBBRUTE_TX_TIMEOUT               6
 #define SUBBRUTE_MANUAL_TRANSMIT_INTERVAL 250
+#define SUBBRUTE_FAST_REPEAT              2 // repeat clamp in fast mode (receiver-latch floor)
 
 // Defined lower down; forward-declared so the manual-transmit path can call it.
 static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance);
@@ -46,9 +47,27 @@ SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device) {
 
     instance->transmit_mode = false;
 
+    // Fast sweep defaults ON in private, OFF in public (public behavior unchanged).
+#ifndef PUBLIC_BUILD
+    instance->fast_mode = true;
+#else
+    instance->fast_mode = false;
+#endif
+    instance->radio_ready = false;
+
     instance->radio_device = radio_device;
 
     return instance;
+}
+
+void subbrute_worker_set_fast(SubBruteWorker* instance, bool fast) {
+    furi_assert(instance);
+    instance->fast_mode = fast;
+}
+
+bool subbrute_worker_is_fast(SubBruteWorker* instance) {
+    furi_assert(instance);
+    return instance->fast_mode;
 }
 
 void subbrute_worker_free(SubBruteWorker* instance) {
@@ -430,7 +449,8 @@ static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance) {
 }
 
 void subbrute_worker_subghz_transmit(SubBruteWorker* instance, FlipperFormat* flipper_format) {
-    const uint8_t timeout = instance->tx_timeout_ms;
+    // Fast mode trims the busy-poll granularity (completion is ~ms-quantised).
+    const uint8_t timeout = instance->fast_mode ? 1 : instance->tx_timeout_ms;
     while(instance->transmit_mode) {
         furi_delay_ms(timeout);
     }
@@ -545,13 +565,17 @@ int32_t subbrute_worker_thread(void* context) {
             break;
         }
         stream_clean(stream);
+        // Fast mode: clamp per-code repeats down to the receiver-latch floor.
+        uint8_t rep = (instance->fast_mode && instance->repeat > SUBBRUTE_FAST_REPEAT) ?
+                          SUBBRUTE_FAST_REPEAT :
+                          instance->repeat;
         if(instance->attack == SubBruteAttackLoadFile) {
             subbrute_protocol_file_payload(
                 stream,
                 instance->step,
                 instance->bits,
                 instance->te,
-                instance->repeat,
+                rep,
                 instance->load_index,
                 instance->file_key,
                 instance->two_bytes);
@@ -562,7 +586,7 @@ int32_t subbrute_worker_thread(void* context) {
                 instance->step,
                 instance->bits,
                 instance->te,
-                instance->repeat,
+                rep,
                 instance->opencode);
         }
 #ifdef FURI_DEBUG
@@ -582,7 +606,7 @@ int32_t subbrute_worker_thread(void* context) {
         }
         instance->step++;
 
-        furi_delay_ms(instance->tx_timeout_ms);
+        furi_delay_ms(instance->fast_mode ? 1 : instance->tx_timeout_ms);
     }
 
     flipper_format_free(flipper_format);
