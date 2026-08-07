@@ -486,6 +486,82 @@ static void js_subghz_end(struct mjs* mjs) {
     mjs_return(mjs, MJS_UNDEFINED);
 }
 
+#ifndef PUBLIC_BUILD
+// Native band sweep for RF campaign scripts (PRIVATE): retunes across
+// [startHz, endHz] in `bins` steps (default 128), reading RSSI per bin, and
+// returns { peakFreq, peakRssi, bins:[dBm...] }. Doing the sweep in C avoids the
+// per-call overhead of a JS setFrequency/getRssi loop. This is the on-device
+// auto-freq-finder that beats a host-tethered scripting API.
+static void js_subghz_sweep(struct mjs* mjs) {
+    mjs_val_t obj_inst = mjs_get(mjs, mjs_get_this(mjs), INST_PROP_NAME, ~0);
+    JsSubghzInst* js_subghz = mjs_get_ptr(mjs, obj_inst);
+    furi_assert(js_subghz);
+
+    if(!js_subghz->radio_device) {
+        mjs_prepend_errorf(mjs, MJS_INTERNAL_ERROR, "Radio is not setup");
+        mjs_return(mjs, MJS_UNDEFINED);
+        return;
+    }
+
+    mjs_val_t start_arg = mjs_arg(mjs, 0);
+    mjs_val_t end_arg = mjs_arg(mjs, 1);
+    if(!mjs_is_number(start_arg) || !mjs_is_number(end_arg)) {
+        mjs_prepend_errorf(mjs, MJS_INTERNAL_ERROR, "sweep(startHz, endHz, [bins])");
+        mjs_return(mjs, MJS_UNDEFINED);
+        return;
+    }
+    int32_t start = mjs_get_int32(mjs, start_arg);
+    int32_t end = mjs_get_int32(mjs, end_arg);
+    int32_t nbins = 128;
+    mjs_val_t bins_arg = mjs_arg(mjs, 2);
+    if(mjs_is_number(bins_arg)) nbins = mjs_get_int32(mjs, bins_arg);
+    if(nbins < 8) nbins = 8;
+    if(nbins > 256) nbins = 256;
+
+    if(end <= start) {
+        mjs_prepend_errorf(mjs, MJS_INTERNAL_ERROR, "endHz must exceed startHz");
+        mjs_return(mjs, MJS_UNDEFINED);
+        return;
+    }
+    if(!subghz_devices_is_frequency_valid(js_subghz->radio_device, (uint32_t)start) ||
+       !subghz_devices_is_frequency_valid(js_subghz->radio_device, (uint32_t)end)) {
+        mjs_prepend_errorf(mjs, MJS_INTERNAL_ERROR, "Invalid frequency range");
+        mjs_return(mjs, MJS_UNDEFINED);
+        return;
+    }
+
+    uint32_t step = (uint32_t)(end - start) / (uint32_t)nbins;
+    if(step == 0) step = 1;
+
+    mjs_val_t arr = mjs_mk_array(mjs);
+    float peak_rssi = -127.0f;
+    uint32_t peak_freq = (uint32_t)start;
+
+    for(int32_t i = 0; i < nbins; i++) {
+        uint32_t f = (uint32_t)start + step * (uint32_t)i;
+        subghz_devices_idle(js_subghz->radio_device);
+        subghz_devices_set_frequency(js_subghz->radio_device, f);
+        subghz_devices_set_rx(js_subghz->radio_device);
+        furi_delay_ms(1);
+        float rssi = subghz_devices_get_rssi(js_subghz->radio_device);
+        mjs_array_push(mjs, arr, mjs_mk_number(mjs, (double)rssi));
+        if(rssi > peak_rssi) {
+            peak_rssi = rssi;
+            peak_freq = f;
+        }
+    }
+
+    subghz_devices_idle(js_subghz->radio_device);
+    js_subghz->state = JsSubghzRadioStateIDLE;
+
+    mjs_val_t result = mjs_mk_object(mjs);
+    mjs_set(mjs, result, "peakFreq", ~0, mjs_mk_number(mjs, (double)peak_freq));
+    mjs_set(mjs, result, "peakRssi", ~0, mjs_mk_number(mjs, (double)peak_rssi));
+    mjs_set(mjs, result, "bins", ~0, arr);
+    mjs_return(mjs, result);
+}
+#endif // PUBLIC_BUILD
+
 static void* js_subghz_create(struct mjs* mjs, mjs_val_t* object, JsModules* modules) {
     UNUSED(modules);
     JsSubghzInst* js_subghz = malloc(sizeof(JsSubghzInst));
@@ -504,6 +580,9 @@ static void* js_subghz_create(struct mjs* mjs, mjs_val_t* object, JsModules* mod
     mjs_set(mjs, subghz_obj, "setFrequency", ~0, MJS_MK_FN(js_subghz_set_frequency));
     mjs_set(mjs, subghz_obj, "isExternal", ~0, MJS_MK_FN(js_subghz_is_external));
     mjs_set(mjs, subghz_obj, "transmitFile", ~0, MJS_MK_FN(js_subghz_transmit_file));
+#ifndef PUBLIC_BUILD
+    mjs_set(mjs, subghz_obj, "sweep", ~0, MJS_MK_FN(js_subghz_sweep));
+#endif
 
     *object = subghz_obj;
 
