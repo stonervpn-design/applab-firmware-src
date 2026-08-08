@@ -210,10 +210,18 @@ void subghz_scene_receiver_on_enter(void* context) {
 
     if(subghz_rx_key_state_get(subghz) == SubGhzRxKeyStateIDLE) {
         if(subghz->tpms_scan_mode) {
-            // Force the standard TPMS modulation (433.92 MHz, 2-FSK ~47.6 kHz dev)
-            // regardless of last_settings, so nearby sensors decode.
-            subghz_txrx_set_preset(
-                subghz->txrx, "FuriHalSubGhzPreset2FSKDev238Async", 433920000, NULL, 0);
+            // Force the standard TPMS modulation (433.92 MHz, 2-FSK ~47.6 kHz dev,
+            // registered as preset "FM238") regardless of last_settings, so nearby
+            // sensors decode. MUST go through set_preset_internal so the CC1101
+            // register data is resolved from the setting — the raw set_preset(name,
+            // NULL) leaves preset->data == NULL and crashes on rx_start.
+            SubGhzSetting* setting = subghz_txrx_get_setting(subghz->txrx);
+            int fm_idx = subghz_setting_get_inx_preset_by_name(setting, "FM238");
+            subghz_txrx_set_preset_internal(
+                subghz->txrx,
+                433920000,
+                (uint8_t)(fm_idx >= 0 ? fm_idx : 0),
+                subghz->last_settings->tx_power);
         } else {
             subghz_txrx_set_preset_internal(
                 subghz->txrx,
