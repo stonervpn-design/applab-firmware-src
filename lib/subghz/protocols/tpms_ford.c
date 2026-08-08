@@ -155,6 +155,35 @@ static void tpms_protocol_ford_analyze(TPMSBlockGeneric* g) {
     g->battery_low = TPMS_NO_BATT;
 }
 
+void tpms_protocol_ford_pack(TPMSBlockGeneric* g) {
+    furi_assert(g);
+    // pressure: bar -> psi -> 9-bit quarter-psi. b[4] = low 8 bits, b[6] bit5 = MSB.
+    int psi_q = (int)(g->pressure / 0.06895f / 0.25f + 0.5f);
+    if(psi_q < 0) psi_q = 0;
+    if(psi_q > 0x1FF) psi_q = 0x1FF;
+    // temperature: stored as (C + 56) in 7 bits with bit7 (invalid flag) clear.
+    int t = (int)(g->temperature + (g->temperature >= 0 ? 0.5f : -0.5f)) + 56;
+    if(t < 0) t = 0;
+    if(t > 0x7F) t = 0x7F;
+
+    uint8_t b[8];
+    b[0] = (g->id >> 24) & 0xFF;
+    b[1] = (g->id >> 16) & 0xFF;
+    b[2] = (g->id >> 8) & 0xFF;
+    b[3] = (g->id >> 0) & 0xFF;
+    b[4] = (uint8_t)(psi_q & 0xFF);
+    b[5] = (uint8_t)(t & 0x7F); // bit7 clear = valid temperature
+    b[6] = (psi_q & 0x100) ? 0x20 : 0x00; // bit5 = pressure MSB
+    uint16_t sum = 0;
+    for(int i = 0; i < 7; i++) sum += b[i];
+    b[7] = (uint8_t)(sum & 0xFF); // checksum = sum(b[0..6]) & 0xFF
+
+    uint64_t data = 0;
+    for(int i = 0; i < 8; i++) data = (data << 8) | b[i];
+    g->data = data;
+    g->data_count_bit = 64;
+}
+
 void tpms_protocol_decoder_ford_feed(void* context, bool level, uint32_t duration) {
     furi_assert(context);
     TPMSProtocolDecoderFord* instance = context;

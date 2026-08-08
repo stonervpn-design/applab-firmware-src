@@ -4,8 +4,10 @@
 
 #include "../subghz_i.h"
 #include <lib/subghz/protocols/schrader_gg4.h>
+#include <lib/subghz/protocols/tpms_ford.h>
 #include <lib/subghz/protocols/tpms_generic.h>
 #include <lib/subghz/types.h>
+#include <string.h>
 
 #define TAG "TpmsSpoof"
 
@@ -28,7 +30,30 @@ static const TpmsSpoofProto k_protos[] = {
         .default_pressure_bar = 2.20f, // ≈ 32 psi
         .default_temperature_c = 20.0f,
     },
+    {
+        .label = "Ford TPMS",
+        .protocol_name = TPMS_PROTOCOL_FORD_NAME,
+        .preset_name = TPMS_SPOOF_PRESET_NAME,
+        .frequency = 433920000, // EU; 315 MHz (US) common on Ford
+        .default_id = 0x0089ABCD,
+        .default_pressure_bar = 2.20f,
+        .default_temperature_c = 20.0f,
+    },
 };
+
+// Dispatch the friendly-fields -> data+CRC packer by protocol. Only protocols
+// with a packer can be spoofed from scratch.
+static bool tpms_spoof_pack(const char* protocol_name, TPMSBlockGeneric* g) {
+    if(strcmp(protocol_name, TPMS_PROTOCOL_SCHRADER_GG4_NAME) == 0) {
+        tpms_protocol_schrader_gg4_pack(g);
+        return true;
+    }
+    if(strcmp(protocol_name, TPMS_PROTOCOL_FORD_NAME) == 0) {
+        tpms_protocol_ford_pack(g);
+        return true;
+    }
+    return false;
+}
 
 size_t tpms_spoof_proto_count(void) {
     return COUNT_OF(k_protos);
@@ -56,8 +81,10 @@ bool tpms_spoof_seed(
     g.pressure = pressure_bar;
     g.temperature = temperature_c;
     g.data = 0; // status byte 0x00 == normal mode
-    // (Schrader-only for now — extend when more packers land.)
-    tpms_protocol_schrader_gg4_pack(&g); // sets g.data + g.data_count_bit = 64
+    if(!tpms_spoof_pack(p->protocol_name, &g)) {
+        FURI_LOG_E(TAG, "no packer for %s", p->protocol_name);
+        return false;
+    }
 
     uint8_t data_be[8];
     for(int i = 0; i < 8; i++) data_be[i] = (uint8_t)(g.data >> (56 - i * 8));

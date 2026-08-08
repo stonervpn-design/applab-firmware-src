@@ -35,3 +35,8 @@ void tpms_protocol_encoder_ford_stop(void* context);
 LevelDuration tpms_protocol_encoder_ford_yield(void* context);
 SubGhzProtocolStatus
     tpms_protocol_encoder_ford_deserialize(void* context, FlipperFormat* flipper_format);
+
+/** Pack friendly fields (id / pressure / temperature) into generic->data + the
+ * Ford sum checksum (inverse of tpms_protocol_ford_analyze). Used by the TPMS
+ * spoofer to build a frame from scratch. Sets data + data_count_bit = 64. */
+void tpms_protocol_ford_pack(TPMSBlockGeneric* generic);
