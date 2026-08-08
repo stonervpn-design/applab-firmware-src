@@ -1,5 +1,9 @@
 #include "../subghz_i.h"
 #include <storage/storage.h>
+#ifndef PUBLIC_BUILD
+#include <flipper_format.h>
+#include <lib/subghz/protocols/vag.h>
+#endif
 
 // "My Garage": a submenu of saved clone .subs under /ext/subghz/garage/.
 // Selecting one loads it and re-opens the fob emulator (counter resumes).
@@ -82,9 +86,29 @@ bool subghz_scene_garage_on_event(void* context, SceneManagerEvent event) {
         furi_record_close(RECORD_STORAGE);
 
         if(found && subghz_key_load(subghz, furi_string_get_cstr(path), false)) {
-            subghz->keeloq_fob_from_garage = true;
             furi_string_free(path);
+#ifndef PUBLIC_BUILD
+            // Clone entries (KeeLoq CloneMode=1 / VAG) resume in the Fob Emulator;
+            // plain replay-saves (any other serializable fob) go to the Transmitter.
+            FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
+            uint32_t clone_mode = 0;
+            flipper_format_rewind(fff);
+            flipper_format_read_uint32(fff, "CloneMode", &clone_mode, 1);
+            FuriString* proto = furi_string_alloc();
+            flipper_format_rewind(fff);
+            bool is_vag = flipper_format_read_string(fff, "Protocol", proto) &&
+                          furi_string_equal_str(proto, VAG_PROTOCOL_NAME);
+            furi_string_free(proto);
+            if(clone_mode == 1 || is_vag) {
+                subghz->keeloq_fob_from_garage = true;
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
+            } else {
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTransmitter);
+            }
+#else
+            subghz->keeloq_fob_from_garage = true;
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
+#endif
             return true;
         }
         furi_string_free(path);

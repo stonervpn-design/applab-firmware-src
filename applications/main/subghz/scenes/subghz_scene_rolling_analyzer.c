@@ -82,6 +82,21 @@ static bool subghz_scene_rolling_analyzer_can_save_vag(
     return strstr(decoded_text, "Ser:") != NULL && strstr(decoded_text, "corrupted") == NULL;
 }
 
+// Generic replay-save gate (PRIVATE-only): any serializable fob that is NOT KeeLoq
+// or VAG (those have their own smart-clone / emulate paths above). These can be
+// saved to the Garage as a plain .sub and re-sent via the Transmitter, but with NO
+// future-code generation — for a rolling fob that is a single-use REPLAY (labelled).
+#ifndef PUBLIC_BUILD
+static bool subghz_scene_rolling_analyzer_can_save_generic(
+    const char* protocol_name,
+    SubGhzProtocolDecoderBase* decoder) {
+    if(!protocol_name || !decoder || !decoder->protocol) return false;
+    if(strcmp(protocol_name, SUBGHZ_PROTOCOL_KEELOQ_NAME) == 0) return false;
+    if(strcmp(protocol_name, VAG_PROTOCOL_NAME) == 0) return false;
+    return (decoder->protocol->flag & SubGhzProtocolFlag_Save) == SubGhzProtocolFlag_Save;
+}
+#endif
+
 static void subghz_scene_rolling_analyzer_button_callback(
     GuiButtonType result,
     InputType type,
@@ -210,6 +225,18 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
             subghz_scene_rolling_analyzer_button_callback,
             subghz);
     }
+#ifndef PUBLIC_BUILD
+    else if(subghz_scene_rolling_analyzer_can_save_generic(protocol_name, decoder)) {
+        // Any other serializable fob: Save to Garage as a plain replay (single-use
+        // for rolling codes — no future-code generation for these protocols).
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeRight,
+            "Save",
+            subghz_scene_rolling_analyzer_button_callback,
+            subghz);
+    }
+#endif
 
     furi_string_free(body);
     furi_string_free(text);
@@ -287,6 +314,44 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
             }
             return false;
         }
+
+        // Generic serializable fob (non-KeeLoq/non-VAG): serialize the capture to
+        // the Garage as a plain .sub and hand off to the Transmitter for replay.
+        // No future-code generation — single-use replay for rolling codes. PRIVATE.
+#ifndef PUBLIC_BUILD
+        if(subghz_scene_rolling_analyzer_can_save_generic(decoder->protocol->name, decoder)) {
+            const char* pname = decoder->protocol->name;
+            uint32_t sn = subghz_rollback_hex_after(t, "Fix:") & 0x0FFFFFFF;
+            if(sn == 0) sn = subghz_rollback_hex_after(t, "Ser:");
+            furi_string_free(text);
+
+            SubGhzRadioPreset* hp =
+                subghz_history_get_radio_preset(subghz->history, subghz->idx_menu_chosen);
+            SubGhzRadioPreset preset = hp ? *hp : subghz_txrx_get_preset(subghz->txrx);
+            FlipperFormat* ff = flipper_format_string_alloc();
+            bool ok =
+                (subghz_protocol_decoder_base_serialize(decoder, ff, &preset) ==
+                 SubGhzProtocolStatusOk);
+            if(ok) {
+                FuriString* path = furi_string_alloc();
+                furi_string_printf(
+                    path,
+                    "%s/garage/%s_%08lX.sub",
+                    SUBGHZ_APP_FOLDER,
+                    pname,
+                    (unsigned long)sn);
+                ok = subghz_save_protocol_to_file(subghz, ff, furi_string_get_cstr(path)) &&
+                     subghz_key_load(subghz, furi_string_get_cstr(path), false);
+                furi_string_free(path);
+            }
+            flipper_format_free(ff);
+            if(ok) {
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTransmitter);
+                return true;
+            }
+            return false;
+        }
+#endif
 
         if(!subghz_scene_rolling_analyzer_can_clone(decoder->protocol->name, t)) {
             furi_string_free(text);
