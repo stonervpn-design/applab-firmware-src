@@ -1,6 +1,10 @@
 #include "../subghz_i.h"
 #include "../helpers/subghz_custom_event.h"
 
+// RollBack is a rolling-code replay/resync ATTACK — PRIVATE builds only. The whole
+// scene body compiles to nothing in public (its ADD_SCENE + menu are also gated).
+#ifndef PUBLIC_BUILD
+
 #define TAG "SubGhzSceneRollbackCapture"
 
 // RollBack Capture scene.
@@ -135,3 +139,5 @@ void subghz_scene_rollback_capture_on_exit(void* context) {
     notification_message(subghz->notifications, &sequence_reset_rgb);
     widget_reset(subghz->widget);
 }
+
+#endif /* !PUBLIC_BUILD — RollBack is a private-only attack feature */

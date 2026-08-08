@@ -66,12 +66,14 @@ void subghz_scene_start_on_enter(void* context) {
             subghz);
     }
 #endif
+#ifndef PUBLIC_BUILD
     submenu_add_item(
         subghz->submenu,
         "RollBack",
         SubmenuIndexRollBack,
         subghz_scene_start_submenu_callback,
         subghz);
+#endif
     submenu_add_item(
         subghz->submenu,
         "Signal Decoder",
@@ -260,12 +262,16 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexToolkit);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneToolkit);
             return true;
-        } else if(event.event == SubmenuIndexRollBack) {
+        }
+#ifndef PUBLIC_BUILD
+        else if(event.event == SubmenuIndexRollBack) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexRollBack);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneRollbackCapture);
             return true;
-        } else if(event.event == SubmenuIndexSignalDecoder) {
+        }
+#endif
+        else if(event.event == SubmenuIndexSignalDecoder) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexSignalDecoder);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneProtoview);

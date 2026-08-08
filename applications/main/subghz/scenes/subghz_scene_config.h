@@ -5,8 +5,10 @@ ADD_SCENE(subghz, receiver_info, ReceiverInfo)
 ADD_SCENE(subghz, analyze, Analyze)
 ADD_SCENE(subghz, rolling_analyzer, RollingAnalyzer)
 ADD_SCENE(subghz, psa_bruteforce, PsaBruteforce)
+#ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, rollback_capture, RollbackCapture)
 ADD_SCENE(subghz, rollback_replay, RollbackReplay)
+#endif
 ADD_SCENE(subghz, protoview, Protoview)
 ADD_SCENE(subghz, save_name, SaveName)
 ADD_SCENE(subghz, save_success, SaveSuccess)
