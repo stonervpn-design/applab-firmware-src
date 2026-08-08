@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #define ROLLBACK_MAX_SLOTS 8
+#define ROLLBACK_DEFAULT_TARGET 2 // most RollingPwn resyncs; Mazda CVE-2022-36945 needs 3
 
 typedef struct {
     uint64_t data;        // full decoded data word (informational)
@@ -24,6 +25,7 @@ typedef enum {
 typedef struct {
     RollbackSlot slot[ROLLBACK_MAX_SLOTS];
     uint8_t count;
+    uint8_t target_n; // how many consecutive frames a resync needs (2..MAX; reset sets 2)
 } RollbackStore;
 
 // ---- pure parsing (shared with the read-only rolling analyzer) ----
@@ -37,8 +39,19 @@ void     subghz_rollback_store_reset(RollbackStore* st);
 // parallel array stays index-aligned. Returns true if stored.
 bool     subghz_rollback_store_add(RollbackStore* st, const RollbackSlot* s);
 uint8_t  subghz_rollback_store_count(const RollbackStore* st);
-// Ready = >=2 slots sharing one serial. Writes that serial to *same_serial
-// (the serial of the largest same-serial group; first-seen wins on a tie).
+// Per-store target: how many consecutive same-serial frames a resync needs.
+// Clamped to [2, ROLLBACK_MAX_SLOTS]. reset() sets ROLLBACK_DEFAULT_TARGET.
+void     subghz_rollback_set_target(RollbackStore* st, uint8_t n);
+uint8_t  subghz_rollback_target(const RollbackStore* st);
+// Ready when >= target_n slots share a serial AND (for target_n >= 3) their
+// counters form a consecutive run under a constant per-press step (c, c+d, c+2d
+// ...) — i.e. real consecutive presses, not same-serial captures with gaps that
+// cannot resync the receiver. For target_n <= 2 any two same-serial slots pass
+// (a pair is trivially a run — preserves the original 2-frame behavior). Writes
+// the winning serial to *same_serial.
+bool     subghz_rollback_ready_n(
+    const RollbackStore* st, uint8_t target_n, uint32_t* same_serial);
+// Convenience: ready_n using the store's own target_n (set via set_target).
 bool     subghz_rollback_ready(const RollbackStore* st, uint32_t* same_serial);
 // Fill out_idx with the slot indices whose serial == `serial`, in `order`.
 // Asc/Desc sort by counter; AsCaptured keeps store order. Returns count written.

@@ -30,9 +30,10 @@ static void subghz_scene_rollback_capture_draw(SubGhz* subghz) {
     uint32_t serial = 0;
     bool ready = subghz_rollback_ready(&subghz->rollback_store, &serial);
     uint8_t count = subghz_rollback_store_count(&subghz->rollback_store);
+    uint8_t need = subghz_rollback_target(&subghz->rollback_store);
 
     FuriString* body = furi_string_alloc();
-    furi_string_printf(body, "Captured %d (need 2+)\n", (int)count);
+    furi_string_printf(body, "Captured %d (need %d)\n", (int)count, (int)need);
     if(ready) {
         furi_string_cat_printf(body, "SN:0x%08lX\n", (unsigned long)serial);
         furi_string_cat_str(body, "Replay >");
@@ -43,8 +44,17 @@ static void subghz_scene_rollback_capture_draw(SubGhz* subghz) {
             subghz_scene_rollback_capture_button_cb,
             subghz);
     } else {
-        furi_string_cat_str(body, "Press a rolling fob 2x...");
+        furi_string_cat_printf(body, "Press a rolling fob %dx...", (int)need);
     }
+    // N selector: how many CONSECUTIVE presses the resync needs. 2 = most
+    // RollingPwn; 3 = Mazda CVE-2022-36945. Left cycles 2<->3. (For N>=3 the
+    // capture must be a consecutive run — the ready-gate enforces it.)
+    widget_add_button_element(
+        subghz->widget,
+        GuiButtonTypeLeft,
+        "Set N",
+        subghz_scene_rollback_capture_button_cb,
+        subghz);
     widget_add_string_multiline_element(
         subghz->widget, 0, 20, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(body));
     furi_string_free(body);
@@ -100,6 +110,12 @@ bool subghz_scene_rollback_capture_on_event(void* context, SceneManagerEvent eve
                 subghz->state_notifications = SubGhzNotificationStateIDLE;
                 scene_manager_next_scene(subghz->scene_manager, SubGhzSceneRollbackReplay);
             }
+            consumed = true;
+        } else if(event.event == GuiButtonTypeLeft) {
+            // Cycle the required consecutive-frame count 2 <-> 3 (RollingPwn vs Mazda).
+            uint8_t n = subghz_rollback_target(&subghz->rollback_store);
+            subghz_rollback_set_target(&subghz->rollback_store, n >= 3 ? 2 : 3);
+            subghz_scene_rollback_capture_draw(subghz);
             consumed = true;
         }
     } else if(event.type == SceneManagerEventTypeTick) {
