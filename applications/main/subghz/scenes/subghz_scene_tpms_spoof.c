@@ -35,14 +35,10 @@ bool subghz_scene_tpms_spoof_on_event(void* context, SceneManagerEvent event) {
     if(event.type == SceneManagerEventTypeCustom) {
         uint32_t idx = event.event;
         scene_manager_set_scene_state(subghz->scene_manager, SubGhzSceneTpmsSpoof, idx);
-        if(tpms_spoof_seed(subghz, idx)) {
-            // The synthetic frame is loaded into the radio; the Transmitter scene
-            // sends it (tap = one burst, hold OK = continuous). TX is user-gated.
-            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTransmitter);
-        } else {
-            furi_string_set(subghz->error_str, "TPMS spoof seed failed.");
-            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneShowError);
-        }
+        // Pass the picked protocol to the config scene via its scene state, then
+        // let the operator set ID / pressure / temperature / freq before TX.
+        scene_manager_set_scene_state(subghz->scene_manager, SubGhzSceneTpmsSpoofConfig, idx);
+        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTpmsSpoofConfig);
         return true;
     }
     return false;

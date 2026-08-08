@@ -38,16 +38,23 @@ const TpmsSpoofProto* tpms_spoof_proto_get(size_t index) {
     return index < COUNT_OF(k_protos) ? &k_protos[index] : NULL;
 }
 
-bool tpms_spoof_seed(SubGhz* subghz, size_t index) {
+bool tpms_spoof_seed(
+    SubGhz* subghz,
+    size_t index,
+    uint32_t id,
+    float pressure_bar,
+    float temperature_c,
+    uint32_t frequency) {
     const TpmsSpoofProto* p = tpms_spoof_proto_get(index);
     if(!p) return false;
 
-    // Build the frame from friendly fields, then pack -> raw 64-bit data + CRC.
+    // Build the frame from the operator's field values, then pack -> raw 64-bit
+    // data + CRC.
     TPMSBlockGeneric g = {0};
     g.protocol_name = p->protocol_name;
-    g.id = p->default_id;
-    g.pressure = p->default_pressure_bar;
-    g.temperature = p->default_temperature_c;
+    g.id = id;
+    g.pressure = pressure_bar;
+    g.temperature = temperature_c;
     g.data = 0; // status byte 0x00 == normal mode
     // (Schrader-only for now — extend when more packers land.)
     tpms_protocol_schrader_gg4_pack(&g); // sets g.data + g.data_count_bit = 64
@@ -63,11 +70,11 @@ bool tpms_spoof_seed(SubGhz* subghz, size_t index) {
     do {
         if(!flipper_format_write_header_cstr(ff, SUBGHZ_KEY_FILE_TYPE, SUBGHZ_KEY_FILE_VERSION))
             break;
-        uint32_t freq = p->frequency, bit = g.data_count_bit, id = g.id, batt = 0;
+        uint32_t freq = frequency, bit = g.data_count_bit, id_out = g.id, batt = 0;
         if(!flipper_format_write_uint32(ff, "Frequency", &freq, 1)) break;
         if(!flipper_format_write_string_cstr(ff, "Preset", p->preset_name)) break;
         if(!flipper_format_write_string_cstr(ff, "Protocol", p->protocol_name)) break;
-        if(!flipper_format_write_uint32(ff, "Id", &id, 1)) break;
+        if(!flipper_format_write_uint32(ff, "Id", &id_out, 1)) break;
         if(!flipper_format_write_uint32(ff, "Bit", &bit, 1)) break;
         if(!flipper_format_write_hex(ff, "Data", data_be, sizeof(data_be))) break;
         if(!flipper_format_write_uint32(ff, "Batt", &batt, 1)) break;

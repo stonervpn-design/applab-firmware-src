@@ -63,6 +63,7 @@ ADD_SCENE(subghz, signal_settings, SignalSettings)
 ADD_SCENE(subghz, tpms_edit, TpmsEdit)
 #ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, tpms_spoof, TpmsSpoof) // from-scratch TPMS spoofer (private)
+ADD_SCENE(subghz, tpms_spoof_config, TpmsSpoofConfig) // spoofer field editor (private)
 #endif
 #ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, vuln_makes, VulnMakes)

@@ -27,10 +27,16 @@ typedef struct {
 size_t tpms_spoof_proto_count(void);
 const TpmsSpoofProto* tpms_spoof_proto_get(size_t index); // NULL if out of range
 
-// Seed a synthetic frame for proto `index`: build the generic from the defaults,
-// run the protocol packer (fields -> data + CRC), serialize to a temp .sub, load
-// it, and leave the loaded item selected so the caller can open the TPMS view.
-// Returns true on success. (Implemented in tpms_spoof.c; needs furi.)
-bool tpms_spoof_seed(SubGhz* subghz, size_t index);
+// Seed a synthetic frame for proto `index` from explicit field values: run the
+// protocol packer (id/pressure/temp -> data + CRC), write a standard SubGhz key
+// .sub by hand, and load it into the radio for the Transmitter to send. Returns
+// true on success. (Implemented in tpms_spoof.c; needs furi.)
+bool tpms_spoof_seed(
+    SubGhz* subghz,
+    size_t index,
+    uint32_t id,
+    float pressure_bar,
+    float temperature_c,
+    uint32_t frequency);
 
 #endif // PUBLIC_BUILD
