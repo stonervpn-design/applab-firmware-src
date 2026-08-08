@@ -89,6 +89,12 @@ void subghz_scene_start_on_enter(void* context) {
         SubmenuIndexVehicleVulns,
         subghz_scene_start_submenu_callback,
         subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "TPMS Spoofer",
+        SubmenuIndexTpmsSpoof,
+        subghz_scene_start_submenu_callback,
+        subghz);
 #endif
     submenu_add_item(
         subghz->submenu,
@@ -254,6 +260,11 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexVehicleVulns);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneVulnMakes);
+            return true;
+        } else if(event.event == SubmenuIndexTpmsSpoof) {
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexTpmsSpoof);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTpmsSpoof);
             return true;
         }
 #endif

@@ -19,4 +19,5 @@ enum SubmenuIndex {
     SubmenuIndexCarKeys,
     SubmenuIndexSpectrum,
     SubmenuIndexResumeBrute,
+    SubmenuIndexTpmsSpoof,
 };
