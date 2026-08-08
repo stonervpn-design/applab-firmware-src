@@ -1,9 +1,12 @@
 #include "../subghz_i.h"
 #include <storage/storage.h>
+
+// "My Garage" = car-clone storage (saved clone/replay .subs) — PRIVATE builds
+// only. The whole scene (incl. its car headers below) compiles to nothing in
+// public; its ADD_SCENE + the only route to it (car_keys) are also gated.
 #ifndef PUBLIC_BUILD
 #include <flipper_format.h>
 #include <lib/subghz/protocols/vag.h>
-#endif
 
 // "My Garage": a submenu of saved clone .subs under /ext/subghz/garage/.
 // Selecting one loads it and re-opens the fob emulator (counter resumes).
@@ -120,3 +123,5 @@ void subghz_scene_garage_on_exit(void* context) {
     SubGhz* subghz = context;
     submenu_reset(subghz->submenu);
 }
+
+#endif /* !PUBLIC_BUILD — car-clone storage, private only */

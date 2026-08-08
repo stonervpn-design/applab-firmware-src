@@ -3,9 +3,12 @@ ADD_SCENE(subghz, receiver, Receiver)
 ADD_SCENE(subghz, receiver_config, ReceiverConfig)
 ADD_SCENE(subghz, receiver_info, ReceiverInfo)
 ADD_SCENE(subghz, analyze, Analyze)
+#ifndef PUBLIC_BUILD
+// Car-clone attack surface (analyze a CAPTURED fob -> clone/save/emulate/brute)
+// + RollBack replay — PRIVATE only. The general KeeLoq builder (Add Manually ->
+// keeloq_mfr/set_*/keeloq_action/keeloq_fob) stays public.
 ADD_SCENE(subghz, rolling_analyzer, RollingAnalyzer)
 ADD_SCENE(subghz, psa_bruteforce, PsaBruteforce)
-#ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, rollback_capture, RollbackCapture)
 ADD_SCENE(subghz, rollback_replay, RollbackReplay)
 #endif
@@ -30,8 +33,8 @@ ADD_SCENE(subghz, set_jump, SetJump)
 ADD_SCENE(subghz, keeloq_fob, KeeloqFob)
 #ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, car_keys, CarKeys)
-#endif
 ADD_SCENE(subghz, garage, Garage)
+#endif
 ADD_SCENE(subghz, set_seed, SetSeed)
 ADD_SCENE(subghz, frequency_analyzer, FrequencyAnalyzer)
 #ifndef PUBLIC_BUILD

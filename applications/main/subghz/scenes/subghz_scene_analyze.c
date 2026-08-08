@@ -285,7 +285,9 @@ void subghz_scene_analyze_on_enter(void* context) {
         subghz->widget, 0, 13, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(body));
     furi_string_free(body);
 
-    // Spoke: for rolling / PSA captures, offer the existing deeper tool.
+#ifndef PUBLIC_BUILD
+    // Spoke: for rolling / PSA captures, offer the deeper tool (rolling-analyzer
+    // clone/save or PSA brute) — PRIVATE only (car-clone attack surface).
     if(subghz_scene_analyze_is_dynamic(subghz)) {
         widget_add_button_element(
             subghz->widget,
@@ -294,6 +296,7 @@ void subghz_scene_analyze_on_enter(void* context) {
             subghz_scene_analyze_button_callback,
             subghz);
     }
+#endif
 
 #ifndef PUBLIC_BUILD
     // Spoke: fixed-code with a matching framed brute -> guided Attack (PRIVATE only).
@@ -313,6 +316,7 @@ void subghz_scene_analyze_on_enter(void* context) {
 bool subghz_scene_analyze_on_event(void* context, SceneManagerEvent event) {
     SubGhz* subghz = context;
     if(event.type == SceneManagerEventTypeCustom) {
+#ifndef PUBLIC_BUILD
         if(event.event == SubGhzCustomEventSceneAnalyzeDetails) {
             if(subghz_scene_analyze_is_psa(subghz)) {
                 scene_manager_next_scene(subghz->scene_manager, SubGhzScenePsaBruteforce);
@@ -321,6 +325,7 @@ bool subghz_scene_analyze_on_event(void* context, SceneManagerEvent event) {
             }
             return true;
         }
+#endif
 #ifndef PUBLIC_BUILD
         if(event.event == SubGhzCustomEventSceneAnalyzeAttack) {
             if(s_analyze_attack >= 0) {

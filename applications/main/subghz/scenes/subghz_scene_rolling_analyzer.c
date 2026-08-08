@@ -9,6 +9,11 @@
 #include <lib/flipper_format/flipper_format.h>
 #include <string.h>
 
+// Rolling-Code Analyzer = the car-clone attack surface (clone/save/emulate a
+// CAPTURED rolling fob). PRIVATE builds only — reached from the analyze scene's
+// guarded Details spoke. The general KeeLoq builder (Add Manually) stays public.
+#ifndef PUBLIC_BUILD
+
 #define TAG "SubGhzSceneRollingAnalyzer"
 
 // Read-only Rolling-Code Analyzer.
@@ -420,3 +425,5 @@ void subghz_scene_rolling_analyzer_on_exit(void* context) {
     SubGhz* subghz = context;
     widget_reset(subghz->widget);
 }
+
+#endif /* !PUBLIC_BUILD — car-clone attack surface, private only */
