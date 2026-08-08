@@ -72,6 +72,8 @@ typedef enum {
 
     SubGhzCustomEventSceneRollingAnalyzerClone,
     SubGhzCustomEventSceneRollingAnalyzerSave, /* Rolling-Code Analyzer -> KeeLoq no-desync clone */
+    SubGhzCustomEventSceneRollingAnalyzerNext, /* keyless-predictable fob -> synthesize next code */
+    SubGhzCustomEventSceneRollingAnalyzerBurst, /* -> next N consecutive codes in one action */
 
     SubGhzCustomEventSceneRollbackUpdate,
     SubGhzCustomEventSceneRollbackDone,
