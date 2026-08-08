@@ -4,6 +4,10 @@
 
 #include <lib/subghz/protocols/raw.h>
 
+#ifndef PUBLIC_BUILD
+#include "../helpers/subbrute_resume.h" // resumable brute sessions (PRIVATE-only)
+#endif
+
 void subghz_scene_start_submenu_callback(void* context, uint32_t index) {
     SubGhz* subghz = context;
     view_dispatcher_send_custom_event(subghz->view_dispatcher, index);
@@ -51,6 +55,17 @@ void subghz_scene_start_on_enter(void* context) {
         SubmenuIndexBruteforce,
         subghz_scene_start_submenu_callback,
         subghz);
+#ifndef PUBLIC_BUILD
+    // Resumable brute (PRIVATE-only): only offered when a saved checkpoint exists.
+    if(subbrute_resume_has()) {
+        submenu_add_item(
+            subghz->submenu,
+            "Resume Brute",
+            SubmenuIndexResumeBrute,
+            subghz_scene_start_submenu_callback,
+            subghz);
+    }
+#endif
     submenu_add_item(
         subghz->submenu,
         "RollBack",
@@ -165,7 +180,40 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexBruteforce);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneBfStart);
             return true;
-        } else if(event.event == SubmenuIndexSaved) {
+        }
+#ifndef PUBLIC_BUILD
+        else if(event.event == SubmenuIndexResumeBrute) {
+            // Resume a saved brute checkpoint (PRIVATE-only): reconstruct the
+            // attack exactly like bf_start's MenuSelected path, seed the saved
+            // step, then jump straight to the setup/run scene. On low heap the
+            // SubBrute engine is NULL — guard, and no-op if the record is gone.
+            SubBruteResume r;
+            if(subghz->subbrute_device && subghz->subbrute_worker &&
+               subghz->subbrute_settings && subbrute_resume_load(&r)) {
+                subghz->subbrute_settings->last_index = r.attack;
+                if(subbrute_device_attack_set(
+                       subghz->subbrute_device, r.attack, r.extra_repeats) ==
+                   SubBruteFileResultOk) {
+                    subghz->subbrute_device->current_step = r.current_step;
+                    if(subbrute_worker_init_default_attack(
+                           subghz->subbrute_worker,
+                           r.attack,
+                           r.current_step,
+                           subghz->subbrute_device->protocol_info,
+                           subghz->subbrute_device->extra_repeats)) {
+                        scene_manager_set_scene_state(
+                            subghz->scene_manager,
+                            SubGhzSceneStart,
+                            SubmenuIndexResumeBrute);
+                        scene_manager_next_scene(
+                            subghz->scene_manager, SubGhzSceneBfSetupAttack);
+                    }
+                }
+            }
+            return true;
+        }
+#endif
+        else if(event.event == SubmenuIndexSaved) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexSaved);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSaved);

@@ -1,7 +1,33 @@
 #include "../subghz_i.h"
 #include "../helpers/subbrute_custom_event.h"
+#ifndef PUBLIC_BUILD
+#include "../helpers/subbrute_resume.h" // resumable brute sessions (PRIVATE-only)
+#endif
 
 #define TAG "SubGhzSceneBfRunAttack"
+
+#ifndef PUBLIC_BUILD
+#define SUBBRUTE_RESUME_CHECKPOINT_MS 10000u // save a resume point at most this often
+
+static uint32_t s_resume_last_tick; // throttles checkpoint flash writes (UI thread)
+
+// Snapshot the live sweep and persist it. Called only from the UI/scene thread
+// (Tick / on_exit), never the worker TX loop. Non-resumable attacks
+// (DeBruijn / LoadFile) are skipped by subbrute_resume_is_valid.
+static void subghz_scene_bf_run_attack_checkpoint(SubGhz* subghz) {
+    SubBruteDevice* d = subghz->subbrute_device;
+    if(!d) return;
+    SubBruteResume r = {
+        .schema_version = SUBBRUTE_RESUME_SCHEMA,
+        .attack = d->attack,
+        .current_step = d->current_step,
+        .extra_repeats = d->extra_repeats,
+        .two_bytes = d->two_bytes ? 1u : 0u,
+        .opencode = d->opencode,
+    };
+    if(subbrute_resume_is_valid(&r)) subbrute_resume_save(&r);
+}
+#endif
 
 static void subghz_scene_bf_run_attack_callback(SubBruteCustomEvent event, void* context) {
     furi_assert(context);
@@ -30,6 +56,14 @@ void subghz_scene_bf_run_attack_on_exit(void* context) {
     SubGhz* subghz = (SubGhz*)context;
     notification_message(subghz->notifications, &sequence_blink_stop);
     subbrute_worker_stop(subghz->subbrute_worker);
+#ifndef PUBLIC_BUILD
+    // Persist a final checkpoint if the sweep is unfinished (a completed sweep was
+    // already cleared on TransmitFinished). current_step+1 < max_value == work left.
+    SubBruteDevice* d = subghz->subbrute_device;
+    if(d && d->max_value > 0 && (d->current_step + 1) < d->max_value) {
+        subghz_scene_bf_run_attack_checkpoint(subghz);
+    }
+#endif
 }
 
 void subghz_scene_bf_run_attack_on_enter(void* context) {
@@ -54,6 +88,9 @@ void subghz_scene_bf_run_attack_on_enter(void* context) {
             notification_message(subghz->notifications, &sequence_blink_start_yellow);
         }
     }
+#ifndef PUBLIC_BUILD
+    s_resume_last_tick = furi_get_tick(); // arm the checkpoint throttle
+#endif
 }
 
 bool subghz_scene_bf_run_attack_on_event(void* context, SceneManagerEvent event) {
@@ -70,7 +107,9 @@ bool subghz_scene_bf_run_attack_on_event(void* context, SceneManagerEvent event)
         if(event.event == SubBruteCustomEventTypeTransmitFinished) {
             notification_message(subghz->notifications, &sequence_display_backlight_on);
             notification_message(subghz->notifications, &sequence_double_vibro);
-
+#ifndef PUBLIC_BUILD
+            subbrute_resume_clear(); // sweep complete — nothing left to resume
+#endif
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneBfSetupAttack);
         } else if(
             event.event == SubBruteCustomEventTypeTransmitNotStarted ||
@@ -96,7 +135,14 @@ bool subghz_scene_bf_run_attack_on_event(void* context, SceneManagerEvent event)
         uint64_t step = subbrute_worker_get_step(subghz->subbrute_worker);
         subghz->subbrute_device->current_step = step;
         subbrute_attack_view_set_current_step(view, step);
-
+#ifndef PUBLIC_BUILD
+        // Throttled resume checkpoint (UI thread; never the worker TX loop).
+        uint32_t now = furi_get_tick();
+        if(now - s_resume_last_tick >= furi_ms_to_ticks(SUBBRUTE_RESUME_CHECKPOINT_MS)) {
+            s_resume_last_tick = now;
+            subghz_scene_bf_run_attack_checkpoint(subghz);
+        }
+#endif
         consumed = true;
     }
 
