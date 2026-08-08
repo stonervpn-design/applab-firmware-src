@@ -262,9 +262,14 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneVulnMakes);
             return true;
         } else if(event.event == SubmenuIndexTpmsSpoof) {
+            // TPMS Spoofer = listen for real TPMS sensors on 433.92 FSK, then spoof a
+            // picked-up one (edit pressure/temp/ID + retransmit via the tpms_info view).
+            // Reuses the receiver in a TPMS-only scan mode; NOT a from-scratch generator.
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexTpmsSpoof);
-            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTpmsSpoof);
+            subghz->tpms_scan_mode = true;
+            subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiver);
             return true;
         }
 #endif

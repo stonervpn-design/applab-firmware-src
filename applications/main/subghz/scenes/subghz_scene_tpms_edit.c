@@ -1,7 +1,37 @@
 #include "../subghz_i.h"
 #include <lib/subghz/protocols/schrader_gg4.h>
+#ifndef PUBLIC_BUILD
+#include <lib/subghz/protocols/tpms_ford.h>
+#include <lib/subghz/protocols/tpms_renault.h>
+#include <lib/subghz/protocols/tpms_citroen.h>
+#include <lib/subghz/protocols/tpms_pmv107j.h>
+#endif
 
 #define TAG "SubGhzSceneTpmsEdit"
+
+// Re-encode the edited TPMS frame with the correct per-protocol packer so the
+// modified pressure/temp/ID is transmittable (not just replayed). Public keeps
+// Schrader only (unchanged); the private build re-encodes all five packable
+// protocols — that is what makes "spoof a picked-up sensor" work for Ford/
+// Renault/Citroen/Toyota, not just Schrader.
+static void subghz_scene_tpms_edit_repack(const char* protocol_name, TPMSBlockGeneric* g) {
+    if(!protocol_name) return;
+    if(strcmp(protocol_name, TPMS_PROTOCOL_SCHRADER_GG4_NAME) == 0) {
+        tpms_protocol_schrader_gg4_pack(g);
+    }
+#ifndef PUBLIC_BUILD
+    else if(strcmp(protocol_name, TPMS_PROTOCOL_FORD_NAME) == 0) {
+        tpms_protocol_ford_pack(g);
+    } else if(strcmp(protocol_name, TPMS_PROTOCOL_RENAULT_NAME) == 0) {
+        tpms_protocol_renault_pack(g);
+    } else if(strcmp(protocol_name, TPMS_PROTOCOL_CITROEN_NAME) == 0) {
+        tpms_protocol_citroen_pack(g);
+    } else if(strcmp(protocol_name, TPMS_PROTOCOL_PMV107J_NAME) == 0) {
+        tpms_protocol_pmv107j_pack(g);
+    }
+#endif
+    // Unknown/unpackable protocol: leave generic.data as loaded (replay unchanged).
+}
 
 static void
     subghz_scene_tpms_edit_number_callback(void* context, int32_t number) {
@@ -118,20 +148,18 @@ bool subghz_scene_tpms_edit_on_event(void* context, SceneManagerEvent event) {
     // field, so reset it explicitly to match what we want serialized back.
     generic.protocol_name = protocol_name;
 
-    // Only Schrader GG4 has an encoder. Packing forces the Schrader 64-bit/CRC-8
-    // layout, so running it on a Citroen/Ford/Renault/PMV107J entry corrupts its
-    // bit-count/CRC/data and breaks any later reload. Repack only for Schrader.
-    bool is_schrader = (strcmp(protocol_name, TPMS_PROTOCOL_SCHRADER_GG4_NAME) == 0);
-
+    // Re-encode with the correct per-protocol packer (was Schrader-only; the other
+    // four had no encoder until this session's packers). subghz_scene_tpms_edit_repack
+    // dispatches by protocol name and no-ops for anything unpackable.
     switch(subghz->tpms_edit_field) {
     case SubGhzViewTpmsFieldPressure:
         // decibar → bar
         generic.pressure = (float)subghz->tpms_edit_number_value / 10.0f;
-        if(is_schrader) tpms_protocol_schrader_gg4_pack(&generic);
+        subghz_scene_tpms_edit_repack(protocol_name, &generic);
         break;
     case SubGhzViewTpmsFieldTemperature:
         generic.temperature = (float)subghz->tpms_edit_number_value;
-        if(is_schrader) tpms_protocol_schrader_gg4_pack(&generic);
+        subghz_scene_tpms_edit_repack(protocol_name, &generic);
         break;
     case SubGhzViewTpmsFieldId: {
         uint32_t id = ((uint32_t)subghz->tpms_edit_id_bytes[0] << 24) |
@@ -139,7 +167,7 @@ bool subghz_scene_tpms_edit_on_event(void* context, SceneManagerEvent event) {
                       ((uint32_t)subghz->tpms_edit_id_bytes[2] << 8) |
                       ((uint32_t)subghz->tpms_edit_id_bytes[3]);
         generic.id = id;
-        if(is_schrader) tpms_protocol_schrader_gg4_pack(&generic);
+        subghz_scene_tpms_edit_repack(protocol_name, &generic);
         break;
     }
     default:

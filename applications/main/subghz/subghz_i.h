@@ -144,6 +144,9 @@ struct SubGhz {
     uint8_t car_keys_prev_car_mode;
     // TRUE when the fob scene is opened from a saved Garage clone (skip rebuild).
     bool keeloq_fob_from_garage;
+    // TRUE when the receiver was entered via "TPMS Spoofer": tune 433.92 FSK +
+    // only list TPMS-sensor decodes (private-only scanner). See subghz_scene_receiver.c.
+    bool tpms_scan_mode;
 
     SubGhzFileEncoderWorker* decode_raw_file_worker_encoder;
 

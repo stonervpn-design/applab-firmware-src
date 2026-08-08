@@ -111,6 +111,14 @@ static void subghz_scene_add_to_history_callback(
     SubGhz* subghz = context;
     s_last_decode_tick = furi_get_tick(); // a decoder matched -> the signal is decoding
 
+    // TPMS scanner: only admit TPMS-sensor decodes to the list (drop garage remotes
+    // and everything else on the band). Set only when entered via the private
+    // "TPMS Spoofer" menu; the general Read receiver leaves tpms_scan_mode false.
+    if(subghz->tpms_scan_mode && decoder_base->protocol->type != SubGhzProtocolTypeTpms) {
+        subghz_receiver_reset(receiver);
+        return;
+    }
+
     // The check can be moved to /lib/subghz/receiver.c, but may result in false positives
     if((decoder_base->protocol->flag & subghz->ignore_filter) == 0) {
         SubGhzHistory* history = subghz->history;
@@ -201,11 +209,18 @@ void subghz_scene_receiver_on_enter(void* context) {
     FuriString* item_time = furi_string_alloc();
 
     if(subghz_rx_key_state_get(subghz) == SubGhzRxKeyStateIDLE) {
-        subghz_txrx_set_preset_internal(
-            subghz->txrx,
-            subghz->last_settings->frequency,
-            subghz->last_settings->preset_index,
-            subghz->last_settings->tx_power);
+        if(subghz->tpms_scan_mode) {
+            // Force the standard TPMS modulation (433.92 MHz, 2-FSK ~47.6 kHz dev)
+            // regardless of last_settings, so nearby sensors decode.
+            subghz_txrx_set_preset(
+                subghz->txrx, "FuriHalSubGhzPreset2FSKDev238Async", 433920000, NULL, 0);
+        } else {
+            subghz_txrx_set_preset_internal(
+                subghz->txrx,
+                subghz->last_settings->frequency,
+                subghz->last_settings->preset_index,
+                subghz->last_settings->tx_power);
+        }
 
         subghz->filter = subghz->last_settings->filter;
         subghz_txrx_receiver_set_filter(subghz->txrx, subghz->filter);
@@ -245,8 +260,8 @@ void subghz_scene_receiver_on_enter(void* context) {
         subghz->state_notifications = SubGhzNotificationStateRx;
     }
 
-    // Check if hopping was enabled
-    if(subghz->last_settings->enable_hopping) {
+    // Check if hopping was enabled (never hop in TPMS scan mode — stay on 433.92).
+    if(subghz->last_settings->enable_hopping && !subghz->tpms_scan_mode) {
         subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateRunning);
     } else {
         subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
@@ -379,5 +394,8 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
 }
 
 void subghz_scene_receiver_on_exit(void* context) {
-    UNUSED(context);
+    SubGhz* subghz = context;
+    // Leaving the receiver clears TPMS scan mode so the next normal "Read" tunes
+    // from last_settings again (not forced to 433.92 FSK / TPMS-only).
+    subghz->tpms_scan_mode = false;
 }
