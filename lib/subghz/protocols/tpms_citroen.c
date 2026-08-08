@@ -155,6 +155,33 @@ static void citroen_analyze(TPMSProtocolDecoderCitroen* instance) {
     instance->generic.battery_low = b[8];
 }
 
+void tpms_protocol_citroen_pack(TPMSBlockGeneric* g) {
+    furi_assert(g);
+    // pressure: bar = b[6]*1.364*0.01 -> raw = bar/0.01364.
+    int p_raw = (int)(g->pressure / 0.01364f + 0.5f);
+    if(p_raw < 0) p_raw = 0;
+    if(p_raw > 0xFF) p_raw = 0xFF;
+    int t = (int)(g->temperature + (g->temperature >= 0 ? 0.5f : -0.5f)) + 50; // b[7] = C + 50
+    if(t < 0) t = 0;
+    if(t > 0xFF) t = 0xFF;
+    // generic.data holds b[2..9]; the encoder computes b[1] (XOR checksum) and
+    // b[0]=0. The decoder folds b[1] into the ID's top byte, so only 24 ID bits
+    // (b[2..4]) are freely set from scratch.
+    uint8_t b[8]; // = frame b[2..9]
+    b[0] = (uint8_t)((g->id >> 16) & 0xFF); // b[2]
+    b[1] = (uint8_t)((g->id >> 8) & 0xFF); // b[3]
+    b[2] = (uint8_t)(g->id & 0xFF); // b[4]
+    b[3] = 0; // b[5]
+    b[4] = (uint8_t)p_raw; // b[6]
+    b[5] = (uint8_t)t; // b[7]
+    b[6] = 0; // b[8] (battery)
+    b[7] = 0; // b[9]
+    uint64_t data = 0;
+    for(int i = 0; i < 8; i++) data = (data << 8) | b[i];
+    g->data = data;
+    g->data_count_bit = 80;
+}
+
 void tpms_protocol_decoder_citroen_feed(void* context, bool level, uint32_t duration) {
     furi_assert(context);
     TPMSProtocolDecoderCitroen* instance = context;

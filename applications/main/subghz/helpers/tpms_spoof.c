@@ -5,6 +5,9 @@
 #include "../subghz_i.h"
 #include <lib/subghz/protocols/schrader_gg4.h>
 #include <lib/subghz/protocols/tpms_ford.h>
+#include <lib/subghz/protocols/tpms_renault.h>
+#include <lib/subghz/protocols/tpms_citroen.h>
+#include <lib/subghz/protocols/tpms_pmv107j.h>
 #include <lib/subghz/protocols/tpms_generic.h>
 #include <lib/subghz/types.h>
 #include <string.h>
@@ -17,9 +20,10 @@
 // resolves this name to CC1101 registers.
 #define TPMS_SPOOF_PRESET_NAME "FuriHalSubGhzPreset2FSKDev238Async"
 
-// Only protocols with a field->data packer can be spoofed from scratch. Today
-// that is Schrader GG4 (tpms_protocol_schrader_gg4_pack). Ford/Toyota/Renault/
-// Citroen need packers written before they can be added here.
+// Only protocols with a field->data packer can be spoofed from scratch. Each
+// packer is the inverse of its decoder's analyze, and produces bytes that pass
+// that decoder's check gate (CRC / checksum / integrity byte) — verified in
+// tools/tpms_spoof/multi_pack_replica.py.
 static const TpmsSpoofProto k_protos[] = {
     {
         .label = "Schrader GG4",
@@ -39,6 +43,33 @@ static const TpmsSpoofProto k_protos[] = {
         .default_pressure_bar = 2.20f,
         .default_temperature_c = 20.0f,
     },
+    {
+        .label = "Renault TPMS",
+        .protocol_name = TPMS_PROTOCOL_RENAULT_NAME,
+        .preset_name = TPMS_SPOOF_PRESET_NAME,
+        .frequency = 433920000, // EU
+        .default_id = 0x00123456, // 24-bit sensor id
+        .default_pressure_bar = 2.20f,
+        .default_temperature_c = 20.0f,
+    },
+    {
+        .label = "Citroen TPMS",
+        .protocol_name = TPMS_PROTOCOL_CITROEN_NAME,
+        .preset_name = TPMS_SPOOF_PRESET_NAME,
+        .frequency = 433920000, // EU; PSA group (Citroen/Peugeot)
+        .default_id = 0x00ABCDEF, // low 24 bits are free; top byte = XOR checksum
+        .default_pressure_bar = 2.20f,
+        .default_temperature_c = 20.0f,
+    },
+    {
+        .label = "Toyota PMV-107J",
+        .protocol_name = TPMS_PROTOCOL_PMV107J_NAME,
+        .preset_name = TPMS_SPOOF_PRESET_NAME,
+        .frequency = 433920000, // EU; 315 MHz (US/JP) common on Toyota/Lexus
+        .default_id = 0x0123456, // 28-bit sensor id
+        .default_pressure_bar = 2.20f,
+        .default_temperature_c = 20.0f,
+    },
 };
 
 // Dispatch the friendly-fields -> data+CRC packer by protocol. Only protocols
@@ -50,6 +81,18 @@ static bool tpms_spoof_pack(const char* protocol_name, TPMSBlockGeneric* g) {
     }
     if(strcmp(protocol_name, TPMS_PROTOCOL_FORD_NAME) == 0) {
         tpms_protocol_ford_pack(g);
+        return true;
+    }
+    if(strcmp(protocol_name, TPMS_PROTOCOL_RENAULT_NAME) == 0) {
+        tpms_protocol_renault_pack(g);
+        return true;
+    }
+    if(strcmp(protocol_name, TPMS_PROTOCOL_CITROEN_NAME) == 0) {
+        tpms_protocol_citroen_pack(g);
+        return true;
+    }
+    if(strcmp(protocol_name, TPMS_PROTOCOL_PMV107J_NAME) == 0) {
+        tpms_protocol_pmv107j_pack(g);
         return true;
     }
     return false;

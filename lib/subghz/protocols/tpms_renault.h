@@ -35,3 +35,9 @@ void tpms_protocol_encoder_renault_stop(void* context);
 LevelDuration tpms_protocol_encoder_renault_yield(void* context);
 SubGhzProtocolStatus
     tpms_protocol_encoder_renault_deserialize(void* context, FlipperFormat* flipper_format);
+
+/** Pack friendly fields (id / pressure / temperature) into generic->data + the
+ * Renault CRC-8 (inverse of renault_analyze). The encoder recovers b[0] from the
+ * CRC. Used by the TPMS spoofer to build a frame from scratch. Sets data +
+ * data_count_bit = 72. */
+void tpms_protocol_renault_pack(TPMSBlockGeneric* generic);

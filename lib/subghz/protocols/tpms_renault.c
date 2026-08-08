@@ -148,6 +148,32 @@ static void renault_analyze(TPMSProtocolDecoderRenault* instance) {
     instance->generic.battery_low = TPMS_NO_BATT;
 }
 
+void tpms_protocol_renault_pack(TPMSBlockGeneric* g) {
+    furi_assert(g);
+    // pressure (10-bit): b[0] bits1:0 = MSB, b[1] = LSB. bar = p_raw*0.75*0.01.
+    int p_raw = (int)(g->pressure / 0.0075f + 0.5f);
+    if(p_raw < 0) p_raw = 0;
+    if(p_raw > 0x3FF) p_raw = 0x3FF;
+    int t = (int)(g->temperature + (g->temperature >= 0 ? 0.5f : -0.5f)) + 30; // b[2] = C + 30
+    if(t < 0) t = 0;
+    if(t > 0xFF) t = 0xFF;
+    uint8_t b[9];
+    b[0] = (uint8_t)((p_raw >> 8) & 0x03);
+    b[1] = (uint8_t)(p_raw & 0xFF);
+    b[2] = (uint8_t)t;
+    b[3] = (uint8_t)(g->id & 0xFF);
+    b[4] = (uint8_t)((g->id >> 8) & 0xFF);
+    b[5] = (uint8_t)((g->id >> 16) & 0xFF);
+    b[6] = 0;
+    b[7] = 0;
+    b[8] = subghz_protocol_blocks_crc8(b, 8, 0x07, 0x00);
+    // generic.data holds b[1..8]; the encoder recovers b[0] from the CRC.
+    uint64_t data = 0;
+    for(int i = 1; i <= 8; i++) data = (data << 8) | b[i];
+    g->data = data;
+    g->data_count_bit = 72;
+}
+
 void tpms_protocol_decoder_renault_feed(void* context, bool level, uint32_t duration) {
     furi_assert(context);
     TPMSProtocolDecoderRenault* instance = context;

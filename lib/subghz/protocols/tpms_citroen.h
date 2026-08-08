@@ -35,3 +35,9 @@ void tpms_protocol_encoder_citroen_stop(void* context);
 LevelDuration tpms_protocol_encoder_citroen_yield(void* context);
 SubGhzProtocolStatus
     tpms_protocol_encoder_citroen_deserialize(void* context, FlipperFormat* flipper_format);
+
+/** Pack friendly fields (id / pressure / temperature) into generic->data. The
+ * encoder computes b[1] (XOR checksum) — which the decoder folds into the ID's
+ * top byte, so only the low 24 ID bits are freely set. Inverse of
+ * citroen_analyze. Used by the TPMS spoofer. Sets data + data_count_bit = 80. */
+void tpms_protocol_citroen_pack(TPMSBlockGeneric* generic);

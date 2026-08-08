@@ -35,3 +35,9 @@ void tpms_protocol_encoder_pmv107j_stop(void* context);
 LevelDuration tpms_protocol_encoder_pmv107j_yield(void* context);
 SubGhzProtocolStatus
     tpms_protocol_encoder_pmv107j_deserialize(void* context, FlipperFormat* flipper_format);
+
+/** Pack friendly fields (id / pressure / temperature) into generic->data + the
+ * Toyota CRC-8 (poly 0x13). Sets b[6] = ~b[5] to satisfy the decoder's integrity
+ * check; the encoder recovers the 2-bit b[0] from the CRC. Inverse of
+ * pmv107j_analyze. Used by the TPMS spoofer. Sets data + data_count_bit = 66. */
+void tpms_protocol_pmv107j_pack(TPMSBlockGeneric* generic);

@@ -196,6 +196,34 @@ static void pmv107j_analyze(TPMSProtocolDecoderPmv107j* instance) {
     instance->generic.temperature = (float)((int)b[7] - 40);
 }
 
+void tpms_protocol_pmv107j_pack(TPMSBlockGeneric* g) {
+    furi_assert(g);
+    uint32_t id = g->id & 0x0FFFFFFF; // 28-bit ID
+    // bar = (raw-40)*2.48*0.01 -> raw = bar*100/2.48 + 40
+    int p_raw = (int)(g->pressure * 100.0f / 2.48f + 40.0f + 0.5f);
+    if(p_raw < 0) p_raw = 0;
+    if(p_raw > 0xFF) p_raw = 0xFF;
+    int t = (int)(g->temperature + (g->temperature >= 0 ? 0.5f : -0.5f)) + 40; // b[7] = C + 40
+    if(t < 0) t = 0;
+    if(t > 0xFF) t = 0xFF;
+    uint8_t batt = g->battery_low ? 1 : 0;
+    uint8_t b[9];
+    b[0] = (uint8_t)((id >> 26) & 0x03);
+    b[1] = (uint8_t)((id >> 18) & 0xFF);
+    b[2] = (uint8_t)((id >> 10) & 0xFF);
+    b[3] = (uint8_t)((id >> 2) & 0xFF);
+    b[4] = (uint8_t)(((id & 0x03) << 6) | ((batt & 0x01) << 5));
+    b[5] = (uint8_t)p_raw;
+    b[6] = (uint8_t)(p_raw ^ 0xFF); // integrity: decoder requires b[6] == ~b[5]
+    b[7] = (uint8_t)t;
+    b[8] = subghz_protocol_blocks_crc8(b, 8, 0x13, 0x00);
+    // generic.data holds b[1..8]; the encoder recovers the 2-bit b[0] from the CRC.
+    uint64_t data = 0;
+    for(int i = 1; i <= 8; i++) data = (data << 8) | b[i];
+    g->data = data;
+    g->data_count_bit = 66;
+}
+
 void tpms_protocol_decoder_pmv107j_feed(void* context, bool level, uint32_t duration) {
     furi_assert(context);
     UNUSED(level);
