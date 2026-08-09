@@ -78,6 +78,17 @@ bool subbrute_worker_is_fast(SubBruteWorker* instance);
  * @param active Whether to engage the mask brute.
  */
 void subbrute_worker_set_func_mask(SubBruteWorker* instance, uint64_t var_mask, bool active);
+
+/** Recompute the sweep space (max_value) from the current mask without a full
+ * re-init — lets the mask be toggled after a LoadFile attack is configured.
+ * Resets step to 0. No-op on non-file attacks. */
+void subbrute_worker_apply_func_mask(SubBruteWorker* instance);
+
+/** True if the function-mask brute is currently engaged. */
+bool subbrute_worker_is_masked(SubBruteWorker* instance);
+
+/** Number of variable (masked) bits currently set, or 0 when unmasked. */
+uint8_t subbrute_worker_get_mask_bits(SubBruteWorker* instance);
 #endif
 
 /**

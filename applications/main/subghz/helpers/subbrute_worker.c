@@ -87,6 +87,33 @@ void subbrute_worker_set_func_mask(SubBruteWorker* instance, uint64_t var_mask, 
     instance->mask_var = var_mask;
     instance->mask_active = active;
 }
+
+void subbrute_worker_apply_func_mask(SubBruteWorker* instance) {
+    furi_assert(instance);
+    // Recompute the sweep space from the current mask WITHOUT a full re-init, so
+    // the mask can be toggled after a LoadFile attack is already configured. Mask
+    // is file-only; a preset attack is left untouched.
+    if(instance->attack != SubBruteAttackLoadFile) return;
+    if(instance->mask_active) {
+        instance->max_value = subbrute_mask_max_value(instance->mask_var);
+        subbrute_protocol_set_func_mask(instance->mask_var, true);
+    } else {
+        instance->max_value = subbrute_protocol_calc_max_value(
+            instance->attack, instance->bits, instance->two_bytes);
+        subbrute_protocol_set_func_mask(0, false);
+    }
+    instance->step = 0; // the space changed — restart the sweep from 0
+}
+
+bool subbrute_worker_is_masked(SubBruteWorker* instance) {
+    furi_assert(instance);
+    return instance->mask_active;
+}
+
+uint8_t subbrute_worker_get_mask_bits(SubBruteWorker* instance) {
+    furi_assert(instance);
+    return instance->mask_active ? subbrute_mask_var_bits(instance->mask_var) : 0;
+}
 #endif
 
 void subbrute_worker_free(SubBruteWorker* instance) {

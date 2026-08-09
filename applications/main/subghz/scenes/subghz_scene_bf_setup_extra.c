@@ -204,6 +204,27 @@ static void setup_extra_fast_callback(VariableItem* item) {
     subbrute_worker_set_fast(subghz->subbrute_worker, value_index == 1);
     variable_item_set_current_value_text(item, value_index == 1 ? "On" : "Off");
 }
+
+// Function-mask brute: enumerate only the low N button/data bits of the captured
+// key (2^N codes) instead of the byte-granular sweep. One control selects Off or
+// the width; the label shows N + the resulting code count. See
+// docs/superpowers/specs/2026-08-09-function-mask-brute-design.md.
+static const char* const mask_names[] = {"Off", "2b/4", "4b/16", "8b/256", "12b/4k"};
+static const uint8_t mask_nbits[] = {0, 2, 4, 8, 12};
+
+static void setup_extra_mask_callback(VariableItem* item) {
+    furi_assert(item);
+    SubGhz* subghz = variable_item_get_context(item);
+    furi_assert(subghz);
+    const uint8_t vi = variable_item_get_current_value_index(item);
+    const uint8_t nbits = mask_nbits[vi];
+    const bool on = nbits > 0;
+    const uint64_t var = on ? (((uint64_t)1 << nbits) - 1u) : 0;
+    subbrute_worker_set_func_mask(subghz->subbrute_worker, var, on);
+    subbrute_worker_apply_func_mask(subghz->subbrute_worker); // recompute 2^N + reset step
+    subghz->subbrute_device->current_step = 0; // fresh masked sweep
+    variable_item_set_current_value_text(item, mask_names[vi]);
+}
 #endif
 
 static void subghz_scene_bf_setup_extra_init_var_list(SubGhz* subghz, bool on_extra) {
@@ -285,6 +306,22 @@ static void subghz_scene_bf_setup_extra_init_var_list(SubGhz* subghz, bool on_ex
             const uint8_t fi = subbrute_worker_is_fast(subghz->subbrute_worker) ? 1 : 0;
             variable_item_set_current_value_index(item, fi);
             variable_item_set_current_value_text(item, fi == 1 ? "On" : "Off");
+        }
+
+        // Function-mask brute (LoadFile only) — enumerate just the low N bits.
+        item = variable_item_list_add(
+            var_list, "Mask", COUNT_OF(mask_names), setup_extra_mask_callback, subghz);
+        {
+            const uint8_t mb = subbrute_worker_get_mask_bits(subghz->subbrute_worker);
+            uint8_t mi = 0;
+            for(uint8_t k = 0; k < COUNT_OF(mask_nbits); k++) {
+                if(mask_nbits[k] == mb) {
+                    mi = k;
+                    break;
+                }
+            }
+            variable_item_set_current_value_index(item, mi);
+            variable_item_set_current_value_text(item, mask_names[mi]);
         }
 #endif
     } else {
