@@ -80,9 +80,20 @@ static bool
     subghz_scene_rolling_analyzer_can_clone(const char* protocol_name, const char* decoded_text) {
     if(!protocol_name || strcmp(protocol_name, SUBGHZ_PROTOCOL_KEELOQ_NAME) != 0) return false;
     if(!decoded_text) return false;
-    return strstr(decoded_text, "MF:Unknown") == NULL &&
-           strstr(decoded_text, "MF:BFT") == NULL && strstr(decoded_text, "MF:Erreka") == NULL &&
-           strstr(decoded_text, "Cnt:") != NULL && strstr(decoded_text, "Cnt:????") == NULL;
+    if(strstr(decoded_text, "MF:Unknown") != NULL) return false;
+
+    // Secure-learning makes (BFT / Erreka): the device key is
+    // secure_learning(serial, SEED, mfr_key) — the per-fob seed is NOT in a normal
+    // button press (shows "Sd:00000000"), so those stay un-clonable. BUT if a
+    // PROGRAMMING/pairing frame was captured, the decoder recovered the real seed
+    // (non-zero "Sd:", written to the .sub) and the encoder derives the correct
+    // device key — so it IS clonable then. Gate on a non-zero recovered seed.
+    if(strstr(decoded_text, "MF:BFT") != NULL || strstr(decoded_text, "MF:Erreka") != NULL) {
+        return subghz_rollback_hex_after(decoded_text, "Sd:") != 0;
+    }
+
+    // Normal / magic-XOR / magic-serial / FAAC makes: need a recovered counter.
+    return strstr(decoded_text, "Cnt:") != NULL && strstr(decoded_text, "Cnt:????") == NULL;
 }
 
 // VAG (AUT64) save gate. VAG's get_string carries "Ser:" only when the frame
