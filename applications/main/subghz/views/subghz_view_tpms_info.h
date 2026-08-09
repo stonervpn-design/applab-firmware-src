@@ -19,6 +19,7 @@ typedef enum {
     SubGhzViewTpmsInfoActionTxStop, // OK-button release after long press
     SubGhzViewTpmsInfoActionEdit, // OK-button short press on a numeric field
     SubGhzViewTpmsInfoActionToggleBattery, // OK-button short press on Battery field
+    SubGhzViewTpmsInfoActionTrack, // Left-button short press: add sensor to watch list
 } SubGhzViewTpmsInfoAction;
 
 typedef void (

@@ -253,6 +253,14 @@ static bool subghz_view_tpms_info_input(InputEvent* event, void* context) {
         return true;
     }
 
+#ifndef PUBLIC_BUILD
+    if(event->key == InputKeyLeft && event->type == InputTypeShort) {
+        // Track: add this sensor's ID to the watch list (private car-tracker).
+        subghz_view_tpms_info_fire(tpms_info, SubGhzViewTpmsInfoActionTrack);
+        return true;
+    }
+#endif
+
     return true;
 }
 

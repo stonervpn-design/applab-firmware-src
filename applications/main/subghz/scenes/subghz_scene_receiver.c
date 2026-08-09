@@ -1,4 +1,9 @@
 #include "../subghz_i.h"
+#ifndef PUBLIC_BUILD
+#include "../helpers/tpms_watch.h"
+#include <lib/subghz/protocols/tpms_generic.h>
+#include <lib/flipper_format/flipper_format.h>
+#endif
 #include <dolphin/dolphin.h>
 #include <lib/subghz/protocols/bin_raw.h>
 #include "../helpers/subghz_capture_quality.h"
@@ -184,6 +189,19 @@ static void subghz_scene_add_to_history_callback(
             if(subghz_history_get_text_space_left(subghz->history, NULL)) {
                 notification_message(subghz->notifications, &sequence_error);
             }
+#ifndef PUBLIC_BUILD
+            // Car-tracker: if this TPMS sensor is on the watch list, the target
+            // vehicle is nearby — alert (double vibro + blink).
+            if(subghz->tpms_scan_mode) {
+                TPMSBlockGeneric g = {0};
+                FlipperFormat* raw = subghz_history_get_raw_data(subghz->history, idx);
+                if(raw && tpms_block_generic_deserialize(&g, raw) == SubGhzProtocolStatusOk &&
+                   tpms_watch_contains(g.id)) {
+                    notification_message(subghz->notifications, &sequence_double_vibro);
+                    notification_message(subghz->notifications, &sequence_blink_cyan_10);
+                }
+            }
+#endif
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateAddKey);
             // record what we committed so the next in-window decode can compare
             subghz_decode_dedup_commit(&subghz->dedup, proto_name, score, now, idx);
@@ -210,6 +228,9 @@ void subghz_scene_receiver_on_enter(void* context) {
 
     if(subghz_rx_key_state_get(subghz) == SubGhzRxKeyStateIDLE) {
         if(subghz->tpms_scan_mode) {
+#ifndef PUBLIC_BUILD
+            tpms_watch_load(); // car-tracker: load watched sensor IDs for alerting
+#endif
             // Force the standard TPMS modulation (433.92 MHz, 2-FSK ~47.6 kHz dev,
             // registered as preset "FM238") regardless of last_settings, so nearby
             // sensors decode. MUST go through set_preset_internal so the CC1101

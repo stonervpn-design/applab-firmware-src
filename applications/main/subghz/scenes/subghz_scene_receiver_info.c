@@ -1,4 +1,7 @@
 #include "../subghz_i.h"
+#ifndef PUBLIC_BUILD
+#include "../helpers/tpms_watch.h"
+#endif
 
 #include <lib/subghz/blocks/custom_btn.h>
 
@@ -115,6 +118,22 @@ static void
         view_dispatcher_send_custom_event(
             subghz->view_dispatcher, SubGhzCustomEventTpmsToggleBattery);
         break;
+    case SubGhzViewTpmsInfoActionTrack: {
+#ifndef PUBLIC_BUILD
+        // Add this sensor's ID to the TPMS watch list; the scanner then alerts
+        // when this vehicle is heard again.
+        TPMSBlockGeneric generic = {0};
+        FlipperFormat* fff =
+            subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen);
+        if(fff && tpms_block_generic_deserialize(&generic, fff) == SubGhzProtocolStatusOk &&
+           tpms_watch_add(generic.id)) {
+            notification_message(subghz->notifications, &sequence_success);
+        } else {
+            notification_message(subghz->notifications, &sequence_error);
+        }
+#endif
+        break;
+    }
     }
 }
 
@@ -233,13 +252,14 @@ void subghz_scene_receiver_info_draw_widget(SubGhz* subghz) {
                 subghz_scene_receiver_info_callback,
                 subghz);
         }
-        // Rolling-code captures get a read-only Analyzer on the free Left slot
-        // (Center=Send, Right=Save stay intact).
+        // Rolling-code captures get the Signal-ID hub on the free Left slot
+        // (Center=Send, Right=Save stay intact). The hub identifies the fob and
+        // offers the rolling analyzer / PSA brute as a "Details" spoke.
         if(subghz_scene_receiver_info_is_dynamic(subghz)) {
             widget_add_button_element(
                 subghz->widget,
                 GuiButtonTypeLeft,
-                subghz_scene_receiver_info_is_psa(subghz) ? "Brute" : "Analyze",
+                "ID",
                 subghz_scene_receiver_info_callback,
                 subghz);
         }
@@ -318,12 +338,9 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
             }
             return true;
         } else if(event.event == SubGhzCustomEventSceneReceiverInfoAnalyze) {
-            // PSA -> rolling-key brute force; other dynamic -> read-only Analyzer.
-            if(subghz_scene_receiver_info_is_psa(subghz)) {
-                scene_manager_next_scene(subghz->scene_manager, SubGhzScenePsaBruteforce);
-            } else {
-                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneRollingAnalyzer);
-            }
+            // Route to the Signal-ID hub; it identifies the fob (make/model/action)
+            // and offers the deeper rolling / PSA tool as a "Details" spoke.
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneAnalyze);
             return true;
         } else if(
             event.event == SubGhzCustomEventTpmsEditPressure ||
