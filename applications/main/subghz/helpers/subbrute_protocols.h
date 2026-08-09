@@ -377,3 +377,10 @@ void subbrute_protocol_file_generate_file(
  */
 uint64_t
     subbrute_protocol_calc_max_value(SubBruteAttacks attack_type, uint8_t bits, bool two_bytes);
+
+#ifndef PUBLIC_BUILD
+/** Engage/disengage the function-mask brute for subsequent candidate generation.
+ * When active, create_candidate_for_existing_file enumerates only the masked bits
+ * of file_key. Single-threaded brute → file-scoped mode, set at attack-config. */
+void subbrute_protocol_set_func_mask(uint64_t var_mask, bool active);
+#endif

@@ -55,6 +55,12 @@ struct SubBruteWorker {
     bool fast_mode; /**< Clamp repeats + trim delays + configure radio once */
     bool radio_ready; /**< Radio already configured for this sweep (fast mode) */
 
+    // Function-mask brute (private-only; default inactive). When mask_active on a
+    // LoadFile attack, only the masked bits of file_key enumerate (2^k codes) via
+    // subbrute_mask_candidate instead of the byte-granular default.
+    uint64_t mask_var; /**< 1 = enumerate this bit; fixed bits come from file_key */
+    bool mask_active; /**< Function-mask brute engaged */
+
     // Manual transmit
     uint32_t last_time_tx_data; /**< Last time data was transmitted */
 

@@ -5,6 +5,22 @@
 
 #define TAG "SubBruteProtocols"
 
+#ifndef PUBLIC_BUILD
+#include "subbrute_mask.h"
+
+// Function-mask brute mode (PRIVATE): the brute is single-threaded, so the worker
+// sets this once at attack-config time and create_candidate_for_existing_file reads
+// it — avoids threading mask state through file_payload/file_generate_file and all
+// their callers. Inactive by default → byte-granular behavior unchanged.
+static uint64_t s_func_mask_var = 0;
+static bool s_func_mask_active = false;
+
+void subbrute_protocol_set_func_mask(uint64_t var_mask, bool active) {
+    s_func_mask_var = var_mask;
+    s_func_mask_active = active;
+}
+#endif
+
 /**
  * CAME 12bit 303MHz
  */
@@ -706,6 +722,19 @@ void subbrute_protocol_create_candidate_for_existing_file(
     size_t bit_index,
     uint64_t file_key,
     bool two_bytes) {
+#ifndef PUBLIC_BUILD
+    // Function-mask brute: enumerate only the masked bits of file_key (2^k codes)
+    // instead of the byte-granular default. subbrute_mask_candidate is the
+    // host-verified generator; emit the resulting 64-bit key as 8 hex bytes.
+    if(s_func_mask_active) {
+        uint64_t value = subbrute_mask_candidate(file_key, s_func_mask_var, step);
+        for(int i = 0; i < 8; i++) {
+            furi_string_cat_printf(candidate, "%02X", (uint8_t)((value >> (8 * (7 - i))) & 0xFF));
+            if(i < 7) furi_string_push_back(candidate, ' ');
+        }
+        return;
+    }
+#endif
     uint8_t p[8] = {0};
     for(int i = 0; i < 8; i++) {
         p[i] = (uint8_t)(file_key >> 8 * (7 - i)) & 0xFF;

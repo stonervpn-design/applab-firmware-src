@@ -65,6 +65,21 @@ void subbrute_worker_set_fast(SubBruteWorker* instance, bool fast);
  */
 bool subbrute_worker_is_fast(SubBruteWorker* instance);
 
+#ifndef PUBLIC_BUILD
+/**
+ * @brief Engage the function-mask brute for the next LoadFile attack.
+ *
+ * When active, only the masked bits of the captured file_key enumerate (2^k
+ * codes) instead of the byte-granular default. A degenerate mask (0 or >63 var
+ * bits) silently disengages. Private-only.
+ *
+ * @param instance Pointer to the SubBruteWorker instance.
+ * @param var_mask 1 = enumerate this bit; 0 = hold it fixed from file_key.
+ * @param active Whether to engage the mask brute.
+ */
+void subbrute_worker_set_func_mask(SubBruteWorker* instance, uint64_t var_mask, bool active);
+#endif
+
 /**
  * @brief Get the current step of a sub brute force worker.
  *

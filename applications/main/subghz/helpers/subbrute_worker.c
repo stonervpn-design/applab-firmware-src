@@ -9,6 +9,9 @@
 #include <lib/subghz/blocks/custom_btn.h>
 #include <toolbox/level_duration.h>
 #include "subbrute_debruijn.h"
+#ifndef PUBLIC_BUILD
+#include "subbrute_mask.h"
+#endif
 
 #define TAG                               "SubBruteWorker"
 #define SUBBRUTE_TX_TIMEOUT               6
@@ -55,6 +58,11 @@ SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device) {
 #endif
     instance->radio_ready = false;
 
+#ifndef PUBLIC_BUILD
+    instance->mask_var = 0;
+    instance->mask_active = false;
+#endif
+
     instance->radio_device = radio_device;
 
     return instance;
@@ -69,6 +77,17 @@ bool subbrute_worker_is_fast(SubBruteWorker* instance) {
     furi_assert(instance);
     return instance->fast_mode;
 }
+
+#ifndef PUBLIC_BUILD
+void subbrute_worker_set_func_mask(SubBruteWorker* instance, uint64_t var_mask, bool active) {
+    furi_assert(instance);
+    // A valid mask needs at least one and at most 63 variable bits; otherwise
+    // disengage (byte-granular default). Applied at the next LoadFile init.
+    if(active && subbrute_mask_max_value(var_mask) == 0) active = false;
+    instance->mask_var = var_mask;
+    instance->mask_active = active;
+}
+#endif
 
 void subbrute_worker_free(SubBruteWorker* instance) {
     furi_assert(instance);
@@ -171,6 +190,11 @@ bool subbrute_worker_init_default_attack(
 
     instance->max_value =
         subbrute_protocol_calc_max_value(instance->attack, instance->bits, instance->two_bytes);
+#ifndef PUBLIC_BUILD
+    // Function-mask brute is LoadFile-only; a preset attack never masks.
+    instance->mask_active = false;
+    subbrute_protocol_set_func_mask(0, false);
+#endif
 
     instance->initiated = true;
     instance->state = SubBruteWorkerStateReady;
@@ -218,8 +242,21 @@ bool subbrute_worker_init_file_attack(
     instance->file_key = file_key;
     instance->two_bytes = two_bytes;
 
+#ifndef PUBLIC_BUILD
+    if(instance->mask_active) {
+        // Function-mask brute: enumerate only the k masked bits of file_key (2^k),
+        // not the byte-granular space.
+        instance->max_value = subbrute_mask_max_value(instance->mask_var);
+        subbrute_protocol_set_func_mask(instance->mask_var, true);
+    } else {
+        instance->max_value = subbrute_protocol_calc_max_value(
+            instance->attack, instance->bits, instance->two_bytes);
+        subbrute_protocol_set_func_mask(0, false);
+    }
+#else
     instance->max_value =
         subbrute_protocol_calc_max_value(instance->attack, instance->bits, instance->two_bytes);
+#endif
 
     instance->initiated = true;
     instance->state = SubBruteWorkerStateReady;
