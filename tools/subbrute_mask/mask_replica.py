@@ -72,6 +72,31 @@ def main():
     chk(max_value(0) == 0, "empty mask -> max_value 0 (rejected)")
     chk(max_value(M64) == 0, "64-bit mask -> 0 (would overflow, rejected)")
 
+    # --- chip-ID auto-mask defaults (mirror subbrute_mask_default_for_chip) ---
+    # Family enum: 0 Unknown, 1 Princeton, 2 Came, 3 Nice, 4 Holtek, 5 Ansonic,
+    #              6 Chamberlain, 7 Linear, 8 LinearDelta.
+    def default_for_chip(family, bits):
+        n = 4 if family in (0, 1, 2, 3, 4, 5) else 2  # nibble vs DIP/button
+        if bits > 0 and n > bits:
+            n = bits
+        if n == 0:
+            n = 1
+        return (1 << n) - 1
+
+    # (family, bits, expected low-bit mask)
+    chip_cases = [
+        (1, 24, 0x0F),  # Princeton/EV1527 24-bit -> data nibble
+        (4, 12, 0x0F),  # Holtek HT12E -> 4 data bits
+        (2, 12, 0x0F),  # Came
+        (6, 9, 0x03),   # Chamberlain 9-bit -> 2-bit button
+        (8, 8, 0x03),   # Linear Delta 8-bit
+        (0, 24, 0x0F),  # Unknown -> conservative nibble
+        (6, 1, 0x01),   # tiny frame clamps to 1 bit
+    ]
+    for fam, bits, expect in chip_cases:
+        chk(default_for_chip(fam, bits) == expect,
+            f"chip default mask fam={fam} bits={bits} -> {expect:#04x}")
+
     print("ALL PASS" if ok else "SOME FAILED")
     return 0 if ok else 1
 
