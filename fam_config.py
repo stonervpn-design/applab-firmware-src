@@ -264,7 +264,11 @@ if _is_public:
     # plugin_manager is a stub / no FAP loader): the five RX registry plugins are
     # compiled in and wired statically, TX/emulate disabled. See the app's
     # application.fam + helpers/protopirate_protocol_plugin_host.c.
-    if "proto_pirate" not in APPS:
+    # Selection-only (owner directive 2026-08-10): add the upstream RocketGod
+    # ProtoPirate to a PUBLIC build ONLY when the applab request explicitly selects
+    # it (FLIPPER_APPS lists it) — never baked into the default full public bins.
+    _pp_sel = {a.strip() for a in os.environ.get("FLIPPER_APPS", "").split(",") if a.strip()}
+    if "proto_pirate" in _pp_sel and "proto_pirate" not in APPS:
         APPS.append("proto_pirate")
 
 # ── On-demand build service: custom app subset ───────────────────────────────

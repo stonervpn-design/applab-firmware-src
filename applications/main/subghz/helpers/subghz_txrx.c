@@ -6,7 +6,9 @@
 #include <lib/subghz/blocks/custom_btn.h>
 #include <storage/storage.h>
 #include <string.h>
+#ifndef PUBLIC_BUILD
 #include "subghz_keeloq_default_keys.h"
+#endif
 
 #define TAG "SubGhzTxRx"
 
@@ -18,6 +20,7 @@
  * a user's later edits (marker already current) are preserved across reboots. */
 #define SUBGHZ_KEELOQ_PROVISION_VERSION '3' /* bump when keeloq_mfcodes_user_default changes */
 #define SUBGHZ_KEELOQ_VERSION_FILE      EXT_PATH("subghz/assets/.keeloq_ver")
+#ifndef PUBLIC_BUILD
 static void subghz_txrx_provision_default_keeloq_keys(void) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
 
@@ -127,6 +130,7 @@ static void subghz_txrx_provision_test_subs(void) {
     }
     furi_record_close(RECORD_STORAGE);
 }
+#endif /* !PUBLIC_BUILD — car keystore provisioning is private-only */
 
 static void subghz_txrx_radio_device_power_on(SubGhzTxRx* instance) {
     UNUSED(instance);
@@ -164,8 +168,10 @@ SubGhzTxRx* subghz_txrx_alloc(void) {
     instance->fff_data = flipper_format_string_alloc();
 
     instance->environment = subghz_environment_alloc();
+#ifndef PUBLIC_BUILD
     subghz_txrx_provision_default_keeloq_keys(); /* ensure keys exist on SD-less boards */
     subghz_txrx_provision_test_subs(); /* VAG test captures for replay/decode testing */
+#endif
     user_keystore_loaded =
         subghz_environment_load_keystore(instance->environment, SUBGHZ_KEYSTORE_DIR_USER_NAME);
     if(!user_keystore_loaded) {
