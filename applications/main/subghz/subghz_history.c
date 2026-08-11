@@ -4,7 +4,14 @@
 #include <furi.h>
 
 #define SUBGHZ_HISTORY_MAX       55
-#define SUBGHZ_HISTORY_FREE_HEAP 20480
+// Free-heap floor below which a decode is NOT added to history (avoids OOM on add).
+// Stock value 20480 (20KB) is calibrated for a Flipper with spare RAM; on this
+// no-PSRAM ESP32 port the runtime heap during Read sits just under 20KB once the
+// (now much larger) SubGhz app + all its views are allocated, so the stock guard
+// silently dropped EVERY decode (decoder fires, but add_to_history returns false).
+// A history item is <1KB, so 8KB is a safe floor for the add on this board.
+// NOTE: proper fix is trimming the SubGhz app's baseline RAM; this restores decode.
+#define SUBGHZ_HISTORY_FREE_HEAP 8192
 #define TAG                      "SubGhzHistory"
 
 typedef struct {
