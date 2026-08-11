@@ -98,6 +98,19 @@ typedef enum {
     SubGhzCustomEventViewSpectrumBandUp,
     SubGhzCustomEventViewSpectrumBandDown,
     SubGhzCustomEventViewSpectrumBack,
+
+#ifndef PUBLIC_BUILD
+    /* Protocol Fuzzer run view -> fuzzer_worker start/pause/step/stop/mark
+     * (private). Translated 1:1 from SubGhzViewFuzzerEvent by the run
+     * scene's view callback -- kept as real SubGhzCustomEvent members
+     * (rather than sending the raw SubGhzViewFuzzerEvent 0-3 values) so they
+     * live in this enum's numbering space instead of colliding with
+     * SubGhzCustomEventManagerNoSet/Set/SetRAW (0-2). */
+    SubGhzCustomEventViewFuzzerStartPause,
+    SubGhzCustomEventViewFuzzerStep,
+    SubGhzCustomEventViewFuzzerMark,
+    SubGhzCustomEventViewFuzzerStop,
+#endif
 } SubGhzCustomEvent;
 
 typedef enum {

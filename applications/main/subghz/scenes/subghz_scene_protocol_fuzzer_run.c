@@ -99,10 +99,32 @@ static void fuzzer_run_worker_callback(void* context, uint32_t index, uint32_t t
         true);
 }
 
+// Translates the view's SubGhzViewFuzzerEvent (0-3, an unrelated enum) into
+// this app's SubGhzCustomEvent numbering space before dispatching -- sending
+// the raw 0-3 values directly would collide with
+// SubGhzCustomEventManagerNoSet/Set/SetRAW (also 0-2). Every sibling view
+// (spectrum/jammer/receiver/...) routes through SubGhzCustomEventView* the
+// same way.
 static void fuzzer_run_view_callback(SubGhzViewFuzzerEvent event, void* context) {
     furi_assert(context);
     SubGhz* subghz = context;
-    view_dispatcher_send_custom_event(subghz->view_dispatcher, event);
+    SubGhzCustomEvent custom_event;
+    switch(event) {
+    case SubGhzViewFuzzerEventStartPause:
+        custom_event = SubGhzCustomEventViewFuzzerStartPause;
+        break;
+    case SubGhzViewFuzzerEventStep:
+        custom_event = SubGhzCustomEventViewFuzzerStep;
+        break;
+    case SubGhzViewFuzzerEventMark:
+        custom_event = SubGhzCustomEventViewFuzzerMark;
+        break;
+    case SubGhzViewFuzzerEventStop:
+    default:
+        custom_event = SubGhzCustomEventViewFuzzerStop;
+        break;
+    }
+    view_dispatcher_send_custom_event(subghz->view_dispatcher, custom_event);
 }
 
 void subghz_scene_protocol_fuzzer_run_on_enter(void* context) {
@@ -192,7 +214,7 @@ bool subghz_scene_protocol_fuzzer_run_on_event(void* context, SceneManagerEvent 
     if(!subghz->fuzzer_worker) return false;
 
     switch(event.event) {
-    case SubGhzViewFuzzerEventStartPause:
+    case SubGhzCustomEventViewFuzzerStartPause:
         if(!fuzzer_worker_running(subghz->fuzzer_worker)) {
             if(fuzzer_worker_start(subghz->fuzzer_worker)) {
                 s_fuzzer_paused = false;
@@ -215,15 +237,15 @@ bool subghz_scene_protocol_fuzzer_run_on_event(void* context, SceneManagerEvent 
         }
         return true;
 
-    case SubGhzViewFuzzerEventStep:
+    case SubGhzCustomEventViewFuzzerStep:
         fuzzer_worker_step(subghz->fuzzer_worker); // no-op / logged internally if disallowed
         return true;
 
-    case SubGhzViewFuzzerEventMark:
+    case SubGhzCustomEventViewFuzzerMark:
         fuzzer_run_do_mark(subghz);
         return true;
 
-    case SubGhzViewFuzzerEventStop:
+    case SubGhzCustomEventViewFuzzerStop:
         fuzzer_worker_stop(subghz->fuzzer_worker);
         s_fuzzer_paused = false;
         if(subghz->fuzzer_view) {

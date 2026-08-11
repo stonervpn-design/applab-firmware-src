@@ -220,27 +220,33 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     subghz->subghz_protoview = NULL;
     subghz->subghz_spectrum = NULL; // Spectrum: lazy-loaded in its scene (private)
 
+#ifndef PUBLIC_BUILD
+    // Protocol Fuzzer — worker+view lazy-loaded (see
+    // subghz_scene_protocol_fuzzer_run.c on_enter/on_exit). malloc() does not
+    // zero: these MUST be NULL'd unconditionally (not just under
+    // !alloc_for_tx_only) because subghz_free()'s safety-net free below is
+    // also unconditional (guarded only by #ifndef PUBLIC_BUILD, matching
+    // subghz_spectrum's placement right above it) — on the alloc_for_tx_only
+    // path (RPC/"send a saved .sub" TX-only flow) these pointers would
+    // otherwise hold uninitialized heap garbage that subghz_free() then
+    // frees. Config fields are only ever read once !alloc_for_tx_only code
+    // (the config/run scenes) runs, but are cleared here too for good measure.
+    subghz->fuzzer_worker = NULL;
+    subghz->fuzzer_view = NULL;
+    memset(&subghz->fuzzer_cfg, 0, sizeof(FuzzConfig));
+    subghz->fuzzer_protocol[0] = '\0';
+    subghz->fuzzer_freq = 0;
+    subghz->fuzzer_preset[0] = '\0';
+    subghz->fuzzer_te = 0;
+    subghz->fuzzer_repeat = 0;
+#endif
+
     if(!alloc_for_tx_only) {
         // Jammer — lazy-loaded (see subghz_scene_jammer.c on_enter/on_exit)
         subghz->subghz_jammer = NULL;
 
         // Playlist — lazy-loaded (see subghz_scene_playlist.c on_enter/on_exit)
         subghz->subghz_playlist = NULL;
-
-#ifndef PUBLIC_BUILD
-        // Protocol Fuzzer — worker+view lazy-loaded (see
-        // subghz_scene_protocol_fuzzer_run.c on_enter/on_exit). malloc() does
-        // not zero: clear the config fields explicitly too (the config scene
-        // repopulates these with real defaults on first entry).
-        subghz->fuzzer_worker = NULL;
-        subghz->fuzzer_view = NULL;
-        memset(&subghz->fuzzer_cfg, 0, sizeof(FuzzConfig));
-        subghz->fuzzer_protocol[0] = '\0';
-        subghz->fuzzer_freq = 0;
-        subghz->fuzzer_preset[0] = '\0';
-        subghz->fuzzer_te = 0;
-        subghz->fuzzer_repeat = 0;
-#endif
 
         // SubBrute Bruteforcer — heap-gated. This whole feature (radio device +
         // device + worker + settings + 2 views) is a large allocation. On this
