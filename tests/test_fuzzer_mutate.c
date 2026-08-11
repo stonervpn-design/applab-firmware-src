@@ -30,8 +30,33 @@ static void test_bitflip_sweep(void) {
     printf("test_bitflip_sweep OK\n");
 }
 
+static void test_boundary(void) {
+    FuzzConfig c = proto_cfg(FuzzStrategyBoundary);
+    assert(fuzzer_mutate_count(&c) == 4);
+    FuzzFrame f;
+    fuzzer_mutate_frame(&c, 0, &f); // all zeros, same nbits
+    assert(f.nbits == 24 && f.bits[0] == 0 && f.bits[1] == 0 && f.bits[2] == 0);
+    fuzzer_mutate_frame(&c, 1, &f); // all ones
+    assert(f.bits[0] == 0xFF && f.bits[1] == 0xFF && f.bits[2] == 0xFF);
+    fuzzer_mutate_frame(&c, 2, &f); assert(f.nbits == 23); // nbits-1
+    fuzzer_mutate_frame(&c, 3, &f); assert(f.nbits == 25); // nbits+1
+    printf("test_boundary OK\n");
+}
+
+static void test_length(void) {
+    FuzzConfig c = proto_cfg(FuzzStrategyLength);
+    c.len_min_delta = -2; c.len_max_delta = 2;      // -2..+2 => 5 frames
+    assert(fuzzer_mutate_count(&c) == 5);
+    FuzzFrame f;
+    fuzzer_mutate_frame(&c, 0, &f); assert(f.nbits == 22);
+    fuzzer_mutate_frame(&c, 4, &f); assert(f.nbits == 26);
+    printf("test_length OK\n");
+}
+
 int main(void) {
     test_bitflip_sweep();
+    test_boundary();
+    test_length();
     printf("TESTS_PASS\n");
     return 0;
 }
