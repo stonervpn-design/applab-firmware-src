@@ -53,10 +53,36 @@ static void test_length(void) {
     printf("test_length OK\n");
 }
 
+static void test_random_reproducible(void) {
+    FuzzConfig c = proto_cfg(FuzzStrategyRandom);
+    c.rand_iters = 50; c.rand_k = 3;
+    assert(fuzzer_mutate_count(&c) == 50);
+    FuzzFrame a, b;
+    assert(fuzzer_mutate_frame(&c, 7, &a));
+    assert(fuzzer_mutate_frame(&c, 7, &b));       // same index -> identical
+    assert(memcmp(a.bits, b.bits, 3) == 0);
+    FuzzFrame d; fuzzer_mutate_frame(&c, 8, &d);   // different index -> differs (very likely)
+    assert(memcmp(a.bits, d.bits, 3) != 0 || a.nbits != d.nbits);
+    printf("test_random_reproducible OK\n");
+}
+
+static void test_field_walk(void) {
+    FuzzConfig c = proto_cfg(FuzzStrategyFieldWalk);
+    c.field_off = 20; c.field_len = 4;            // low nibble of byte 2
+    assert(fuzzer_mutate_count(&c) == 16);
+    FuzzFrame f;
+    fuzzer_mutate_frame(&c, 0, &f); assert((f.bits[2] & 0x0F) == 0x0);
+    fuzzer_mutate_frame(&c, 5, &f); assert((f.bits[2] & 0x0F) == 0x5);
+    fuzzer_mutate_frame(&c, 15, &f); assert((f.bits[2] & 0x0F) == 0xF);
+    printf("test_field_walk OK\n");
+}
+
 int main(void) {
     test_bitflip_sweep();
     test_boundary();
     test_length();
+    test_random_reproducible();
+    test_field_walk();
     printf("TESTS_PASS\n");
     return 0;
 }
