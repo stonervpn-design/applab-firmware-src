@@ -1,5 +1,5 @@
 // tests/test_fuzzer_mutate.c
-#include "../applications/main/subghz/helpers/fuzzer_mutate.c"
+#include "../components/fuzz_core/fuzzer_mutate.c"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

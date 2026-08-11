@@ -80,6 +80,7 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
         idf::flipper_application
         idf::furi
         idf::furi_hal
+        idf::fuzz_core
         idf::gui
         idf::input
         idf::loader
