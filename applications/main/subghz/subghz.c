@@ -93,18 +93,20 @@ static void subghz_load_custom_presets(SubGhzSetting* setting) {
 */
 
 SubGhz* subghz_alloc(bool alloc_for_tx_only) {
-    SubGhz* subghz = malloc(sizeof(SubGhz));
+    SubGhz* subghz = calloc(1, sizeof(SubGhz));
 
     subghz->file_path = furi_string_alloc();
     subghz->file_path_tmp = furi_string_alloc();
 
-    // malloc() does not zero: explicitly clear the by-manufacturer Emulate flag.
+    // calloc() zero-inits the whole struct, so any NEW bool/ptr flag defaults to
+    // false/0/NULL automatically — this is what prevents the "forgot to init a new
+    // flag" class of bug (e.g. tpms_scan_mode, which read uninitialized garbage under
+    // the old malloc() and forced the receiver into TPMS-only mode -> "nothing
+    // decodes"). The explicit inits below are now redundant but kept as intent docs;
+    // tpms_scan_mode is only ever set true by the TPMS Spoofer menu item.
     subghz->keeloq_mfr_emulate_flow = false;
     subghz->keeloq_clone_flow = false;
     subghz->keeloq_clone_jump = 0;
-    // TPMS scan mode MUST default false, else the general Read receiver reads
-    // uninitialized garbage, forces 433.92/FM238 FSK + drops all non-TPMS decodes
-    // (i.e. "nothing decodes"). Only ever set true by the TPMS Spoofer menu item.
     subghz->tpms_scan_mode = false;
 
     // GUI
