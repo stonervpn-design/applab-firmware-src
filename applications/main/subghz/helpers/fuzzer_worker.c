@@ -4,8 +4,10 @@
 
 #include <furi.h>
 #include <string.h>
+#include <stdlib.h>
 #include <storage/storage.h>
 #include <toolbox/stream/stream.h>
+#include <toolbox/level_duration.h>
 #include <flipper_format.h>
 #include <flipper_format_i.h>
 #include <lib/subghz/environment.h>
@@ -132,8 +134,91 @@ static void fuzzer_worker_subghz_transmit(FuzzerWorker* instance, FlipperFormat*
     subghz_custom_btns_reset();
 }
 
-// Mutate -> build -> validate freq -> load into a string-backed FlipperFormat ->
-// transmit. Stores the frame in instance->last_frame on success (for mark_last()).
+// RAW TX: cloned from subbrute_worker_debruijn_transmit()'s reasoning (see
+// subbrute_worker.c ~L458): the RAW/de-Bruijn duration stream can't be fed
+// through a FlipperFormat/SubGhzTransmitter (that path is protocol-only), so
+// we drive subghz_devices_start_async_tx() directly with our own yield over
+// the mutated dur[]/ndur array instead of subghz_transmitter_yield.
+typedef struct {
+    const int16_t* dur;
+    uint16_t len;
+    uint16_t pos;
+    uint8_t repeats_left;
+} FuzzerRawTxCtx;
+
+static LevelDuration fuzzer_worker_raw_yield(void* context) {
+    FuzzerRawTxCtx* ctx = context;
+    if(ctx->pos >= ctx->len) {
+        if(ctx->repeats_left > 1) {
+            ctx->repeats_left--;
+            ctx->pos = 0;
+        } else {
+            return level_duration_reset();
+        }
+    }
+    int16_t d = ctx->dur[ctx->pos++];
+    return level_duration_make(d > 0, (uint32_t)abs((int)d));
+}
+
+// Same async-TX/freq/preset skeleton as fuzzer_worker_subghz_transmit(), but
+// yielding straight from the mutated duration array instead of a deserialized
+// SubGhzTransmitter. The freq allowlist check (subghz_devices_is_frequency_valid)
+// still gates every call via fuzzer_worker_transmit_index() below, exactly as
+// it gates the protocol path.
+static void fuzzer_worker_raw_transmit(FuzzerWorker* instance, const FuzzFrame* frame) {
+    const uint8_t timeout = FUZZER_TX_TIMEOUT;
+    while(instance->transmit_mode) {
+        furi_delay_ms(timeout);
+    }
+    instance->transmit_mode = true;
+
+    if(frame->ndur == 0) {
+        FURI_LOG_W(TAG, "RAW frame has 0 durations; nothing to transmit");
+        instance->transmit_mode = false;
+        return;
+    }
+
+    FuzzerRawTxCtx ctx = {
+        .dur = frame->dur,
+        .len = frame->ndur,
+        .pos = 0,
+        .repeats_left = instance->repeat ? instance->repeat : 1,
+    };
+
+    // Freq/preset are invariant across a sweep: configure the radio once
+    // (mirrors the protocol path / subbrute's fast_mode), not per frame.
+    if(!instance->radio_ready) {
+        subghz_devices_reset(instance->radio_device);
+        subghz_devices_idle(instance->radio_device);
+        subghz_devices_load_preset(instance->radio_device, instance->preset, NULL);
+        subghz_devices_set_frequency(instance->radio_device, instance->frequency);
+        instance->radio_ready = true;
+    }
+
+    bool tx_started = subghz_devices_start_async_tx(
+        instance->radio_device, fuzzer_worker_raw_yield, &ctx);
+    if(tx_started) {
+        while(!subghz_devices_is_async_complete_tx(instance->radio_device)) {
+            furi_delay_ms(timeout);
+        }
+        subghz_devices_stop_async_tx(instance->radio_device);
+    } else {
+        FURI_LOG_E(
+            TAG,
+            "RAW start_async_tx failed (freq=%lu preset=%d)",
+            (unsigned long)instance->frequency,
+            instance->preset);
+    }
+
+    subghz_devices_idle(instance->radio_device);
+
+    instance->transmit_mode = false;
+}
+
+// Mutate -> build -> validate freq -> transmit (protocol path loads a
+// string-backed FlipperFormat through the transmitter; RAW path drives the
+// duration array directly, see fuzzer_worker_raw_transmit()). Stores the
+// frame in instance->last_frame on success (for mark_last()).
 static bool fuzzer_worker_transmit_index(FuzzerWorker* instance, uint32_t index) {
     if(!fuzzer_mutate_frame(&instance->cfg, index, &instance->last_frame)) {
         FURI_LOG_W(TAG, "mutate_frame failed at index %lu", (unsigned long)index);
@@ -157,7 +242,8 @@ static bool fuzzer_worker_transmit_index(FuzzerWorker* instance, uint32_t index)
     // (subghz_devices_is_frequency_valid -> subbrute_worker_is_tx_allowed,
     // subghz_txrx_radio_device_is_frequency_valid, subghz_cli.c). Frequency is
     // invariant per sweep, but re-checked every frame so a bad config can never
-    // slip a single frame onto the air.
+    // slip a single frame onto the air. This gates BOTH the protocol and RAW
+    // TX paths below.
     if(!subghz_devices_is_frequency_valid(instance->radio_device, instance->frequency)) {
         FURI_LOG_E(
             TAG,
@@ -166,15 +252,20 @@ static bool fuzzer_worker_transmit_index(FuzzerWorker* instance, uint32_t index)
         return false;
     }
 
-    FlipperFormat* ff = flipper_format_string_alloc();
-    Stream* stream = flipper_format_get_raw_stream(ff);
-    stream_clean(stream);
-    stream_write_cstring(stream, instance->tx_buf);
-    stream_rewind(stream);
+    if(instance->cfg.mode == FuzzModeRaw) {
+        fuzzer_worker_raw_transmit(instance, &instance->last_frame);
+    } else {
+        FlipperFormat* ff = flipper_format_string_alloc();
+        Stream* stream = flipper_format_get_raw_stream(ff);
+        stream_clean(stream);
+        stream_write_cstring(stream, instance->tx_buf);
+        stream_rewind(stream);
 
-    fuzzer_worker_subghz_transmit(instance, ff);
+        fuzzer_worker_subghz_transmit(instance, ff);
 
-    flipper_format_free(ff);
+        flipper_format_free(ff);
+    }
+
     instance->has_last_frame = true;
     return true;
 }
