@@ -395,6 +395,14 @@ bool fuzzer_worker_mark_last(FuzzerWorker* instance, const char* path) {
     furi_assert(instance);
     furi_assert(path);
 
+    if(instance->worker_running && !instance->paused) {
+        // Same guard as fuzzer_worker_step(): the sweep thread mutates
+        // instance->last_frame/tx_buf every tick while running-and-unpaused, so
+        // reading them here would race and could save a torn/mismatched .sub.
+        FURI_LOG_W(TAG, "mark_last: cannot mark while auto-running (pause or stop first)");
+        return false;
+    }
+
     if(!instance->has_last_frame) {
         FURI_LOG_W(TAG, "mark_last: no frame sent yet");
         return false;

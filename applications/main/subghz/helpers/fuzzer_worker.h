@@ -74,5 +74,8 @@ void fuzzer_worker_set_callback(
     void* context);
 
 /** Writes the last transmitted frame to `path` as a .sub file. False if no
- * frame has been sent yet, or the write failed. */
+ * frame has been sent yet, or the write failed. Only succeeds when the worker
+ * is stopped or running-and-paused — pause() or stop() before calling this,
+ * otherwise it refuses (the sweep thread mutates the last-frame buffers every
+ * tick while auto-running-and-unpaused, so marking mid-sweep would race). */
 bool fuzzer_worker_mark_last(FuzzerWorker* instance, const char* path);
