@@ -186,8 +186,8 @@ static int32_t ble_walk_fuzz_dos_thread(void* context) {
         furi_delay_ms(BLE_WALK_FUZZ_DOS_POLL_MS);
     }
 
-    instance->worker_running = false;
     ble_walk_hal_dos_flood_stop();
+    instance->worker_running = false;
     return 0;
 }
 
