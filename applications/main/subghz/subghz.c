@@ -102,6 +102,10 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     subghz->keeloq_mfr_emulate_flow = false;
     subghz->keeloq_clone_flow = false;
     subghz->keeloq_clone_jump = 0;
+    // TPMS scan mode MUST default false, else the general Read receiver reads
+    // uninitialized garbage, forces 433.92/FM238 FSK + drops all non-TPMS decodes
+    // (i.e. "nothing decodes"). Only ever set true by the TPMS Spoofer menu item.
+    subghz->tpms_scan_mode = false;
 
     // GUI
     subghz->gui = furi_record_open(RECORD_GUI);
