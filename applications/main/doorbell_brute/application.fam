@@ -1,0 +1,10 @@
+App(
+    appid="doorbell_brute",
+    name="Doorbell Brute",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="doorbell_brute_app",
+    stack_size=4 * 1024,
+    icon="A_Plugins_14",
+    order=72,
+    fap_libs=["assets"],
+)

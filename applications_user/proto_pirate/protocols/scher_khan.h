@@ -74,3 +74,9 @@ SubGhzProtocolStatus
  * @param output Resulting text
  */
 void subghz_protocol_decoder_scher_khan_get_string(void* context, FuriString* output);
+
+#if PROTOPIRATE_WITH_ENCODER
+void* subghz_protocol_encoder_scher_khan_alloc(SubGhzEnvironment* environment);
+SubGhzProtocolStatus
+    subghz_protocol_encoder_scher_khan_deserialize(void* context, FlipperFormat* flipper_format);
+#endif

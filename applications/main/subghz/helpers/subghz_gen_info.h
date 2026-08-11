@@ -45,6 +45,7 @@ typedef struct {
             uint16_t cnt;
             const char* manuf;
             uint16_t jump;
+            uint32_t seed; // BFT/Erreka secure-learning seed (0 = normal KeeLoq, no seed)
         } keeloq;
         struct {
             uint32_t serial;

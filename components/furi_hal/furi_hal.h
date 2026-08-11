@@ -38,6 +38,11 @@ void furi_hal_init(void);
  * at boot, to stop the boost converter idling. No-op on boards without the M5PM1. */
 void furi_hal_grove_5v_set(bool on);
 
+/** Read the battery voltage (millivolts) from the M5PM1 PMIC (regs 0x22/0x23).
+ * The M5Stick's only battery-voltage source — it has no GPIO ADC divider. Returns
+ * false (and leaves *out_mv untouched) on I2C error or on boards without the M5PM1. */
+bool furi_hal_m5pm1_get_vbat_mv(uint16_t* out_mv);
+
 #ifdef __cplusplus
 }
 #endif

@@ -36,6 +36,20 @@ void subghz_scene_bf_load_file_on_enter(void* context) {
         load_result =
             subbrute_device_load_from_file(subghz->subbrute_device, furi_string_get_cstr(load_path));
         if(load_result == SubBruteFileResultOk) {
+#ifndef PUBLIC_BUILD
+            // A brand-new file was just loaded: drop any function-mask left over from
+            // the PREVIOUS LoadFile brute so it can't silently narrow this one. The
+            // user can deliberately re-engage a mask for this file from Extra setup.
+            subbrute_worker_set_func_mask(subghz->subbrute_worker, 0, false);
+            // Remember the source path so a resume checkpoint can reload this .sub
+            // and rebuild the protocol/frequency/preset (PRIVATE-only).
+            strncpy(
+                subghz->subbrute_device->load_file_path,
+                furi_string_get_cstr(load_path),
+                sizeof(subghz->subbrute_device->load_file_path) - 1);
+            subghz->subbrute_device->load_file_path
+                [sizeof(subghz->subbrute_device->load_file_path) - 1] = '\0';
+#endif
             subghz->subbrute_settings->last_index = SubBruteAttackLoadFile;
             subbrute_settings_set_repeats(
                 subghz->subbrute_settings,

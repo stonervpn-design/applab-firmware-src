@@ -7,8 +7,39 @@
 #include <string.h>
 
 #define TAG "ProtoPirateProtocolPlugin"
+
 #ifdef ENABLE_EMULATE_FEATURE
-#define PROTOPIRATE_TX_PLUGIN_PATH_MAX 160U
+// Static TX wiring pulls in every TX-capable protocol's compiled-in SubGhzProtocol
+// (each carries a real encoder behind PROTOPIRATE_WITH_ENCODER).
+#include "../protocols/chrysler_v0.h"
+#include "../protocols/fiat_v0.h"
+#include "../protocols/fiat_v1.h"
+#include "../protocols/ford_v0.h"
+#include "../protocols/ford_v1.h"
+#include "../protocols/ford_v2.h"
+#include "../protocols/honda_static.h"
+#include "../protocols/honda_v1.h"
+#include "../protocols/honda_v2.h"
+#include "../protocols/kia_v0.h"
+#include "../protocols/kia_v1.h"
+#include "../protocols/kia_v2.h"
+#include "../protocols/kia_v3_v4.h"
+#include "../protocols/kia_v5.h"
+#include "../protocols/kia_v6.h"
+#include "../protocols/kia_v7.h"
+#include "../protocols/mazda_v0.h"
+#include "../protocols/psa.h"
+#include "../protocols/renault_v0.h"
+#include "../protocols/star_line.h"
+#include "../protocols/subaru.h"
+#include "../protocols/vag.h"
+// Rolling/crypto protocols added in the second TX pass: Porsche + Mitsubishi are
+// real key-less rolling encoders; Ford V3 / Fiat V2 / Scher-Khan are replay.
+#include "../protocols/mitsubishi_v0.h"
+#include "../protocols/porsche_touareg.h"
+#include "../protocols/ford_v3.h"
+#include "../protocols/fiat_v2.h"
+#include "../protocols/scher_khan.h"
 #endif
 
 // --- Static plugin wiring (ESP32 port has NO runtime FAP plugin loader) ---
@@ -52,20 +83,68 @@ static const ProtoPirateProtocolPlugin*
 }
 
 #ifdef ENABLE_EMULATE_FEATURE
-static bool protopirate_build_tx_protocol_plugin_path(
-    const char* tx_key,
-    char* plugin_path,
-    size_t plugin_path_size) {
-    if(!tx_key || !plugin_path || plugin_path_size == 0U) {
-        return false;
-    }
+// --- Static TX plugin wiring (mirrors protopirate_static_rx_plugin) ---
+// Upstream compiles protocols/plugins/protopirate_tx_protocol_plugin.c once per
+// protocol (per-instance cdefines) into a .fal loaded at TX time. This port has
+// no loader, so every TX-capable protocol's compiled-in SubGhzProtocol is wrapped
+// here in a 1-item registry + ProtoPirateProtocolPlugin (identical layout to the
+// template) and resolved by canonical protocol name. The 22 entries match the
+// tx_key set in protocol_items.c's catalog; the 5 decode-only protocols (Fiat V2,
+// Ford V3, Mitsubishi V0, Porsche Touareg, Scher-Khan) have encoder.alloc == NULL
+// and are intentionally absent.
+#define PP_TX_STATIC_LIST(X)                                     \
+    X(chrysler_protocol_v0, CHRYSLER_PROTOCOL_V0_NAME)           \
+    X(fiat_protocol_v0, FIAT_PROTOCOL_V0_NAME)                   \
+    X(fiat_v1_protocol, FIAT_V1_PROTOCOL_NAME)                   \
+    X(ford_protocol_v0, FORD_PROTOCOL_V0_NAME)                   \
+    X(ford_protocol_v1, FORD_PROTOCOL_V1_NAME)                   \
+    X(ford_protocol_v2, FORD_PROTOCOL_V2_NAME)                   \
+    X(honda_static_protocol, HONDA_STATIC_PROTOCOL_NAME)         \
+    X(honda_v1_protocol, HONDA_V1_PROTOCOL_NAME)                 \
+    X(honda_v2_protocol, HONDA_V2_PROTOCOL_NAME)                 \
+    X(kia_protocol_v0, KIA_PROTOCOL_V0_NAME)                     \
+    X(kia_protocol_v1, KIA_PROTOCOL_V1_NAME)                     \
+    X(kia_protocol_v2, KIA_PROTOCOL_V2_NAME)                     \
+    X(kia_protocol_v3_v4, KIA_PROTOCOL_V3_V4_NAME)              \
+    X(kia_protocol_v5, KIA_PROTOCOL_V5_NAME)                     \
+    X(kia_protocol_v6, KIA_PROTOCOL_V6_NAME)                     \
+    X(kia_protocol_v7, KIA_PROTOCOL_V7_NAME)                     \
+    X(mazda_v0_protocol, MAZDA_PROTOCOL_V0_NAME)                \
+    X(psa_protocol, PSA_PROTOCOL_NAME)                           \
+    X(renault_v0_protocol, RENAULT_PROTOCOL_V0_NAME)           \
+    X(subghz_protocol_star_line, SUBGHZ_PROTOCOL_STAR_LINE_NAME) \
+    X(subaru_protocol, SUBARU_PROTOCOL_NAME)                     \
+    X(vag_protocol, VAG_PROTOCOL_NAME)                           \
+    X(mitsubishi_v0_protocol, MITSUBISHI_PROTOCOL_NAME)         \
+    X(porsche_touareg_protocol, PORSCHE_CAYENNE_PROTOCOL_NAME)  \
+    X(ford_protocol_v3, FORD_PROTOCOL_V3_NAME)                   \
+    X(fiat_v2_protocol, FIAT_V2_PROTOCOL_NAME)                   \
+    X(subghz_protocol_scher_khan, SUBGHZ_PROTOCOL_SCHER_KHAN_NAME)
 
-    int written = snprintf(
-        plugin_path,
-        plugin_path_size,
-        APP_ASSETS_PATH("plugins/protopirate_tx_%s_plugin.fal"),
-        tx_key);
-    return (written > 0) && ((size_t)written < plugin_path_size);
+#define PP_TX_DEFINE(item, name)                                       \
+    static const SubGhzProtocol* const pp_tx_items_##item[] = {&item}; \
+    static const SubGhzProtocolRegistry pp_tx_registry_##item = {      \
+        .items = pp_tx_items_##item,                                   \
+        .size = 1U,                                                    \
+    };                                                                 \
+    static const ProtoPirateProtocolPlugin pp_tx_plugin_##item = {     \
+        .plugin_name = name,                                           \
+        .kind = ProtoPirateProtocolPluginKindTx,                      \
+        .route = ProtoPirateProtocolRegistryRouteAMDefault,           \
+        .protocol_name = name,                                         \
+        .registry = &pp_tx_registry_##item,                           \
+        .release = pp_shared_upload_release,                           \
+    };
+PP_TX_STATIC_LIST(PP_TX_DEFINE)
+#undef PP_TX_DEFINE
+
+static const ProtoPirateProtocolPlugin* protopirate_static_tx_plugin(const char* registry_name) {
+    if(!registry_name) return NULL;
+#define PP_TX_LOOKUP(item, name) \
+    if(strcmp(registry_name, name) == 0) return &pp_tx_plugin_##item;
+    PP_TX_STATIC_LIST(PP_TX_LOOKUP)
+#undef PP_TX_LOOKUP
+    return NULL;
 }
 #endif
 
@@ -174,17 +253,13 @@ static bool protopirate_ensure_tx_protocol_plugin(
         protopirate_protocol_catalog_find(protocol_name);
     const char* registry_name = protopirate_protocol_catalog_canonical_name(protocol_name);
     const char* tx_key = protopirate_protocol_catalog_tx_key(protocol_name);
-    char plugin_path[PROTOPIRATE_TX_PLUGIN_PATH_MAX];
-    if(catalog_entry && !tx_key) {
-        FURI_LOG_W(TAG, "TX disabled for %s: protocol catalog has no tx_key", registry_name);
-        return false;
-    }
-    if(!registry_name || !tx_key ||
-       !protopirate_build_tx_protocol_plugin_path(tx_key, plugin_path, sizeof(plugin_path))) {
-        FURI_LOG_E(TAG, "No TX protocol plugin for %s", protocol_name ? protocol_name : "?");
+    if(!registry_name || !tx_key || (catalog_entry && !tx_key)) {
+        FURI_LOG_W(
+            TAG, "TX disabled for %s: no tx_key in catalog", registry_name ? registry_name : "?");
         return false;
     }
 
+    // Already bound to this TX protocol? Reuse it.
     if(app->txrx->protocol_plugin &&
        app->txrx->protocol_plugin->kind == ProtoPirateProtocolPluginKindTx &&
        app->txrx->protocol_plugin->registry && app->txrx->protocol_plugin->protocol_name &&
@@ -198,58 +273,27 @@ static bool protopirate_ensure_tx_protocol_plugin(
         protopirate_unload_protocol_plugin(app->txrx);
     }
 
-    CompositeApiResolver* resolver = composite_api_resolver_alloc();
-    if(!resolver) {
-        FURI_LOG_E(TAG, "Failed to allocate TX protocol plugin resolver");
-        return false;
-    }
-    composite_api_resolver_add(resolver, firmware_api_interface);
-
-    PluginManager* manager = plugin_manager_alloc(
-        PROTOPIRATE_PROTOCOL_PLUGIN_APP_ID,
-        PROTOPIRATE_PROTOCOL_PLUGIN_API_VERSION,
-        composite_api_resolver_get(resolver));
-    if(!manager) {
-        FURI_LOG_E(TAG, "Failed to allocate TX protocol plugin manager");
-        composite_api_resolver_free(resolver);
-        return false;
-    }
-
-    PluginManagerError error = plugin_manager_load_single(manager, plugin_path);
-    if(error != PluginManagerErrorNone) {
-        FURI_LOG_E(TAG, "Failed to load TX protocol plugin %s: %d", plugin_path, (int)error);
-        plugin_manager_free(manager);
-        composite_api_resolver_free(resolver);
-        return false;
-    }
-
-    const ProtoPirateProtocolPlugin* plugin = plugin_manager_get_ep(manager, 0U);
+    // Static resolve — this port has no runtime .fal loader. The plugin is a
+    // compiled-in const wrapping the protocol's compiled-in encoder.
+    const ProtoPirateProtocolPlugin* plugin = protopirate_static_tx_plugin(registry_name);
     if(!plugin || plugin->kind != ProtoPirateProtocolPluginKindTx || !plugin->registry ||
        plugin->registry->size == 0U || !plugin->protocol_name ||
        strcmp(plugin->protocol_name, registry_name) != 0) {
-        FURI_LOG_E(TAG, "TX protocol plugin entry point is invalid for %s", registry_name);
-        if(plugin && plugin->release) {
-            plugin->release();
-        }
-        plugin_manager_free(manager);
-        composite_api_resolver_free(resolver);
+        FURI_LOG_E(TAG, "No static TX protocol plugin for %s", registry_name);
         return false;
     }
 
     const SubGhzProtocol* tx_protocol = plugin->registry->items[0];
     if(!tx_protocol || !tx_protocol->encoder || !tx_protocol->encoder->alloc ||
        !tx_protocol->encoder->deserialize || !tx_protocol->encoder->yield) {
-        FURI_LOG_E(TAG, "TX protocol plugin for %s has no encoder", registry_name);
-        if(plugin->release) {
-            plugin->release();
-        }
-        plugin_manager_free(manager);
-        composite_api_resolver_free(resolver);
+        FURI_LOG_E(TAG, "Static TX protocol %s has no usable encoder", registry_name);
         return false;
     }
 
-    app->txrx->plugin_resolver = resolver;
-    app->txrx->protocol_plugin_manager = manager;
+    // No manager/resolver in the static build — nothing to free on unload beyond
+    // the plugin's .release (pp_shared_upload_release), which unload still calls.
+    app->txrx->plugin_resolver = NULL;
+    app->txrx->protocol_plugin_manager = NULL;
     app->txrx->protocol_plugin = plugin;
     *registry = plugin->registry;
     return true;

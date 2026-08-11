@@ -10,6 +10,9 @@
 //! correct cipher, (b) quantify how far a guess-and-determine must reduce the
 //! search, and (c) host that reduction as it's implemented.
 
+mod gd;
+mod gd_bitslice;
+
 const M48: u64 = (1u64 << 48) - 1;
 const F4A: u32 = 0x2C79;
 const F4B: u32 = 0x6671;
@@ -153,10 +156,78 @@ fn brute_mt(
     )
 }
 
+/// Blind guess-and-determine recovery demo over the sorted tabled reduction,
+/// parallelized across cores with early-stop. Generates two synthetic frames
+/// from a known key, recovers it blind, and reports the honest cost + wall time.
+fn gd_blind_demo(cores: usize) {
+    let (key, uid, nonce) = (0x0123_4567_89abu64, 0xdead_beefu64, 0x0bad_f00du64);
+    let ks = gd::keystream(gd::init(key, uid, nonce), 32);
+    let nonce2 = 0x1357_9bdfu64;
+    let ks2 = gd::keystream(gd::init(key, uid, nonce2), 32);
+    println!(
+        "\nblind GD: target key={key:012x} uid={uid:08x}  frames: ({nonce:08x},{ks:08x}) ({nonce2:08x},{ks2:08x})\n\
+         blind GD: recovering blind via sorted tabled reduction on {cores} cores (early-stop)...",
+    );
+    let t = std::time::Instant::now();
+    let (found, nodes) = gd::recover_key_mt(uid, nonce, ks, nonce2, ks2, cores, 15);
+    let dt = t.elapsed().as_secs_f64();
+    let rate = if dt > 0.0 { nodes as f64 / dt } else { f64::INFINITY };
+    println!("blind GD: {nodes} nodes in {dt:.2}s (~{rate:.2e} nodes/s across {cores} cores)");
+    match found {
+        Some(k) => println!("blind GD: recovered key = {k:012x}  correct={}", k == key),
+        None => println!("blind GD: key NOT FOUND (tree exhausted — reduction bug)"),
+    }
+}
+
+/// Bitsliced blind recovery demo (256 candidate assignments in parallel per pass).
+fn bs_blind_demo(cores: usize) {
+    let (key, uid, nonce) = (0x0123_4567_89abu64, 0xdead_beefu64, 0x0bad_f00du64);
+    let ks = gd::keystream(gd::init(key, uid, nonce), 32);
+    let nonce2 = 0x1357_9bdfu64;
+    let ks2 = gd::keystream(gd::init(key, uid, nonce2), 32);
+    println!(
+        "\nblind BITSLICE: target key={key:012x} uid={uid:08x}  frames: ({nonce:08x},{ks:08x}) ({nonce2:08x},{ks2:08x})\n\
+         blind BITSLICE: recovering on {cores} cores x 256 lanes (early-stop)...",
+    );
+    let t = std::time::Instant::now();
+    let (found, cand) = gd_bitslice::recover_key_bs(uid, nonce, ks, nonce2, ks2, cores, 15);
+    let dt = t.elapsed().as_secs_f64();
+    let rate = if dt > 0.0 { cand as f64 / dt } else { f64::INFINITY };
+    println!("blind BITSLICE: {cand} candidates in {dt:.2}s (~{rate:.1} cand/s)");
+    match found {
+        Some(k) => println!("blind BITSLICE: recovered key = {k:012x}  correct={}", k == key),
+        None => println!("blind BITSLICE: key NOT FOUND (tree exhausted — bug)"),
+    }
+}
+
 fn main() {
     validate();
+    println!();
+    if !gd::selftest() {
+        eprintln!("gd: SELF-TEST FAILED — reduction is not sound, aborting.");
+        std::process::exit(1);
+    }
+    println!("gd: guess-and-determine reduction validated (sorted fill-tables OK)");
+    if !gd_bitslice::selftest_primitives() {
+        eprintln!("bs: BITSLICE PRIMITIVES FAILED — aborting.");
+        std::process::exit(1);
+    }
 
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+
+    let arg1 = std::env::args().nth(1);
+    if arg1.as_deref() == Some("gd") || arg1.as_deref() == Some("blind") {
+        // Optional core-count override as 2nd arg (default = all cores).
+        let n = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(cores);
+        gd_blind_demo(n);
+        return;
+    }
+    if arg1.as_deref() == Some("bs") || arg1.as_deref() == Some("bitslice") {
+        let n = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(cores);
+        bs_blind_demo(n);
+        return;
+    }
+
     // Recover a key whose low `unknown` bits are unknown (rest fixed) from 2
     // frames, across all cores. Proves correctness + gives the real multi-core rate.
     let unknown: u32 = std::env::args()
@@ -201,8 +272,13 @@ fn main() {
         println!("   2^{bits:<2} = {human}");
     }
     println!(
-        "\nNEXT: implement the guess-and-determine (Verdult et al.) to cut the effective\n\
-         search to ~2^35 -> hour-scale here. Naive 2^48 stays infeasible. Cipher core is\n\
-         locked + validated; the reduction is the remaining crypto work."
+        "\nGuess-and-determine reduction: IMPLEMENTED + validated (run `{} gd` for a\n\
+         live blind recovery + measured node rate on THIS machine). The default run\n\
+         above did NOT time the GD. Reference numbers (i7-14700F, 28 threads): PEXT-\n\
+         compressed CSR fill-tables + inline single-bit layers + work-stealing reached\n\
+         ~7e8 nodes/s; the blind RKE tree is ~2^41.5 nodes (~70 min full sweep, early-\n\
+         stop halves the average). Remaining lever: bitslice f20/lfsr 64-256 wide\n\
+         (the hitag2hell/OpenCL trick) -> ~minute scale.",
+        std::env::args().next().unwrap_or_else(|| "hitag2_crack".into()),
     );
 }

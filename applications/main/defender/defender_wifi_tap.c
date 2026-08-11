@@ -13,7 +13,10 @@
 /* Volatile ring state to be safely accessed from WiFi task callback */
 static volatile uint32_t s_write_idx = 0;
 static volatile uint32_t s_read_idx = 0;
-static DefTapDeauthRec s_ring[DEF_DEAUTH_RING];
+// On-demand (was 768 B always-resident BSS). Mirror of the s_bring conversion
+// below: written by def_tap_cb on the WiFi task; allocated in _start before
+// promiscuous is enabled, freed in _stop after it is disabled.
+static DefTapDeauthRec* s_ring;
 
 /* Beacon ring, filled by the same promiscuous callback */
 static volatile uint32_t s_bwrite_idx = 0;
@@ -30,7 +33,7 @@ static volatile uint8_t s_tap_channel = 1;
  * records to the ring. Implements drop-on-full behavior.
  */
 static void def_tap_cb(void* buf, wifi_promiscuous_pkt_type_t type) {
-    if(!s_bring) return; /* buffer freed / not yet allocated */
+    if(!s_bring || !s_ring) return; /* buffers freed / not yet allocated */
     /* Only interested in management frames */
     if(type != WIFI_PKT_MGMT) return;
 
@@ -134,7 +137,12 @@ void defender_wifi_tap_start(uint8_t channel) {
     s_bwrite_idx = 0;
     s_bread_idx = 0;
 
-    /* Allocate the beacon ring before enabling the callback that fills it. */
+    /* Allocate the deauth + beacon rings before enabling the callback that
+     * fills them. */
+    if(!s_ring) {
+        s_ring = calloc(DEF_DEAUTH_RING, sizeof(*s_ring));
+        if(!s_ring) return; /* no RAM — leave promiscuous off */
+    }
     if(!s_bring) {
         s_bring = calloc(DEF_BEACON_RING, sizeof(*s_bring));
         if(!s_bring) return; /* no RAM — leave promiscuous off */
@@ -152,6 +160,8 @@ void defender_wifi_tap_start(uint8_t channel) {
 void defender_wifi_tap_stop(void) {
     wlan_hal_set_promiscuous(false, NULL); /* unregister def_tap_cb (synchronous) */
     wlan_hal_stop();
+    free(s_ring);
+    s_ring = NULL;
     free(s_bring);
     s_bring = NULL;
 }
@@ -187,7 +197,7 @@ uint32_t defender_wifi_tap_drain_beacon(DefenderBeaconRec* out, uint32_t max) {
  * @return     Number of records written to out
  */
 uint32_t defender_wifi_tap_drain_deauth(DefTapDeauthRec* out, uint32_t max) {
-    if(!out || max == 0) return 0;
+    if(!out || max == 0 || !s_ring) return 0;
 
     uint32_t count = 0;
     uint32_t current_tick = furi_get_tick();

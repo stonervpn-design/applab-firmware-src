@@ -67,6 +67,11 @@ typedef struct {
     bool two_bytes; /**< Two bytes key */
     uint8_t opencode; /**< Opencode */
     uint8_t bit_index; /**< Index of a group to bruteforce in loaded file */
+#ifndef PUBLIC_BUILD
+    // Source .sub path of the last LoadFile load, kept so a resume checkpoint can
+    // reload it and rebuild the protocol/frequency/preset (PRIVATE-only).
+    char load_file_path[256];
+#endif
 } SubBruteDevice;
 
 /**

@@ -68,6 +68,29 @@ bool subghz_protocol_keeloq_bft_create_data(
     SubGhzRadioPreset* preset);
 
 /**
+ * Key generation for BFT (upstream/external-API compatibility alias).
+ * Forwards to subghz_protocol_keeloq_bft_create_data with identical arguments.
+ * @param context Pointer to a SubGhzProtocolEncoderKeeloq instance
+ * @param flipper_format Pointer to a FlipperFormat instance
+ * @param serial Serial number, 28 bit
+ * @param btn Button number, 4 bit
+ * @param cnt Counter value, 16 bit
+ * @param seed Seed value, 32 bit
+ * @param manufacture_name Name of manufacturer's key
+ * @param preset Modulation, SubGhzRadioPreset
+ * @return true On success
+ */
+bool subghz_protocol_keeloq_seed_create_data(
+    void* context,
+    FlipperFormat* flipper_format,
+    uint32_t serial,
+    uint8_t btn,
+    uint16_t cnt,
+    uint32_t seed,
+    const char* manufacture_name,
+    SubGhzRadioPreset* preset);
+
+/**
  * Key generation from simple data.
  * @param context Pointer to a SubGhzProtocolEncoderFaacSLH instance
  * @param flipper_format Pointer to a FlipperFormat instance

@@ -467,33 +467,12 @@ static esp_err_t kb_i2c_install(void) {
  * Public interface
  * ========================================================================= */
 
-/* TEMP DIAGNOSTIC: probe every address on the keyboard I2C bus and log which
- * ACK. Used to locate the ES8311 audio codec (expected 0x18) and BMI270 (0x68)
- * so the speaker driver can address the codec. Remove once audio is wired up. */
-static void kb_i2c_scan(void) {
-    ESP_LOGW(TAG, "I2C scan on GPIO%d/GPIO%d (port %d):", KB_PIN_SDA, KB_PIN_SCL, KB_I2C_PORT);
-    for(uint8_t addr = 0x08; addr < 0x78; addr++) {
-        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-        i2c_master_start(cmd);
-        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
-        i2c_master_stop(cmd);
-        esp_err_t ret = i2c_master_cmd_begin(KB_I2C_PORT, cmd, pdMS_TO_TICKS(20));
-        i2c_cmd_link_delete(cmd);
-        if(ret == ESP_OK) {
-            ESP_LOGW(TAG, "  I2C device found at 0x%02X", addr);
-        }
-    }
-    ESP_LOGW(TAG, "I2C scan done");
-}
-
 void target_input_init(void) {
     /* --- I²C master bus for the TCA8418 (legacy driver, self-contained) --- */
     if(kb_i2c_install() != ESP_OK) {
         ESP_LOGE(TAG, "Keyboard I2C bus init failed");
         return;
     }
-
-    kb_i2c_scan();
 
     /* --- Initialise TCA8418 --- */
     esp_err_t ret = tca8418_hw_init();

@@ -21,6 +21,7 @@ static void lan_attack_app_tick_event_callback(void* context) {
 
 static LanAttackApp* lan_attack_app_alloc(void) {
     LanAttackApp* app = malloc(sizeof(LanAttackApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     app->gui = furi_record_open(RECORD_GUI);
     app->notifications = furi_record_open(RECORD_NOTIFICATION);
     app->view_dispatcher = view_dispatcher_alloc();
@@ -31,7 +32,6 @@ static LanAttackApp* lan_attack_app_alloc(void) {
     app->recon = NULL;
     app->authorized = false;
 
-    view_dispatcher_enable_queue(app->view_dispatcher);
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_custom_event_callback(
         app->view_dispatcher, lan_attack_app_custom_event_callback);

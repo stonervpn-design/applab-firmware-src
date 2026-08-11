@@ -24,7 +24,6 @@ static uint32_t circular_shift(int bits, uint32_t word) {
 
 static void SHA1ProcessMessageBlock(SHA1Context *context) {
     uint32_t t, temp;
-    int i;
 
     for (t = 0; t < 16; t++)
         context->W[t] = ((uint32_t)context->MessageBlock[t * 4] << 24) |

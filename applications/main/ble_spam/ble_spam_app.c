@@ -36,6 +36,7 @@ static BleSpamApp* ble_spam_app_alloc(void) {
      * so bail cleanly here instead of NULL-dereferencing on the next line when
      * the heap floor is too low to open this (view-heavy) app. */
     BleSpamApp* app = malloc(sizeof(BleSpamApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     if(!app) return NULL;
 
     app->gui = furi_record_open(RECORD_GUI);

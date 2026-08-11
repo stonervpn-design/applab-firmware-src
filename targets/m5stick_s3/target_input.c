@@ -11,8 +11,13 @@
  *                    keep holding >=1200ms -> InputKeyBack (LONG — game exit, e.g.
  *                                            Snake; an extension beyond Bruce)
  *   Screen wake:     any deliberate BMI270 movement wakes the screen once it has
- *                    gone dark from inactivity — and does nothing otherwise. There
- *                    is no tilt navigation.
+ *                    gone dark from inactivity — and does nothing else while dark.
+ *   Tilt nav:        once the screen is already lit, a firm roll of the stick past a
+ *                    threshold emits one InputKeyLeft/Right tap. Hysteresis (the roll
+ *                    must fall back into a neutral band before it can fire again) plus a
+ *                    cooldown keep ordinary handling from injecting nav. A roll made
+ *                    while the screen is dark only wakes it — it never also navigates.
+ *                    Honors the s_tilt_enabled toggle (System settings).
  *
  * A single-click is confirmed only after the 250ms double-click window closes, so Down
  * has a slight, deliberate lag (Bruce does the same) to distinguish it from Up.
@@ -39,8 +44,10 @@
  *   KEY1 (GPIO11, "M5"/front button) = Select/Ok.
  *   KEY2 (GPIO12, side button)       = nav: single-click Down, double-click Up,
  *                                      long-press (>=600ms) Back.
- * The BMI270 IMU is used only to wake the screen from inactivity (our addition;
- * Bruce has no tilt); it never injects navigation keys.
+ * The BMI270 IMU wakes the screen from inactivity (our addition; Bruce has no tilt) and,
+ * once the screen is lit, injects Left/Right on a firm roll — the only nav keys the
+ * two physical buttons cannot otherwise produce. While the screen is dark the IMU only
+ * wakes; it never injects navigation keys in the dark.
  * DW_LONG2 is an extension beyond Bruce: keep holding past it for a LONG Back, which
  * the bundled Flipper games (Snake, ...) require to exit — Bruce's Arduino apps don't
  * use that convention so upstream stops at one Back. */
@@ -48,6 +55,8 @@
 #define DW_LONG_MS       600U  /* hold -> Back (Bruce Esc) */
 #define DW_LONG2_MS      1200U /* keep holding -> long Back (game exit) */
 #define KEY_DEBOUNCE_MS  20U
+#define ACCEL_SAMPLE_MS  40U   /* throttle BMI270 reads: 25 Hz is ample for wake-detect
+                                * vs. reading every 4 ms poll (~250 Hz) on the shared I2C bus */
 
 static void publish(FuriPubSub* pubsub, InputKey key, InputType type, uint32_t* seq) {
     InputEvent event = {
@@ -152,6 +161,46 @@ static bool motion_wake_edge(int16_t x, int16_t y, int16_t z, uint32_t now) {
     return false;
 }
 
+/* ---- BMI270 firm-roll -> Left/Right navigation (only while the screen is lit) ----
+ * Authorized addition (the wake path above stays wake-only). One deliberate roll about
+ * the stick's long axis, held past a firm threshold, emits a single InputKeyLeft/Right
+ * tap. Two guardrails stop ordinary handling / wobble from injecting nav:
+ *   - hysteresis: after firing we DISARM and only re-arm once the roll falls back into a
+ *     neutral band (NEUTRAL << FIRE), so a sustained tilt fires exactly once;
+ *   - cooldown: a minimum gap between taps.
+ * `roll` is the gravity component along the roll axis in raw ±2g LSB (1g ≈ 16384).
+ * NOTE (needs on-device tuning): the thresholds below and the axis/sign chosen in
+ * target_input_poll() (currently ax, +roll = Right) are best-guess defaults — the axis
+ * may need swapping to ay and/or the sign negating depending on the BMI270 mounting. */
+#define TILT_NAV_FIRE_LSB    7000   /* |roll| past this = a firm tilt (~0.43 g, ~25°) */
+#define TILT_NAV_NEUTRAL_LSB 3000   /* must fall back below this to re-arm (hysteresis) */
+#define TILT_NAV_COOLDOWN_MS 400U   /* min gap between tilt-nav taps */
+
+static bool s_tilt_nav_armed = true;      /* true when roll is in the neutral band, ready to fire */
+static uint32_t s_tilt_nav_last_at = 0;   /* tick of the last emitted tilt-nav tap */
+
+/* Force the detector back to its armed/neutral rest state. Called while the screen is
+ * dark so a roll performed in the dark cannot fire on the freshly-lit view. */
+static void tilt_nav_reset(void) {
+    /* DISARM: a roll made while the screen is dark must not fire on the freshly-lit
+     * view. armed re-asserts only after the roll falls back into the neutral band. */
+    s_tilt_nav_armed = false;
+}
+
+/* Emit at most one Left/Right tap per firm roll. Direction comes from the sign of roll. */
+static void tilt_nav_edge(FuriPubSub* pubsub, int16_t roll, uint32_t now, uint32_t* seq) {
+    int32_t mag = roll < 0 ? -(int32_t)roll : (int32_t)roll;
+    if(s_tilt_nav_armed && mag >= TILT_NAV_FIRE_LSB &&
+       (uint32_t)(now - s_tilt_nav_last_at) >= furi_ms_to_ticks(TILT_NAV_COOLDOWN_MS)) {
+        /* firm roll past threshold, armed, and past cooldown -> one tap */
+        publish_tap(pubsub, roll > 0 ? InputKeyRight : InputKeyLeft, seq);
+        s_tilt_nav_last_at = now;
+        s_tilt_nav_armed = false; /* disarm until the roll returns to the neutral band */
+    } else if(!s_tilt_nav_armed && mag <= TILT_NAV_NEUTRAL_LSB) {
+        s_tilt_nav_armed = true;  /* back in neutral -> ready to fire again */
+    }
+}
+
 void target_input_init(void) {
     gpio_config_t cfg = {
         .pin_bit_mask = (1ULL << BOARD_PIN_BTN_KEY1) | (1ULL << BOARD_PIN_BTN_KEY2),
@@ -171,6 +220,8 @@ void target_input_init(void) {
                (int)BOARD_PIN_BTN_KEY1, (int)BOARD_PIN_BTN_KEY2);
 
     s_acc_base_have = false;
+    s_tilt_nav_armed = true;
+    s_tilt_nav_last_at = 0;
     if(bmi270_init()) {
         FURI_LOG_I(TAG, "BMI270 available; tilt-to-wake enabled");
     } else {
@@ -269,19 +320,35 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
         s_key2.waiting = false;
     }
 
-    /* ---- BMI270 motion -> wake the screen (never navigation) ---- */
-    if(s_tilt_enabled && bmi270_is_present()) {
+    /* ---- BMI270 motion -> wake the screen (never navigation) ----
+     * Throttle to ACCEL_SAMPLE_MS: the accel is on the shared keyboard/sensor I2C bus,
+     * so reading it every 4 ms poll floods the bus for a wake-detector that needs ~25 Hz. */
+    static uint32_t s_last_accel_tick = 0;
+    if(s_tilt_enabled && bmi270_is_present() &&
+       (uint32_t)(now - s_last_accel_tick) >= furi_ms_to_ticks(ACCEL_SAMPLE_MS)) {
+        s_last_accel_tick = now;
         int16_t ax = 0, ay = 0, az = 0;
         if(bmi270_read_accel(&ax, &ay, &az)) {
             /* CONFIG_FREERTOS_HZ=1000 -> 1 tick == 1 ms, so `now` is already ms. */
-            if(motion_wake_edge(ax, ay, az, now) && furi_hal_light_get_backlight() == 0) {
+            bool dark = (furi_hal_light_get_backlight() == 0);
+            /* Wake path (behavior unchanged): motion_wake_edge() runs on every sample so
+             * the baseline keeps chasing the resting pose (the && only short-circuits
+             * AFTER it executes); a wake is emitted only while the screen is dark. */
+            if(motion_wake_edge(ax, ay, az, now) && dark) {
                 /* Screen is dark: emit one wake. A bare Press+Release (no Short/Long)
                  * turns the backlight back on via the notification service and resets
                  * the desktop idle timer, but no view treats it as a keypress — so tilt
-                 * wakes the screen and does nothing else. The backlight==0 gate makes
-                 * tilt completely inert whenever the screen is lit. */
+                 * wakes the screen and does nothing else while dark. */
                 publish(pubsub, WAKE_KEY, InputTypePress, sequence_counter);
                 publish(pubsub, WAKE_KEY, InputTypeRelease, sequence_counter);
+            }
+            /* Tilt navigation is live only while the screen is already lit. While dark we
+             * hold the detector disarmed (tilt_nav_reset) so a roll performed in the dark
+             * wakes the screen but never also injects a Left/Right on the freshly-lit view. */
+            if(!dark) {
+                tilt_nav_edge(pubsub, ax, now, sequence_counter);
+            } else {
+                tilt_nav_reset();
             }
         }
     }

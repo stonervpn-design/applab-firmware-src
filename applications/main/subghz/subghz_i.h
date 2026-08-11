@@ -102,7 +102,10 @@ struct SubGhz {
 
     // RollBack rolling-code capture-then-replay
     RollbackStore rollback_store;
-    char rollback_frame[ROLLBACK_MAX_SLOTS][192]; // serialized .sub body per slot, index-aligned
+    // Serialized .sub body per slot, index-aligned. 512 (was 192) so structured rolling
+    // frames (Protocol/Bit/Key + per-protocol fields) fit without the truncate-then-reject
+    // that dropped valid captures; over-long bodies are still rejected in subghz_rollback.c.
+    char rollback_frame[ROLLBACK_MAX_SLOTS][512];
     volatile bool rollback_abort;
 
     // SubBrute Bruteforcer

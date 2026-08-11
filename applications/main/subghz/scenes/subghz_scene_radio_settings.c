@@ -164,18 +164,18 @@ static void subghz_scene_receiver_config_set_timestamp_file_names(VariableItem* 
     subghz_last_settings_save(subghz->last_settings);
 }
 
-static const char* const car_mode_text[] = {"Off", "Cars 1", "Cars 2"};
+#ifndef PUBLIC_BUILD
+static const char* const car_mode_text[] = {"Off", "Cars"};
 #define CAR_MODE_COUNT (sizeof(car_mode_text) / sizeof(car_mode_text[0]))
 
 static void subghz_scene_radio_settings_set_automotive(VariableItem* item) {
     SubGhz* subghz = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
     variable_item_set_current_value_text(item, car_mode_text[index]);
-    // Selects the resident decoder set (general / Cars 1 / Cars 2) and rebuilds the
-    // receiver. The car set is split in two because this no-PSRAM board can't hold
-    // all of them resident at once; each half fits like the general set.
+    // Single merged automotive set (all car decoders resident); rebuilds the receiver.
     subghz_txrx_set_car_mode(subghz->txrx, index);
 }
+#endif
 
 void subghz_scene_radio_settings_on_enter(void* context) {
     SubGhz* subghz = context;
@@ -184,7 +184,9 @@ void subghz_scene_radio_settings_on_enter(void* context) {
     int32_t value_index;
     VariableItem* item;
 
-    // Automotive protocol set (ProtoPirate car decoders) — on-demand, off by default
+#ifndef PUBLIC_BUILD
+    // Automotive protocol set (car decoders) — on-demand, off by default.
+    // Stripped from public builds (guardrail — no car UI on public).
     item = variable_item_list_add(
         variable_item_list,
         "Automotive",
@@ -192,8 +194,10 @@ void subghz_scene_radio_settings_on_enter(void* context) {
         subghz_scene_radio_settings_set_automotive,
         subghz);
     value_index = subghz_txrx_get_car_mode(subghz->txrx);
+    if(value_index >= CAR_MODE_COUNT) value_index = 1; // stale "Cars 2" -> Cars
     variable_item_set_current_value_index(item, value_index);
     variable_item_set_current_value_text(item, car_mode_text[value_index]);
+#endif
 
     // Module selection removed — ESP32 port has no external CC1101 option
 

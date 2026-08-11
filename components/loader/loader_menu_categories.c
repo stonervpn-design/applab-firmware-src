@@ -14,7 +14,9 @@ static const LoaderCategoryMapEntry loader_category_map[] = {
     {"subghz", LoaderCategorySubGhz},
     {"subghz_remote_ofw", LoaderCategorySubGhz},
     {"radio_scanner", LoaderCategorySubGhz},
-    {"proto_pirate", LoaderCategorySubGhz},
+#ifndef PUBLIC_BUILD
+    {"proto_pirate", LoaderCategorySubGhz}, // car RKE toolkit — never listed on public
+#endif
     {"weather_station", LoaderCategorySubGhz},
     // 2.4 GHz
     {"nrf24", LoaderCategory24Ghz},

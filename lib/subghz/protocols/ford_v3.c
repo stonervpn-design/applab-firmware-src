@@ -460,8 +460,9 @@ static SubGhzProtocolStatus
             break;
         }
 
-        // Seed the on-air bytes from the packed 8-byte key, then let the full 13-byte Raw
-        // field (written by the decoder's serialize) override it when present.
+        // Seed the on-air bytes from the packed 8-byte key; the full 13-byte Raw field
+        // (written by the decoder's serialize) then supplies the encrypted rolling Hop in
+        // bytes 8-12 and is required for a valid replay.
         const uint64_t d = instance->generic.data;
         for(uint8_t i = 0; i < 8U; i++) {
             instance->raw_bytes[i] = (uint8_t)(d >> (56 - i * 8));
@@ -469,7 +470,12 @@ static SubGhzProtocolStatus
         memset(&instance->raw_bytes[8], 0, FORD_V3_DATA_BYTES - 8U);
 
         flipper_format_rewind(flipper_format);
-        flipper_format_read_hex(flipper_format, "Raw", instance->raw_bytes, FORD_V3_DATA_BYTES);
+        // Replay requires the captured frame: without "Raw" the rolling Hop (bytes 8-12)
+        // stays zero and we would silently TX a broken null-hop frame, so fail cleanly.
+        if(!flipper_format_read_hex(
+               flipper_format, "Raw", instance->raw_bytes, FORD_V3_DATA_BYTES)) {
+            break;
+        }
 
         uint32_t serial = UINT32_MAX;
         uint32_t btn = UINT32_MAX;

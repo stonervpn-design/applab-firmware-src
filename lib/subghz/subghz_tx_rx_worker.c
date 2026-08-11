@@ -114,7 +114,7 @@ bool subghz_tx_rx_worker_rx(SubGhzTxRxWorker* instance, uint8_t* data, uint8_t* 
 
     if(subghz_devices_rx_pipe_not_empty(instance->device)) {
         instance->dbg_pipe++;
-        FURI_LOG_I(
+        FURI_LOG_T(
             TAG,
             "RSSI: %03.1fdbm LQI: %d",
             (double)subghz_devices_get_rssi(instance->device),

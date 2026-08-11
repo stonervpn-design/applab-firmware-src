@@ -31,6 +31,7 @@ static void mifare_fuzzer_tick_event_callback(void* context) {
 /// @return
 MifareFuzzerApp* mifare_fuzzer_alloc() {
     MifareFuzzerApp* app = malloc(sizeof(MifareFuzzerApp));
+    furi_check(app);
 
     app->view_dispatcher = view_dispatcher_alloc();
     app->scene_manager = scene_manager_alloc(&mifare_fuzzer_scene_handlers, app);

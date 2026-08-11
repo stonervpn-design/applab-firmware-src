@@ -89,6 +89,11 @@ bool subbrute_worker_is_masked(SubBruteWorker* instance);
 
 /** Number of variable (masked) bits currently set, or 0 when unmasked. */
 uint8_t subbrute_worker_get_mask_bits(SubBruteWorker* instance);
+
+/** Current raw function-mask variable-bit mask (0 when unmasked). Lets a resume
+ * checkpoint persist the exact mask so a masked LoadFile sweep restores its full
+ * 2^k space, not just the bit count. */
+uint64_t subbrute_worker_get_mask_var(SubBruteWorker* instance);
 #endif
 
 /**
@@ -205,6 +210,20 @@ void subbrute_worker_stop(SubBruteWorker* instance);
  * @return True if the key was successfully transmitted, otherwise false.
  */
 bool subbrute_worker_transmit_current_key(SubBruteWorker* instance, uint64_t step);
+
+/**
+ * @brief Clear the manual-transmit rate guard so the next
+ *        subbrute_worker_transmit_current_key() fires immediately.
+ *
+ * subbrute_worker_transmit_current_key() rejects calls made within
+ * SUBBRUTE_MANUAL_TRANSMIT_INTERVAL (250ms) of the previous one. For a tight
+ * brute sweep that 250ms floor dominates wall-time; call this before each
+ * transmit to drive the same proven framed-TX path back-to-back. Does not touch
+ * the radio or any other state.
+ *
+ * @param instance Pointer to the SubBruteWorker instance.
+ */
+void subbrute_worker_clear_tx_guard(SubBruteWorker* instance);
 
 /**
  * @brief Check if the `SubBruteWorker` instance can transmit manually.

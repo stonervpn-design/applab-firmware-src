@@ -126,6 +126,32 @@ void furi_hal_grove_5v_set(bool on) {
 #endif
 }
 
+bool furi_hal_m5pm1_get_vbat_mv(uint16_t* out_mv) {
+#ifdef BOARD_HAS_M5PM1
+    /* M5PM1 reports the battery voltage directly in millivolts across two registers:
+     * 0x22 = VBAT low byte, 0x23 = VBAT high nibble (12-bit total). The PMIC I2C
+     * driver was installed in furi_hal_m5pm1_init(); reuse it. This is the M5Stick's
+     * only battery-voltage source (it has no GPIO ADC divider). */
+    if(!out_mv) return false;
+    uint8_t reg, lo = 0, hi = 0;
+    reg = 0x22;
+    if(i2c_master_write_read_device(
+           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &lo, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
+        return false;
+    }
+    reg = 0x23;
+    if(i2c_master_write_read_device(
+           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &hi, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
+        return false;
+    }
+    *out_mv = (uint16_t)(((uint16_t)(hi & 0x0F) << 8) | lo);
+    return true;
+#else
+    (void)out_mv;
+    return false;
+#endif
+}
+
 
 void furi_hal_init_early(void) {
     furi_hal_cortex_init_early();

@@ -2,6 +2,7 @@
 #include "../helpers/vehicle_vuln_db.h"
 #include <string.h>
 
+#ifndef PUBLIC_BUILD
 void subghz_scene_vuln_list_on_enter(void* context) {
     SubGhz* subghz = context;
 
@@ -67,3 +68,4 @@ void subghz_scene_vuln_list_on_exit(void* context) {
     SubGhz* subghz = context;
     widget_reset(subghz->widget);
 }
+#endif /* !PUBLIC_BUILD — vehicle vuln browser is car-only, stripped from public */

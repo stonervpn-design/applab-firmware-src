@@ -226,6 +226,29 @@ if _board == "lilygo_t_embed_cc1101":
     }
     APPS = [a for a in APPS if a not in _tembed_drop]
 
+# Cardputer-ADV RAM trim (2026-08-04, user "trim the ram... nothing subghz"): drop
+# clearly-non-subghz clutter apps to free DRAM/flash. ONLY apps listed in
+# OPTIONAL_APPS below are removed (that set is the file's own contract for what can be
+# dropped without breaking the link — services/settings are never touched). subghz +
+# the whole NFC/RF security toolkit (Evil Portal/wlan, camera_hunter, wardriver,
+# defender, nrf24, infrared, nfc suite, esubghz_chat, subhound, can_commander,
+# radio_scanner, doorbell_brute) are KEPT. To reclaim more RAM, remove `wlan` (~10 KB,
+# the biggest non-subghz app) or disable BLE (~27 KB) — both intentionally left in.
+if _board == "m5stack_cardputer_adv":
+    _cardputer_drop = {
+        # games / toys
+        "asteroids", "game15", "flipper_pong", "snake20", "tetris", "texas_holdem",
+        "blackjack", "dice_app", "flippergotchi",
+        # demos / utilities with no radios
+        "pocketlab", "qrcode", "clock", "grove_i2c_scan",
+        # LoRa / mesh — need the Cap-LoRa-1262 SX1262 addon; dead weight without it
+        "lora_monitor", "meshtastic_sniffer",
+        # NOTE: ble_spam is intentionally KEPT — it is NOT a leaf app. The defender
+        # app (kept) links its HAL (ble_walk_hal_*, ble_tracker_hal_*) in the BLE-spam
+        # and BLE-tracker scenes, so dropping ble_spam breaks the link.
+    }
+    APPS = [a for a in APPS if a not in _cardputer_drop]
+
 # NOTE: cli_vcp and dolphin look like easy RAM wins (~4KB stack each) but both
 # are hard-wired into the desktop service: desktop.c calls cli_vcp_enable/disable
 # directly (USB-Storage/qFlipper toggles) and lists "dolphin" in its `requires`
@@ -257,15 +280,24 @@ if _is_public:
     APPS = [a for a in APPS if a != "camera_hunter"]
     # Doorbell Brute (Sub-GHz doorbell chime brute-forcer) is PRIVATE-only.
     APPS = [a for a in APPS if a != "doorbell_brute"]
-    # Public build is meant to ship the community-published ProtoPirate app (its
-    # OWN decoders, from github.com/RocketGod-git/ProtoPirate) as a standalone
-    # MENUEXTERNAL app — none of the private in-tree SubGhz Automotive decoders.
-    # ProtoPirate is ported to a static protocol registry for this port (its
-    # plugin_manager is a stub / no FAP loader): the five RX registry plugins are
-    # compiled in and wired statically, TX/emulate disabled. See the app's
-    # application.fam + helpers/protopirate_protocol_plugin_host.c.
-    if "proto_pirate" not in APPS:
-        APPS.append("proto_pirate")
+    # ProtoPirate is a CAR RKE toolkit (VAG/Kia/Ford/Honda/PSA/etc. decoders AND
+    # encoders). It ships live car decode/encode code + car model names, so by
+    # default it is NEVER in a public build (the owner's absolute "no car material
+    # on public" rule).
+    #
+    # OWNER-AUTHORIZED EXCEPTION (2026-08-10, password Romandoe420): proto_pirate is
+    # offered on the public applab catalog, but built into a public bin ONLY when a
+    # request EXPLICITLY selects it (FLIPPER_APPS lists it — the applab custom-build
+    # path). It is never baked into the default full public webflasher bins (those
+    # are built with no FLIPPER_APPS narrowing, so the append below never fires).
+    # Its own bundled decoders are self-contained; the main app's 66 car protocol
+    # sources are already CMake-excluded on public, so there is no dup-symbol clash.
+    _pp_sel = {a.strip() for a in os.environ.get("FLIPPER_APPS", "").split(",") if a.strip()}
+    if "proto_pirate" in _pp_sel:
+        if "proto_pirate" not in APPS:
+            APPS.append("proto_pirate")
+    else:
+        APPS = [a for a in APPS if a != "proto_pirate"]
 
 # ── On-demand build service: custom app subset ───────────────────────────────
 # FLIPPER_APPS = comma-separated appids to KEEP. Applied AFTER all board/variant
@@ -285,6 +317,9 @@ OPTIONAL_APPS = {
     "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
     "clock", "qrcode", "pocketlab", "defender",
+    # Owner-authorized on public via the applab custom-build only (see the public
+    # block above); built solely when explicitly selected.
+    "proto_pirate",
 }
 _apps_env = os.environ.get("FLIPPER_APPS", "").strip()
 if _apps_env:

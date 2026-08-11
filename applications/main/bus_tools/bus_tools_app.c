@@ -21,6 +21,7 @@ static void bus_tools_app_tick_event_callback(void* context) {
 
 BusToolsApp* bus_tools_app_alloc(void) {
     BusToolsApp* app = malloc(sizeof(BusToolsApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     app->gui = furi_record_open(RECORD_GUI);
     app->view_dispatcher = view_dispatcher_alloc();
     app->scene_manager = scene_manager_alloc(&bus_tools_scene_handlers, app);

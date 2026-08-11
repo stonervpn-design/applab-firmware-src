@@ -249,6 +249,7 @@ static int32_t subghz_frequency_analyzer_worker_thread(void* context) {
                     if(!subghz_sig_identify_run(
                            frequency_rssi.frequency_fine,
                            fa_mod,
+                           fa_conf,
                            instance->id_buf,
                            sizeof(instance->id_buf),
                            &instance->id_score)) {

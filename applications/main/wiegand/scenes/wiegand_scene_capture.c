@@ -40,6 +40,5 @@ bool wiegand_scene_capture_on_event(void* context, SceneManagerEvent event) {
 
 void wiegand_scene_capture_on_exit(void* context) {
     furi_assert(context);
-    WiegandApp* app = context;
     wiegand_driver_stop_capture();
 }

@@ -125,17 +125,6 @@ static bool ford_v2_button_is_valid(uint8_t btn) {
     }
 }
 
-#ifdef ENABLE_EMULATE_FEATURE
-static uint8_t ford_v2_uint8_parity(uint8_t value) {
-    uint8_t parity = 0U;
-    while(value) {
-        parity ^= (value & 1U);
-        value >>= 1U;
-    }
-    return parity;
-}
-#endif
-
 static const char* ford_v2_button_name(uint8_t btn) {
     switch(btn) {
     case 0x10:
@@ -375,9 +364,9 @@ static void ford_v2_encoder_rebuild_raw_from_payload(SubGhzProtocolEncoderFordV2
         instance->raw_bytes[8U + i] = (uint8_t)(instance->extra_data >> (32U - i * 8U));
     }
 
-    const uint8_t btn = instance->raw_bytes[6];
-    const uint8_t k7_msb = (uint8_t)(ford_v2_uint8_parity(btn) << 7);
-    instance->raw_bytes[7] = (instance->raw_bytes[7] & 0x7FU) | k7_msb;
+    // Preserve raw_bytes[7] MSB verbatim from the captured frame (carried in generic.data
+    // above): the decoder never reads this bit, so recomputing it as parity(btn) would
+    // corrupt an otherwise byte-faithful replay of the 31-bit rolling tail.
 }
 
 static void ford_v2_encoder_refresh_data_from_raw(SubGhzProtocolEncoderFordV2* instance) {

@@ -15,6 +15,7 @@ static void nfc_share_tick_cb(void* ctx) {
 
 static NfcShareApp* nfc_share_app_alloc(void) {
     NfcShareApp* app = malloc(sizeof(NfcShareApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     memset(app, 0, sizeof(NfcShareApp));
     app->gui = furi_record_open(RECORD_GUI);
     app->dialogs = furi_record_open(RECORD_DIALOGS);

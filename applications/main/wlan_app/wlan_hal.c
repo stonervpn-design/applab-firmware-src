@@ -255,6 +255,18 @@ static void wlan_worker_fn(void* arg) {
             break;
 
         case WCMD_SET_PROMISC:
+            // On enable, pin the RX filter to MGMT+DATA. The promiscuous filter is
+            // GLOBAL and sticky: a prior subsystem could have narrowed it, which
+            // would silently starve a data-frame sniffer (a client camera mostly
+            // sends DATA, not mgmt). MGMT keeps beacons/probes for the AP-scan and
+            // pwngrid paths; only CTRL/MISC (acks etc.) are dropped, which no
+            // caller parses.
+            if(cmd.set_promisc.enable) {
+                wifi_promiscuous_filter_t filt = {
+                    .filter_mask =
+                        WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA};
+                esp_wifi_set_promiscuous_filter(&filt);
+            }
             // CB immer setzen (auch auf NULL), sonst bleibt ein zuvor
             // installierter RX-Callback aus einem anderen Subsystem aktiv.
             esp_wifi_set_promiscuous_rx_cb(cmd.set_promisc.enable ? cmd.set_promisc.cb : NULL);
@@ -757,7 +769,7 @@ const char* wlan_hal_beacon_spam_last_result(void) {
 // ---- Karma -----------------------------------------------------------------
 static volatile bool s_karma_active = false;
 static TaskHandle_t s_karma_task = NULL;
-static WlanSsidSet s_karma_pnl;          // harvested SSIDs (bounded 32)
+static WlanSsidSet* s_karma_pnl = NULL;  // harvested SSIDs (bounded 32), on-demand
 static FuriMutex* s_karma_lock = NULL;
 static volatile uint32_t s_karma_beacons = 0;
 
@@ -772,7 +784,7 @@ static void karma_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t type) {
     if(ssid[0] == '\0') return; // skip wildcard probes
     // SSID must fit the 802.11 beacon we rebroadcast (<=32) — already guaranteed.
     if(s_karma_lock && furi_mutex_acquire(s_karma_lock, 0) == FuriStatusOk) {
-        wlan_ssid_set_insert(&s_karma_pnl, ssid);
+        if(s_karma_pnl) wlan_ssid_set_insert(s_karma_pnl, ssid);
         furi_mutex_release(s_karma_lock);
     }
 }
@@ -792,11 +804,13 @@ static void karma_task(void* param) {
         char ssid[WLAN_PROBE_SSID_MAX] = {0};
         uint8_t count = 0;
         if(s_karma_lock && furi_mutex_acquire(s_karma_lock, 0) == FuriStatusOk) {
-            count = s_karma_pnl.count;
-            if(count) {
-                if(idx >= count) idx = 0;
-                strncpy(ssid, s_karma_pnl.ssids[idx], WLAN_PROBE_SSID_MAX - 1);
-                idx++;
+            if(s_karma_pnl) {
+                count = s_karma_pnl->count;
+                if(count) {
+                    if(idx >= count) idx = 0;
+                    strncpy(ssid, s_karma_pnl->ssids[idx], WLAN_PROBE_SSID_MAX - 1);
+                    idx++;
+                }
             }
             furi_mutex_release(s_karma_lock);
         }
@@ -832,7 +846,16 @@ void wlan_hal_karma_start(void) {
     }
     if(s_wifi_connected) wlan_hal_disconnect();
     if(!s_karma_lock) s_karma_lock = furi_mutex_alloc(FuriMutexTypeNormal);
-    wlan_ssid_set_reset(&s_karma_pnl);
+    if(!s_karma_pnl) {
+        s_karma_pnl = heap_caps_calloc(
+            1, sizeof(WlanSsidSet), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if(!s_karma_pnl) {
+            s_karma_active = false;
+            ESP_LOGE(TAG, "karma: s_karma_pnl alloc failed");
+            return; // do not enable promiscuous / create the task
+        }
+    }
+    wlan_ssid_set_reset(s_karma_pnl);
     s_karma_beacons = 0;
     s_karma_active = true;
     if(xTaskCreate(karma_task, "Karma", 4096, NULL, 5, &s_karma_task) != pdPASS) {
@@ -846,6 +869,14 @@ void wlan_hal_karma_stop(void) {
     if(!s_karma_active && !s_karma_task) return;
     s_karma_active = false;
     while(s_karma_task) vTaskDelay(pdMS_TO_TICKS(10));
+    // The task has exited and removed its promiscuous RX cb (see karma_task), so
+    // no concurrent writer remains. Release the harvested-SSID set under the lock
+    // so a concurrent get_stats() reader sees NULL, not a freed buffer.
+    if(s_karma_lock && furi_mutex_acquire(s_karma_lock, FuriWaitForever) == FuriStatusOk) {
+        free(s_karma_pnl);
+        s_karma_pnl = NULL;
+        furi_mutex_release(s_karma_lock);
+    }
 }
 
 bool wlan_hal_karma_is_running(void) {
@@ -857,10 +888,12 @@ void wlan_hal_karma_get_stats(WlanHalKarmaStats* out) {
     out->harvested = 0;
     out->top_ssid[0] = '\0';
     if(s_karma_lock && furi_mutex_acquire(s_karma_lock, 0) == FuriStatusOk) {
-        out->harvested = s_karma_pnl.count;
-        if(s_karma_pnl.count) {
-            strncpy(out->top_ssid, s_karma_pnl.ssids[0], sizeof(out->top_ssid) - 1);
-            out->top_ssid[sizeof(out->top_ssid) - 1] = '\0';
+        if(s_karma_pnl) {
+            out->harvested = s_karma_pnl->count;
+            if(s_karma_pnl->count) {
+                strncpy(out->top_ssid, s_karma_pnl->ssids[0], sizeof(out->top_ssid) - 1);
+                out->top_ssid[sizeof(out->top_ssid) - 1] = '\0';
+            }
         }
         furi_mutex_release(s_karma_lock);
     }

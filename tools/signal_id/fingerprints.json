@@ -1,0 +1,714 @@
+[
+  {
+    "name": "Allstar Firefly",
+    "file": "allstar_firefly.c",
+    "mod": "AM",
+    "bands": [
+      315000000
+    ],
+    "te_short": 600,
+    "te_long": 4000,
+    "bits": 18,
+    "tx": true,
+    "rolling": false,
+    "make": "StarLine (alarm)",
+    "automotive": true
+  },
+  {
+    "name": "Audi V1",
+    "file": "audi_v1.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 260,
+    "te_long": 520,
+    "bits": 88,
+    "tx": true,
+    "rolling": true,
+    "make": "Audi",
+    "automotive": true
+  },
+  {
+    "name": "Audi V2",
+    "file": "audi_v2.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 280,
+    "te_long": 560,
+    "bits": 72,
+    "tx": true,
+    "rolling": true,
+    "make": "Audi",
+    "automotive": true
+  },
+  {
+    "name": "BMW CAS4",
+    "file": "bmw_cas4.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 500,
+    "te_long": 1000,
+    "bits": 64,
+    "tx": false,
+    "rolling": true,
+    "make": "BMW",
+    "automotive": true
+  },
+  {
+    "name": "BMW_v2",
+    "file": "bmw_v2.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 500,
+    "te_long": 1000,
+    "bits": 56,
+    "tx": true,
+    "rolling": true,
+    "make": "BMW",
+    "automotive": true
+  },
+  {
+    "name": "BMW_v3",
+    "file": "bmw_v3.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 95,
+    "te_long": 190,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "BMW",
+    "automotive": true
+  },
+  {
+    "name": "ChevroletV0",
+    "file": "chevrolet_v0.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 120,
+    "te_long": 240,
+    "bits": 96,
+    "tx": true,
+    "rolling": true,
+    "make": "Chevrolet",
+    "automotive": true
+  },
+  {
+    "name": "FIAT SPA",
+    "file": "fiat_spa.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 200,
+    "te_long": 400,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Fiat",
+    "automotive": true
+  },
+  {
+    "name": "Fiat V0",
+    "file": "fiat_v0.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 200,
+    "te_long": 400,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Fiat",
+    "automotive": true
+  },
+  {
+    "name": "Fiat V1",
+    "file": "fiat_v1.c",
+    "mod": "AM",
+    "bands": [
+      315000000,
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 102,
+    "tx": true,
+    "rolling": true,
+    "make": "Fiat",
+    "automotive": true
+  },
+  {
+    "name": "Fiat Multi",
+    "file": "fiat_v2_v3_v5.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 100,
+    "te_long": 200,
+    "bits": 90,
+    "tx": true,
+    "rolling": true,
+    "make": "Fiat",
+    "automotive": true
+  },
+  {
+    "name": "Ford V0",
+    "file": "ford_v0.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Ford",
+    "automotive": true
+  },
+  {
+    "name": "Ford V1",
+    "file": "ford_v1.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 65,
+    "te_long": 130,
+    "bits": 136,
+    "tx": true,
+    "rolling": true,
+    "make": "Ford",
+    "automotive": true
+  },
+  {
+    "name": "Ford V2",
+    "file": "ford_v2.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 200,
+    "te_long": 400,
+    "bits": 104,
+    "tx": true,
+    "rolling": true,
+    "make": "Ford",
+    "automotive": true
+  },
+  {
+    "name": "Ford V3",
+    "file": "ford_v3.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 240,
+    "te_long": 480,
+    "bits": 104,
+    "tx": true,
+    "rolling": true,
+    "make": "Ford",
+    "automotive": true
+  },
+  {
+    "name": "HondaV2&V3",
+    "file": "honda_v2_v3.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 96,
+    "te_long": 192,
+    "bits": 100,
+    "tx": true,
+    "rolling": true,
+    "make": "Honda",
+    "automotive": true
+  },
+  {
+    "name": "HondaV4",
+    "file": "honda_v4.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 750,
+    "te_long": 1100,
+    "bits": 48,
+    "tx": true,
+    "rolling": true,
+    "make": "Honda",
+    "automotive": true
+  },
+  {
+    "name": "HondaV5",
+    "file": "honda_v5.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 63,
+    "te_long": 126,
+    "bits": 130,
+    "tx": true,
+    "rolling": true,
+    "make": "Honda",
+    "automotive": true
+  },
+  {
+    "name": "HondaV6",
+    "file": "honda_v6.c",
+    "mod": "FM",
+    "bands": [
+      315000000,
+      433920000
+    ],
+    "te_short": 100,
+    "te_long": 200,
+    "bits": 43,
+    "tx": true,
+    "rolling": true,
+    "make": "Honda",
+    "automotive": true
+  },
+  {
+    "name": "Hyundai/Kia RIO",
+    "file": "hyundai_kia_rio.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 312,
+    "te_long": 728,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Kia V0",
+    "file": "kia_v0.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 61,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Kia V1",
+    "file": "kia_v1.c",
+    "mod": "AM",
+    "bands": [
+      315000000,
+      433920000
+    ],
+    "te_short": 800,
+    "te_long": 1600,
+    "bits": 57,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Kia V2",
+    "file": "kia_v2.c",
+    "mod": "FM",
+    "bands": [
+      315000000,
+      433920000
+    ],
+    "te_short": 500,
+    "te_long": 1000,
+    "bits": 53,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Kia V3/V4",
+    "file": "kia_v3_v4.c",
+    "mod": "FM",
+    "bands": [
+      315000000,
+      433920000
+    ],
+    "te_short": 400,
+    "te_long": 800,
+    "bits": 68,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Kia V5",
+    "file": "kia_v5.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 400,
+    "te_long": 800,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Kia V6",
+    "file": "kia_v6.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 200,
+    "te_long": 400,
+    "bits": 144,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Kia V7",
+    "file": "kia_v7.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Kia",
+    "automotive": true
+  },
+  {
+    "name": "Land Rover V0",
+    "file": "land_rover_v0.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 81,
+    "tx": true,
+    "rolling": true,
+    "make": "Land Rover",
+    "automotive": true
+  },
+  {
+    "name": "MazdaSiemens",
+    "file": "mazda_siemens.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Mazda",
+    "automotive": true
+  },
+  {
+    "name": "Mazda V0",
+    "file": "mazda_v0.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Mazda",
+    "automotive": true
+  },
+  {
+    "name": "Mazda V1",
+    "file": "mazda_v1.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 505,
+    "te_long": 1010,
+    "bits": 71,
+    "tx": true,
+    "rolling": true,
+    "make": "Mazda",
+    "automotive": true
+  },
+  {
+    "name": "Mazda V2",
+    "file": "mazda_v2.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 500,
+    "te_long": 1000,
+    "bits": 63,
+    "tx": true,
+    "rolling": true,
+    "make": "Mazda",
+    "automotive": true
+  },
+  {
+    "name": "Mitsubishi V0",
+    "file": "mitsubishi_v0.c",
+    "mod": "FM",
+    "bands": [
+      868350000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 80,
+    "tx": true,
+    "rolling": true,
+    "make": "Mitsubishi",
+    "automotive": true
+  },
+  {
+    "name": "Mitsubishi V1",
+    "file": "mitsubishi_v1.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 200,
+    "te_long": 400,
+    "bits": 88,
+    "tx": true,
+    "rolling": true,
+    "make": "Mitsubishi",
+    "automotive": true
+  },
+  {
+    "name": "Porsche Touareg",
+    "file": "porsche_touareg.c",
+    "mod": "AM",
+    "bands": [
+      433920000,
+      868350000
+    ],
+    "te_short": 1680,
+    "te_long": 3370,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Porsche",
+    "automotive": true
+  },
+  {
+    "name": "PSA",
+    "file": "psa.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 128,
+    "tx": true,
+    "rolling": true,
+    "make": "PSA",
+    "automotive": true
+  },
+  {
+    "name": "Renault V1",
+    "file": "renault_v1.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 52,
+    "te_long": 104,
+    "bits": 96,
+    "tx": true,
+    "rolling": true,
+    "make": "Renault",
+    "automotive": true
+  },
+  {
+    "name": "Renault V2",
+    "file": "renault_v2.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 230,
+    "te_long": 460,
+    "bits": 82,
+    "tx": true,
+    "rolling": true,
+    "make": "Renault",
+    "automotive": true
+  },
+  {
+    "name": "Renault V3",
+    "file": "renault_v3.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 52,
+    "te_long": 104,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Renault",
+    "automotive": true
+  },
+  {
+    "name": "Scher-Khan",
+    "file": "scher_khan.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 750,
+    "te_long": 1100,
+    "bits": 35,
+    "tx": true,
+    "rolling": true,
+    "make": "Scher-Khan (alarm)",
+    "automotive": true
+  },
+  {
+    "name": "Star Line",
+    "file": "star_line.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 250,
+    "te_long": 500,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "StarLine (alarm)",
+    "automotive": true
+  },
+  {
+    "name": "Subaru",
+    "file": "subaru.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 800,
+    "te_long": 1600,
+    "bits": 64,
+    "tx": true,
+    "rolling": true,
+    "make": "Subaru",
+    "automotive": true
+  },
+  {
+    "name": "Toyota V0",
+    "file": "toyota_v0.c",
+    "mod": "AM",
+    "bands": [
+      315000000
+    ],
+    "te_short": 750,
+    "te_long": 1500,
+    "bits": 88,
+    "tx": true,
+    "rolling": true,
+    "make": "Toyota",
+    "automotive": true
+  },
+  {
+    "name": "Ford TPMS",
+    "file": "tpms_ford.c",
+    "mod": "FM",
+    "bands": [
+      315000000,
+      433920000
+    ],
+    "te_short": 52,
+    "te_long": 104,
+    "bits": 64,
+    "tx": false,
+    "rolling": false,
+    "make": "Ford",
+    "automotive": true
+  },
+  {
+    "name": "Toyota PMV-107J",
+    "file": "tpms_pmv107j.c",
+    "mod": "FM",
+    "bands": [
+      315000000
+    ],
+    "te_short": 100,
+    "te_long": 200,
+    "bits": 66,
+    "tx": false,
+    "rolling": true,
+    "make": "Toyota",
+    "automotive": true
+  },
+  {
+    "name": "Renault TPMS",
+    "file": "tpms_renault.c",
+    "mod": "FM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 52,
+    "te_long": 104,
+    "bits": 72,
+    "tx": false,
+    "rolling": false,
+    "make": "Renault",
+    "automotive": true
+  },
+  {
+    "name": "VAG",
+    "file": "vag.c",
+    "mod": "AM",
+    "bands": [
+      433920000
+    ],
+    "te_short": 500,
+    "te_long": 1000,
+    "bits": 80,
+    "tx": true,
+    "rolling": true,
+    "make": "VAG/VW",
+    "automotive": true
+  }
+]

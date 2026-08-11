@@ -5,6 +5,7 @@
 
 #include <esp_http_server.h>
 #include <esp_log.h>
+#include <esp_heap_caps.h>
 #include <lwip/sockets.h>
 #include <stdio.h>
 #include <string.h>
@@ -145,14 +146,21 @@ static esp_err_t handler_code(httpd_req_t* req) {
         return ESP_OK;
     }
     uint32_t my_ip = wlan_hal_get_own_ip();
-    static char rendered[MITM_PAYLOAD_RENDERED_MAX];
+    // On-demand: the rendered-payload scratch lives only for this one request.
+    char* rendered = heap_caps_malloc(
+        MITM_PAYLOAD_RENDERED_MAX, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if(!rendered) {
+        httpd_resp_send_500(req);
+        return ESP_FAIL;
+    }
     int rendered_len = render_payload(
-        rendered, (int)sizeof(rendered), raw, (int)raw_len, my_ip, victim_ip);
+        rendered, MITM_PAYLOAD_RENDERED_MAX, raw, (int)raw_len, my_ip, victim_ip);
 
     httpd_resp_set_type(req, "application/javascript");
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_send(req, rendered, rendered_len);
+    heap_caps_free(rendered);
     return ESP_OK;
 }
 

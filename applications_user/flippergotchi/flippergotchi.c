@@ -163,7 +163,10 @@ int32_t flippergotchi_app(void* p) {
     // teardown
     app->running = false;
     wlan_hal_set_promiscuous(false, NULL);
-    for(int i = 0; i < 50 && app->worker_alive; i++) furi_delay_ms(20);
+    // Wait UNBOUNDED: the AI dwell can delay up to ~2s before re-checking running,
+    // longer than a 1s cap, so a bounded wait would wlan_hal_stop()/free under a live
+    // worker = use-after-free. The worker clears worker_alive before vTaskDelete.
+    while(app->worker_alive) furi_delay_ms(20);
     wlan_hal_stop();
 
     if(app->session_pwns > app->prog.best_session) app->prog.best_session = app->session_pwns;

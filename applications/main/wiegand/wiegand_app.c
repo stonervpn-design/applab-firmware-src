@@ -21,6 +21,7 @@ static void wiegand_app_tick_event_callback(void* context) {
 
 WiegandApp* wiegand_app_alloc(void) {
     WiegandApp* app = malloc(sizeof(WiegandApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     app->gui = furi_record_open(RECORD_GUI);
     app->view_dispatcher = view_dispatcher_alloc();
     app->scene_manager = scene_manager_alloc(&wiegand_scene_handlers, app);

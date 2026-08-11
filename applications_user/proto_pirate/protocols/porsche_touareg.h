@@ -30,3 +30,12 @@ SubGhzProtocolStatus subghz_protocol_decoder_porsche_cayenne_deserialize(
     void* context,
     FlipperFormat* flipper_format);
 void subghz_protocol_decoder_porsche_cayenne_get_string(void* context, FuriString* output);
+
+extern const SubGhzProtocolEncoder subghz_protocol_porsche_cayenne_encoder;
+
+#if PROTOPIRATE_WITH_ENCODER
+void* subghz_protocol_encoder_porsche_cayenne_alloc(SubGhzEnvironment* environment);
+SubGhzProtocolStatus subghz_protocol_encoder_porsche_cayenne_deserialize(
+    void* context,
+    FlipperFormat* flipper_format);
+#endif

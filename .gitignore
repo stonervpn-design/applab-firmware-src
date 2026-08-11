@@ -69,3 +69,11 @@ test_build.bat
 
 # Keep the pre-baked /ext image the CI workflow bakes into m5stick builds
 !ci/ext_m5stick_s3.bin
+tools/.public_webhook_url
+.public_webhook_url
+tools/.last_public_deploy
+.last_public_deploy
+tools/.last_public_deploy_m5stick
+tools/.last_public_deploy_cardputer
+.last_public_deploy_m5stick
+.last_public_deploy_cardputer

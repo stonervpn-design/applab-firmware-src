@@ -20,9 +20,21 @@ void pin_config_apply(void) {
         pin_config_get(PinFuncIrTx),
         pin_config_get(PinFuncIrRx));
 
-    /* Drop the CC1101 SPI device so a later SubGHz acquire re-reads the new CSN.
-     * The chip is fully re-probed with the new pin on reboot. */
+    /* Push the new pins into the live GpioPin structs NOW so both radios pick
+     * them up on their next open — no reboot. Both SPI handles' .cs point at
+     * these structs and share one bus, so updating both keeps CC1101 + nRF24
+     * working together (live + shared). */
+    furi_hal_resources_set_rf_pins(
+        pin_config_get(PinFuncCc1101Csn),
+        pin_config_get(PinFuncCc1101Gdo0),
+        pin_config_get(PinFuncNrf24Csn),
+        pin_config_get(PinFuncNrf24Ce));
+
+    /* Tear down both cached SPI devices so the next acquire re-configures the new
+     * CS GPIO as an output (the .cs pointers already reflect the new pin). The
+     * chip is also fully re-probed with the new pin on reboot. */
     furi_hal_spi_bus_handle_deinit(&furi_hal_spi_bus_handle_subghz);
+    furi_hal_spi_bus_handle_deinit(&furi_hal_spi_bus_handle_nrf24);
 
     FURI_LOG_I(
         TAG,

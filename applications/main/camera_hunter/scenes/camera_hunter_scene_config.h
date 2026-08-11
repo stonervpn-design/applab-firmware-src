@@ -1,0 +1,5 @@
+ADD_SCENE(camera_hunter, main, Main)
+ADD_SCENE(camera_hunter, authorize, Authorize)
+ADD_SCENE(camera_hunter, hunt, Hunt)
+ADD_SCENE(camera_hunter, results, Results)
+ADD_SCENE(camera_hunter, audit, Audit)

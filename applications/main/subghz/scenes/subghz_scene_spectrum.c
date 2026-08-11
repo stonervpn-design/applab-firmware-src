@@ -80,10 +80,16 @@ bool subghz_scene_spectrum_on_event(void* context, SceneManagerEvent event) {
     }
 
     if(event.event == SubGhzCustomEventViewSpectrumTune) {
+        // Signal-present gate (finding #23): only retune when the sweep's peak
+        // clears the noise floor, so a noise-only sweep never tunes the receiver
+        // to the loudest noise bin.
         uint32_t peak = subghz->subghz_spectrum ?
                             subghz_view_spectrum_get_peak_freq(subghz->subghz_spectrum) :
                             0;
-        if(peak && subghz_txrx_radio_device_is_frequency_valid(subghz->txrx, peak)) {
+        bool present = subghz->subghz_spectrum &&
+                       subghz_view_spectrum_peak_is_signal(subghz->subghz_spectrum);
+        if(present && peak &&
+           subghz_txrx_radio_device_is_frequency_valid(subghz->txrx, peak)) {
             subghz->last_settings->frequency = peak;
             subghz->last_settings->enable_hopping = false;
             subghz_last_settings_save(subghz->last_settings);

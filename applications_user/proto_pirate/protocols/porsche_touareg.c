@@ -146,6 +146,146 @@ const SubGhzProtocolDecoder subghz_protocol_porsche_cayenne_decoder = {
     .get_string = subghz_protocol_decoder_porsche_cayenne_get_string,
 };
 
+#if PROTOPIRATE_WITH_ENCODER
+
+// TX is a real rolling encoder: porsche_cayenne_compute_frame() above is the
+// full, key-less frame generator (serial + button + counter -> 8 bytes), so a
+// fresh valid frame is produced for each counter. Frame type defaults to
+// "First" (0x02) since captures don't persist it.
+#define PC_TE_SHORT          1680U
+#define PC_TE_LONG           3370U
+#define PC_TX_SYNC_US        PC_TE_SYNC
+#define PC_TX_GAP_US         PC_TE_GAP
+#define PC_TX_SYNC_PULSES    16U
+#define PC_TX_DEFAULT_FTYPE  0x02U
+#define PORSCHE_CAYENNE_UPLOAD_CAPACITY \
+    ((PC_TX_SYNC_PULSES * 2U) + 4U + (PORSCHE_CAYENNE_BIT_COUNT * 2U) + 2U)
+_Static_assert(
+    PORSCHE_CAYENNE_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
+    "PORSCHE_CAYENNE_UPLOAD_CAPACITY exceeds shared upload slab");
+
+typedef struct SubGhzProtocolEncoderPorscheCayenne {
+    SubGhzProtocolEncoderBase base;
+    SubGhzProtocolBlockEncoder encoder;
+    SubGhzBlockGeneric generic;
+    uint8_t frame_type;
+} SubGhzProtocolEncoderPorscheCayenne;
+
+static bool porsche_cayenne_build_upload(SubGhzProtocolEncoderPorscheCayenne* instance) {
+    furi_check(instance);
+
+    uint8_t pkt[8];
+    porsche_cayenne_compute_frame(
+        instance->generic.serial & 0xFFFFFFU,
+        (uint8_t)instance->generic.btn,
+        (uint16_t)instance->generic.cnt,
+        instance->frame_type ? instance->frame_type : PC_TX_DEFAULT_FTYPE,
+        pkt);
+
+    LevelDuration* up = instance->encoder.upload;
+    const size_t cap = PORSCHE_CAYENNE_UPLOAD_CAPACITY;
+    size_t i = 0;
+
+    // Sync burst of ~3370us pulses, then a wide gap into the data.
+    for(size_t s = 0; s < PC_TX_SYNC_PULSES; s++) {
+        i = pp_emit(up, i, cap, true, PC_TX_SYNC_US);
+        i = pp_emit(up, i, cap, false, PC_TX_SYNC_US);
+    }
+    i = pp_emit(up, i, cap, true, PC_TX_GAP_US);
+    i = pp_emit(up, i, cap, false, PC_TX_GAP_US);
+
+    // Data bits: decoder reads each bit as (low_dur, high_dur):
+    // (short,long) => 0, (long,short) => 1.
+    for(uint8_t b = 0; b < PORSCHE_CAYENNE_BIT_COUNT; b++) {
+        const bool bit = (pkt[b >> 3] >> (7U - (b & 7U))) & 1U;
+        if(bit) {
+            i = pp_emit(up, i, cap, false, PC_TE_LONG);
+            i = pp_emit(up, i, cap, true, PC_TE_SHORT);
+        } else {
+            i = pp_emit(up, i, cap, false, PC_TE_SHORT);
+            i = pp_emit(up, i, cap, true, PC_TE_LONG);
+        }
+    }
+    i = pp_emit(up, i, cap, false, PC_TX_GAP_US);
+
+    instance->encoder.front = 0;
+    instance->encoder.size_upload = i;
+    return i > 0;
+}
+
+void* subghz_protocol_encoder_porsche_cayenne_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+    SubGhzProtocolEncoderPorscheCayenne* instance =
+        calloc(1, sizeof(SubGhzProtocolEncoderPorscheCayenne));
+    furi_check(instance);
+    instance->base.protocol = &porsche_touareg_protocol;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    instance->encoder.repeat = 6;
+    instance->encoder.front = 0;
+    instance->encoder.is_running = false;
+    instance->frame_type = PC_TX_DEFAULT_FTYPE;
+    pp_encoder_buffer_ensure(instance, PORSCHE_CAYENNE_UPLOAD_CAPACITY);
+    return instance;
+}
+
+SubGhzProtocolStatus subghz_protocol_encoder_porsche_cayenne_deserialize(
+    void* context,
+    FlipperFormat* flipper_format) {
+    furi_check(context);
+    SubGhzProtocolEncoderPorscheCayenne* instance = context;
+    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+
+    instance->encoder.is_running = false;
+    instance->encoder.front = 0;
+
+    do {
+        if(pp_verify_protocol_name(flipper_format, instance->base.protocol->name) !=
+           SubGhzProtocolStatusOk) {
+            break;
+        }
+
+        flipper_format_rewind(flipper_format);
+        if(subghz_block_generic_deserialize_check_count_bit(
+               &instance->generic,
+               flipper_format,
+               subghz_protocol_porsche_cayenne_const.min_count_bit_for_found) !=
+           SubGhzProtocolStatusOk) {
+            break;
+        }
+
+        uint32_t serial = instance->generic.serial;
+        uint32_t btn = instance->generic.btn;
+        uint32_t cnt = instance->generic.cnt;
+        // Restore the persisted frame type; captures saved before the Type field
+        // existed fall back to First (PC_TX_DEFAULT_FTYPE).
+        uint32_t frame_type = PC_TX_DEFAULT_FTYPE;
+        pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, &frame_type);
+        instance->generic.serial = serial & 0xFFFFFFU;
+        instance->generic.btn = (uint8_t)btn;
+        instance->generic.cnt = cnt;
+        instance->frame_type = (uint8_t)(frame_type & 0x07U);
+
+        instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 6);
+
+        if(!porsche_cayenne_build_upload(instance) || instance->encoder.size_upload == 0) {
+            break;
+        }
+
+        instance->encoder.is_running = true;
+        ret = SubGhzProtocolStatusOk;
+    } while(false);
+
+    return ret;
+}
+
+const SubGhzProtocolEncoder subghz_protocol_porsche_cayenne_encoder = {
+    .alloc = subghz_protocol_encoder_porsche_cayenne_alloc,
+    .free = pp_encoder_free,
+    .deserialize = subghz_protocol_encoder_porsche_cayenne_deserialize,
+    .stop = pp_encoder_stop,
+    .yield = pp_encoder_yield,
+};
+#else
 const SubGhzProtocolEncoder subghz_protocol_porsche_cayenne_encoder = {
     .alloc = NULL,
     .free = NULL,
@@ -153,12 +293,17 @@ const SubGhzProtocolEncoder subghz_protocol_porsche_cayenne_encoder = {
     .stop = NULL,
     .yield = NULL,
 };
+#endif
 
 const SubGhzProtocol porsche_touareg_protocol = {
     .name = PORSCHE_CAYENNE_PROTOCOL_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
-            SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
+            SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save
+#if PROTOPIRATE_WITH_ENCODER
+            | SubGhzProtocolFlag_Send
+#endif
+    ,
 #if PROTOPIRATE_WITH_DECODER
     .decoder = &subghz_protocol_porsche_cayenne_decoder,
 #else
@@ -302,13 +447,16 @@ SubGhzProtocolStatus subghz_protocol_decoder_porsche_cayenne_serialize(
     SubGhzProtocolStatus ret =
         subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
     if(ret == SubGhzProtocolStatusOk) {
+        // Persist the decoded frame type (First/Cont/Final = bits 58..56 of the
+        // frame). frame_type is XORed into the obfuscation, so a captured
+        // Cont/Final frame must not be re-encoded as the default First.
         pp_serialize_fields(
             flipper_format,
-            PP_FIELD_SERIAL | PP_FIELD_BTN | PP_FIELD_CNT,
+            PP_FIELD_SERIAL | PP_FIELD_BTN | PP_FIELD_CNT | PP_FIELD_TYPE,
             instance->generic.serial & 0xFFFFFF,
             instance->generic.btn,
             instance->generic.cnt,
-            0);
+            (uint8_t)((instance->generic.data >> 56) & 0x07));
     }
 
     return ret;

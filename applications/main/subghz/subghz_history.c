@@ -280,7 +280,10 @@ bool subghz_history_add_to_history(
                 break;
             }
             furi_string_cat(instance->tmp_string, text);
-        } else if(!strcmp(furi_string_get_cstr(instance->tmp_string), "Star Line")) {
+        }
+#ifndef PUBLIC_BUILD
+        else if(!strcmp(furi_string_get_cstr(instance->tmp_string), "Star Line")) {
+            // Star Line is a car alarm protocol (stripped on public builds).
             furi_string_set(instance->tmp_string, "SL ");
             if(!flipper_format_read_string(item->flipper_string, "Manufacture", text)) {
                 FURI_LOG_E(TAG, "Missing Protocol");
@@ -288,6 +291,7 @@ bool subghz_history_add_to_history(
             }
             furi_string_cat(instance->tmp_string, text);
         }
+#endif
         if(!flipper_format_rewind(item->flipper_string)) {
             FURI_LOG_E(TAG, "Rewind error");
             break;

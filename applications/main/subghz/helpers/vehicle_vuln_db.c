@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#ifndef PUBLIC_BUILD
 // Ported verbatim from KAT/src/vuln_db.rs (VULN_DB, 21 entries).
 // Rust &["A","B"] -> {"A","B",NULL}. Descriptions copied verbatim.
 
@@ -380,3 +381,18 @@ const char* vehicle_vuln_make(size_t i) {
     if(i >= s_distinct_count) return NULL;
     return s_distinct_makes[i];
 }
+
+#else
+// PUBLIC_BUILD: the vehicle vulnerability database is car material — stripped from
+// public builds (guardrail — no car makes/models on public). Inert stubs keep the
+// vuln_list / vuln_makes scenes linking; they simply render an empty list.
+const VehicleVuln VEHICLE_VULN_DB[] = {{0}};
+const size_t VEHICLE_VULN_DB_COUNT = 0;
+size_t vehicle_vuln_make_count(void) {
+    return 0;
+}
+const char* vehicle_vuln_make(size_t i) {
+    (void)i;
+    return NULL;
+}
+#endif

@@ -9,6 +9,7 @@
 #include <furi.h>
 #include <furi_hal.h>
 #include <flipper_format.h>
+#include <string.h>
 #include "subbrute_protocols.h" // SubBruteAttacks enum — for the drift asserts below
 
 #define TAG "SubBruteResume"
@@ -23,6 +24,11 @@
 #define F_REPEATS  "ExtraRepeats"
 #define F_TWOBYTES "TwoBytes"
 #define F_OPENCODE "Opencode"
+#define F_LOADINDEX  "LoadIndex"
+#define F_FILEKEY    "FileKey"
+#define F_MASKVAR    "MaskVar"
+#define F_MASKACTIVE "MaskActive"
+#define F_PATH       "FilePath"
 
 // The header duplicates three SubBruteAttacks indices so the validator can stay
 // furi-free; assert here (where the real enum is in scope) that they still match,
@@ -66,6 +72,23 @@ bool subbrute_resume_save(const SubBruteResume* r) {
         if(!flipper_format_insert_or_update_uint32(file, F_TWOBYTES, &two, 1)) break;
         if(!flipper_format_insert_or_update_uint32(file, F_OPENCODE, &opencode, 1)) break;
 
+        // LoadFile resume state (schema 2). Zero/empty for preset + DeBruijn
+        // records; written unconditionally so the reader finds them in order.
+        uint32_t load_index = r->load_index;
+        uint32_t mask_active = r->mask_active ? 1u : 0u;
+        uint64_t file_key = r->file_key;
+        uint64_t mask_var = r->mask_var;
+
+        if(!flipper_format_insert_or_update_uint32(file, F_LOADINDEX, &load_index, 1)) break;
+        if(!flipper_format_insert_or_update_hex(
+               file, F_FILEKEY, (uint8_t*)&file_key, sizeof(file_key)))
+            break;
+        if(!flipper_format_insert_or_update_hex(
+               file, F_MASKVAR, (uint8_t*)&mask_var, sizeof(mask_var)))
+            break;
+        if(!flipper_format_insert_or_update_uint32(file, F_MASKACTIVE, &mask_active, 1)) break;
+        if(!flipper_format_insert_or_update_string_cstr(file, F_PATH, r->file_path)) break;
+
         saved = true;
     } while(false);
 
@@ -97,6 +120,35 @@ bool subbrute_resume_load(SubBruteResume* out) {
         if(!flipper_format_read_uint32(file, F_REPEATS, &repeats, 1)) break;
         if(!flipper_format_read_uint32(file, F_TWOBYTES, &two, 1)) break;
         if(!flipper_format_read_uint32(file, F_OPENCODE, &opencode, 1)) break;
+
+        // LoadFile resume state (schema 2). Read in write-order; the FlipperFormat
+        // stream scans forward, so a missing key would fail these and reject the
+        // record (a pre-schema-2 file is rejected earlier by the schema check).
+        uint32_t load_index = 0, mask_active = 0;
+        if(!flipper_format_read_uint32(file, F_LOADINDEX, &load_index, 1)) break;
+        if(!flipper_format_read_hex(file, F_FILEKEY, (uint8_t*)&r.file_key, sizeof(r.file_key)))
+            break;
+        if(!flipper_format_read_hex(file, F_MASKVAR, (uint8_t*)&r.mask_var, sizeof(r.mask_var)))
+            break;
+        if(!flipper_format_read_uint32(file, F_MASKACTIVE, &mask_active, 1)) break;
+
+        FuriString* path = furi_string_alloc();
+        bool path_ok = flipper_format_read_string(file, F_PATH, path);
+        if(path_ok) {
+            size_t n = furi_string_size(path);
+            if(n >= sizeof(r.file_path)) n = sizeof(r.file_path) - 1;
+            memcpy(r.file_path, furi_string_get_cstr(path), n);
+            r.file_path[n] = '\0';
+        } else {
+            // Preset (non-LoadFile) checkpoints carry no FilePath and that is valid —
+            // do NOT reject them here (that regressed all preset-attack resume). A
+            // LoadFile record with an empty path is rejected by subbrute_resume_is_valid.
+            r.file_path[0] = '\0';
+        }
+        furi_string_free(path);
+
+        r.load_index = (uint8_t)load_index;
+        r.mask_active = (uint8_t)(mask_active ? 1u : 0u);
 
         r.schema_version = schema;
         r.attack = attack;

@@ -5,6 +5,7 @@
 /// @return
 MifareFuzzerWorker* mifare_fuzzer_worker_alloc() {
     MifareFuzzerWorker* mifare_fuzzer_worker = malloc(sizeof(MifareFuzzerWorker));
+    furi_check(mifare_fuzzer_worker);
     // Worker thread attributes
     mifare_fuzzer_worker->thread = furi_thread_alloc_ex(
         "MifareFuzzerWorker", 8192, mifare_fuzzer_worker_task, mifare_fuzzer_worker);

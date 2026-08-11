@@ -243,7 +243,14 @@ static void nrf24_hw_jam_power_focus(bool jamming) {
 #define NRF24_JAM_USB_PA_CAP 0 /* Nrf24Pa_Min — confirmed stable on USB */
 static bool g_nrf24_pa_unclamped = false;
 void nrf24_hw_pa_unclamped(bool on) {
+#if defined(BOARD_NRF24_USB_PA_UNCLAMP_OK) && !BOARD_NRF24_USB_PA_UNCLAMP_OK
+    /* This board (Cardputer ADV) USB-browns-out at PA_MAX on USB; ignore the unclamp
+     * request and keep the USB PA clamp engaged. Battery power is unaffected either way. */
+    (void)on;
+    g_nrf24_pa_unclamped = false;
+#else
     g_nrf24_pa_unclamped = on;
+#endif
 }
 static uint8_t nrf24_jam_pa_for_supply(uint8_t pa_level) {
     if(g_nrf24_pa_unclamped) return pa_level; /* faithful PA_MAX (Hydra has caps) */
@@ -314,8 +321,12 @@ void nrf24_hw_jammer_start(uint8_t channel) {
 }
 
 void nrf24_hw_jammer_set_channel(uint8_t channel) {
-    /* Carrier stays on; just retune. PLL re-locks in ~130 µs. */
+    /* Carrier stays on; just retune. */
     nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
+    /* The PLL needs ~130 µs to re-lock after a retune. Dwell here so the carrier
+     * actually settles and radiates on this channel instead of smearing across a
+     * too-fast hop (the same settle class fixed in the standalone jammer FAP). */
+    esp_rom_delay_us(180);
 }
 
 void nrf24_hw_jammer_stop(void) {

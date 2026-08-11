@@ -36,6 +36,7 @@ static void can_commander_tick_event_callback(void* context) {
 
 static CanCommanderApp* can_commander_app_alloc(void) {
     CanCommanderApp* app = malloc(sizeof(CanCommanderApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     memset(app, 0, sizeof(CanCommanderApp));
 
     app->gui = furi_record_open(RECORD_GUI);
@@ -55,7 +56,6 @@ static CanCommanderApp* can_commander_app_alloc(void) {
     app->rx_gpio = 1; // Grove SCL / G1
     strncpy(app->frame_input, "7DF#02010C", sizeof(app->frame_input) - 1);
 
-    view_dispatcher_enable_queue(app->view_dispatcher);
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_custom_event_callback(
         app->view_dispatcher, can_commander_custom_event_callback);

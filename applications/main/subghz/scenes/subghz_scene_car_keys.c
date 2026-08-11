@@ -1,5 +1,6 @@
 #include "../subghz_i.h"
 
+#ifndef PUBLIC_BUILD
 // Unified "Car Keys" hub: groups the scattered car/RKE features (capture with
 // Cars decoders on, saved-fob Garage, the vuln browser, RollBack, Toolkit) into
 // one entry. New Capture auto-enables the Cars decoder set; the prior car_mode
@@ -99,3 +100,4 @@ void subghz_scene_car_keys_on_exit(void* context) {
     // Restore the automotive mode the user had before entering Car Keys.
     subghz_txrx_set_car_mode(subghz->txrx, subghz->car_keys_prev_car_mode);
 }
+#endif /* !PUBLIC_BUILD — Car Keys hub is car-only, stripped from public */

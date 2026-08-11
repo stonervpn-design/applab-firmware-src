@@ -16,6 +16,7 @@ static bool qrcode_app_back_event_callback(void* context) {
 
 static QRCodeApp* qrcode_app_alloc(void) {
     QRCodeApp* app = malloc(sizeof(QRCodeApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
 
     app->payload[0] = '\0';
     app->input_buf[0] = '\0';

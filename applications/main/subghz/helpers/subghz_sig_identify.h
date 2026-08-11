@@ -30,9 +30,14 @@ SignalMatch subghz_sig_aggregate(
 // over a window, then subghz_sig_identify_from_samples(). Writes the match label
 // (make if present, else name) into out (<= cap) and 0..100 score to *out_score.
 // Returns true on a confident match. Runs in the analyzer worker (owns the radio).
+//
+// mod_confidence (0..100) is the mod-detect confidence for `mod`. A low-confidence
+// guess is NOT trusted as a hard constraint: it neither forces the FSK demodulator
+// nor suppresses the true protocol (see the .c for the exact gating).
 bool subghz_sig_identify_run(
     uint32_t freq,
     SignalMod mod,
+    uint8_t mod_confidence,
     char* out,
     size_t cap,
     uint8_t* out_score);

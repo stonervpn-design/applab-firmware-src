@@ -1,0 +1,234 @@
+# to use manual settings and prevent them from being deleted on upgrade, rename *_user.example files to *_user
+Filetype: Flipper SubGhz Setting File
+Version: 1
+# Add Standard frequencies included with firmware and place user frequencies after them
+Add_standard_frequencies: true
+
+# Default Frequency: used as default for "Read" and "Read Raw"
+#Default_frequency: 433920000
+
+# Frequencies used for "Read", "Read Raw" and "Frequency Analyzer"
+Frequency: 300000000
+Frequency: 302757000
+Frequency: 303875000
+Frequency: 304250000
+Frequency: 310000000
+Frequency: 312000000
+Frequency: 313850000
+Frequency: 314000000
+Frequency: 315000000
+Frequency: 318000000
+Frequency: 320000000
+Frequency: 348000000
+Frequency: 387000000
+Frequency: 390000000
+Frequency: 418000000
+Frequency: 433075000
+Frequency: 433220000
+Frequency: 433420000
+Frequency: 433880000
+Frequency: 433889000
+Frequency: 433900000
+Frequency: 433910000
+Frequency: 433920000
+Frequency: 433930000
+Frequency: 433940000
+Frequency: 433950000
+Frequency: 433960000
+Frequency: 434420000
+Frequency: 434775000
+Frequency: 438900000
+Frequency: 464000000
+Frequency: 466000000
+Frequency: 779000000
+Frequency: 868350000
+Frequency: 915000000
+Frequency: 925000000
+Frequency: 928000000
+
+# Frequencies used for hopping mode (keep this list small or flipper will miss signal)
+Hopper_frequency: 315000000
+Hopper_frequency: 433920000
+Hopper_frequency: 434420000
+Hopper_frequency: 868350000
+
+# ==================== format ====================
+# Custom_preset_data: XX YY .. 00 00 ZZ*8   (XX register, YY value, 00 00 end, ZZ 8-byte PA table)
+
+# ---- generic modulation toolkit (not car-specific) ----
+Custom_preset_name: A1
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 00 12 30 11 F8 10 C9 15 14 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 00 21 55 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: F1
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 0C 15 35 14 F8 13 22 12 00 11 93 10 C7 18 18 19 1D 1D 92 1C 00 1B 04 20 FB 22 17 21 B6 00 00 12 0E 1D 34 60 84 C8 C0
+
+Custom_preset_name: F2
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 0C 15 34 14 F8 13 22 12 00 11 93 10 69 18 18 19 1D 1D 92 1C 00 1B 04 20 FB 22 17 21 B6 00 00 12 0E 1D 34 60 84 C8 C0
+
+Custom_preset_name: F3
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 0C 00 0D 10 0E B0 0F 71 10 CA 11 83 12 80 13 22 14 F8 15 42 16 07 17 30 18 18 19 1D 1A 1C 1B 43 1C 40 1D 91 20 FB 21 B6 22 00 23 E9 24 2A 25 00 26 1F 2C 81 2D 35 2E 09 00 00 12 0E 1D 34 60 84 C8 C0
+
+Custom_preset_name: FM95
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 24 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: FM15k
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 15 32 14 00 13 00 12 00 11 32 10 A7 18 18 19 1D 1D 92 1C 00 1B 04 20 FB 22 17 21 B6 00 00 00 12 0E 34 60 C5 C1 C0
+
+Custom_preset_name: Pagers
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 07 04 08 32 0B 06 10 64 11 93 12 0C 13 02 14 00 15 15 18 18 19 16 1B 07 1C 00 1D 91 20 FB 21 56 22 10 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: AM_1
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: AM_2
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+# ==================== CAR KEY PRESETS ====================
+# Name = make + modulation + APPROX model-year era it covers. Modulation (OOK/FSK)
+# comes from each decoder's own AM/FM flag, so the preset matches how that car reads.
+# ** The year ranges are ROUGH GUIDES only ** — the OOK->FSK cutover varies by MODEL,
+# TRIM and MARKET (US vs EU), not cleanly by make-year, so if the labeled era doesn't
+# capture, try the make's other entry (the OOK<->FSK pair).
+# Frequency is chosen SEPARATELY from the modulation: most = 433.92 MHz; N.America/
+# Japan often 315 MHz; a few EU = 434.42 / 868.35 MHz (BMW/Mini EU FSK often 868.35).
+# Notable quirks from research: Chrysler/Jeep/Dodge use 433.92 even in N.America
+# post-'13; Honda older NA OOK is the oddball 313.85 MHz; VW/Audi/Porsche/Mercedes
+# are ASK/OOK across eras (their FSK entries are rare fallbacks); Toyota/Lexus modern
+# FSK often reads as OOK garbage on an ASK receiver (use the FSK preset).
+
+# ---- OOK / AM cars (use with the make's frequency) ----
+Custom_preset_name: VW/Audi OOK '98+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: BMW OOK '95-04
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Chevrolet OOK '98-14
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Chrysler/Jeep OOK '98-13
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Fiat OOK '00+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Ford OOK '98-12
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Honda OOK '98-17
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Hyundai/Kia OOK '06-16
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Nissan/Inf OOK '98-14
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Opel/Vaux OOK '00+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Peugeot/Cit OOK '01-11
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Porsche OOK '95+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Renault OOK '00-12
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Subaru OOK '05-19
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Toyota OOK '98-12
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Mazda OOK '04-13
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: StarLine alarm OOK
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 07 08 32 0B 06 14 00 13 00 12 30 11 32 10 17 18 18 19 18 1D 91 1C 00 1B 07 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+# ---- FSK / FM cars ----
+Custom_preset_name: Audi FSK (uncommon)
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Ford FSK '12+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Honda FSK '15+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Hyundai FSK '15+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Kia FSK '14+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Land Rover FSK '10+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Lexus FSK '07+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Mazda FSK '12+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Mitsubishi FSK '07+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Renault FSK '12+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 83 10 67 15 47 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+# ---- special / manufacturer-tuned ----
+Custom_preset_name: Honda 433.6 AM270 OOK
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 03 47 08 32 0B 06 14 00 13 00 12 30 11 32 10 67 18 18 19 18 1D 40 1C 00 1B 03 20 FB 22 11 21 B6 00 00 00 C0 00 00 00 00 00 00
+
+Custom_preset_name: Mercedes tuned FSK
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 04 11 36 10 69 15 32 18 18 19 16 1D 91 1C 00 1B 07 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: Honda tuned FSK
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 0B 06 08 32 07 04 14 00 13 02 12 07 11 36 10 E9 15 32 18 18 19 16 1D 92 1C 40 1B 03 20 FB 22 10 21 56 00 00 C0 00 00 00 00 00 00 00
+
+Custom_preset_name: BMW Mini FSK '07+
+Custom_preset_module: CC1101
+Custom_preset_data: 02 0D 07 04 08 32 0B 06 10 64 11 93 12 0C 13 02 14 00 15 15 18 18 19 16 1B 07 1C 00 1D 91 20 FB 21 56 22 10 00 00 C0 00 00 00 00 00 00 00
+

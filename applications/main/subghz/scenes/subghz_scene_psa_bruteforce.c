@@ -1,11 +1,12 @@
 #include "../subghz_i.h"
 #include "../helpers/subghz_custom_event.h"
 
+#include <furi.h>
+
+#ifndef PUBLIC_BUILD
 #include <lib/subghz/protocols/psa_bf_types.h>
 #include <lib/subghz/protocols/psa_bf_core.h>
 #include <lib/subghz/protocols/psa_crypto_bf.h>
-
-#include <furi.h>
 #include <string.h>
 
 #define TAG            "SubGhzScenePsaBf"
@@ -136,3 +137,21 @@ void subghz_scene_psa_bruteforce_on_exit(void* context) {
     }
     widget_reset(subghz->widget);
 }
+
+#else
+// PUBLIC_BUILD: PSA (Peugeot/Citroen) rolling-code brute force is a car feature,
+// stripped from public builds (guardrail — no car material on public). Inert stubs
+// keep the scene registry/enum valid so navigation still compiles; the scene is
+// effectively unreachable (PSA captures can't occur without the PSA decoder).
+void subghz_scene_psa_bruteforce_on_enter(void* context) {
+    UNUSED(context);
+}
+bool subghz_scene_psa_bruteforce_on_event(void* context, SceneManagerEvent event) {
+    UNUSED(context);
+    UNUSED(event);
+    return false;
+}
+void subghz_scene_psa_bruteforce_on_exit(void* context) {
+    UNUSED(context);
+}
+#endif

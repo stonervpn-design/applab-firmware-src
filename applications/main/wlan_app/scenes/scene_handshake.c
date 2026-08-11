@@ -92,7 +92,10 @@ typedef struct {
     File* pcap_file;
 } HsChannelTarget;
 
-static HsChannelTarget s_hsc_targets[HSC_MAX_TARGETS];
+// On-demand (was 768 B always-resident BSS). Allocated in on_enter alongside
+// s_pkt_pool (before hs_init_channel → hsc_clear_targets), freed in on_exit
+// under s_hs_pool_mux after the deauth thread joins and promiscuous is off.
+static HsChannelTarget* s_hsc_targets;
 static uint8_t s_hsc_target_count = 0;
 static char s_latest_hs_ssid[33];
 static bool s_hsc_auto_mode;
@@ -207,7 +210,7 @@ static int32_t hs_deauth_thread_fn(void* arg) {
         if(s_use_channel_mode) {
             uint8_t count = s_hsc_target_count;
             if(count > HSC_MAX_TARGETS) count = HSC_MAX_TARGETS;
-            if(count == 0) {
+            if(count == 0 || !s_hsc_targets) {
                 if((no_target_log_count++ & 0x1F) == 0) {
                     ESP_LOGW(TAG, "deauth thread: no targets yet — waiting");
                 }
@@ -402,6 +405,7 @@ static bool hs_single_complete(void) {
 // Channel-Mode: Multi-Target-Capture
 // ---------------------------------------------------------------------------
 static HsChannelTarget* hsc_find_target(const uint8_t* bssid) {
+    if(!s_hsc_targets) return NULL;
     for(int i = 0; i < s_hsc_target_count; i++) {
         if(memcmp(s_hsc_targets[i].bssid, bssid, 6) == 0) return &s_hsc_targets[i];
     }
@@ -409,6 +413,7 @@ static HsChannelTarget* hsc_find_target(const uint8_t* bssid) {
 }
 
 static HsChannelTarget* hsc_find_or_create(const uint8_t* bssid) {
+    if(!s_hsc_targets) return NULL;
     HsChannelTarget* t = hsc_find_target(bssid);
     if(t) return t;
     if(s_hsc_target_count >= HSC_MAX_TARGETS) return NULL;
@@ -478,6 +483,7 @@ static void hs_rx_callback_channel(void* buf, wifi_promiscuous_pkt_type_t type) 
     /* Same race guard as hs_rx_callback_single: the RX task may fire after the
      * pool was freed or before it was allocated. */
     if(!s_pkt_pool) return;
+    if(!s_hsc_targets) return; /* target table freed / not allocated */
     const wifi_promiscuous_pkt_t* pkt = (wifi_promiscuous_pkt_t*)buf;
     const uint8_t* payload = pkt->payload;
     int len = pkt->rx_ctrl.sig_len;
@@ -534,8 +540,10 @@ static void hsc_drain_and_process(WlanApp* app) {
 
 static void hsc_publish_view(WlanApp* app) {
     uint8_t complete = 0;
-    for(int i = 0; i < s_hsc_target_count; i++) {
-        if(s_hsc_targets[i].has_m2 && s_hsc_targets[i].has_m3) complete++;
+    if(s_hsc_targets) {
+        for(int i = 0; i < s_hsc_target_count; i++) {
+            if(s_hsc_targets[i].has_m2 && s_hsc_targets[i].has_m3) complete++;
+        }
     }
 
     WlanHsChannelViewModel* m = view_get_model(app->view_handshake_channel);
@@ -553,6 +561,7 @@ static void hsc_publish_view(WlanApp* app) {
 }
 
 static void hsc_close_pcaps(void) {
+    if(!s_hsc_targets) return;
     for(int i = 0; i < s_hsc_target_count; i++) {
         if(s_hsc_targets[i].pcap_file) {
             wlan_pcap_close(s_hsc_targets[i].pcap_file);
@@ -563,7 +572,7 @@ static void hsc_close_pcaps(void) {
 
 static void hsc_clear_targets(void) {
     hsc_close_pcaps();
-    memset(s_hsc_targets, 0, sizeof(s_hsc_targets));
+    if(s_hsc_targets) memset(s_hsc_targets, 0, HSC_MAX_TARGETS * sizeof(HsChannelTarget));
     s_hsc_target_count = 0;
     s_write_idx = 0;
     s_read_idx = 0;
@@ -722,6 +731,9 @@ void wlan_app_scene_handshake_on_enter(void* context) {
     }
 
     if(s_use_channel_mode) {
+        if(!s_hsc_targets) {
+            s_hsc_targets = calloc(HSC_MAX_TARGETS, sizeof(HsChannelTarget));
+        }
         hs_init_channel(app);
         s_hs_running = true; // Channel-Mode startet sofort
         if(app->hs_settings.hopping) {
@@ -913,11 +925,15 @@ void wlan_app_scene_handshake_on_exit(void* context) {
     }
 
     HsPkt* pool_to_free;
+    HsChannelTarget* targets_to_free;
     portENTER_CRITICAL(&s_hs_pool_mux);
     pool_to_free = s_pkt_pool;
     s_pkt_pool = NULL;
+    targets_to_free = s_hsc_targets;
+    s_hsc_targets = NULL;
     portEXIT_CRITICAL(&s_hs_pool_mux);
     if(pool_to_free) free(pool_to_free);
+    if(targets_to_free) free(targets_to_free);
 
     s_hs_running = false;
     s_hsc_grace_until = 0;

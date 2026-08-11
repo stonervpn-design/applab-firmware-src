@@ -1,4 +1,5 @@
 #include "furi_hal_power.h"
+#include "furi_hal.h" // furi_hal_m5pm1_get_vbat_mv (M5Stick battery via PMIC)
 #include "furi_hal_bq27220.h"
 #include "furi_hal_bq25896.h"
 #include "furi_hal_display.h"
@@ -90,19 +91,23 @@ static FuriHalPowerState furi_hal_power = {
     .last_battery_voltage = FURI_HAL_POWER_FULL_BATTERY_VOLTAGE_V,
 };
 
+/* LiPo resting-voltage -> % curve. Smoothed from the old one, which crammed 20..60%
+ * into 3.71..3.79 V (~5 %/10 mV) and made the reading jump erratically. The mid-range
+ * is now spread across 3.74..3.90 V so % moves sensibly, and 100% is reached at 4.10 V
+ * so both a 4.2 V ADC read (Cardputer) and the M5PM1's ~4.095 V 12-bit cap hit full. */
 static const FuriHalPowerCurvePoint furi_hal_power_curve[] = {
-    {3.27f, 0},
-    {3.61f, 5},
-    {3.69f, 10},
-    {3.71f, 20},
-    {3.73f, 30},
-    {3.75f, 40},
-    {3.77f, 50},
-    {3.79f, 60},
-    {3.82f, 70},
-    {3.87f, 80},
-    {3.94f, 90},
-    {4.20f, 100},
+    {3.30f, 0},
+    {3.55f, 5},
+    {3.65f, 10},
+    {3.70f, 20},
+    {3.74f, 30},
+    {3.78f, 40},
+    {3.82f, 50},
+    {3.86f, 60},
+    {3.90f, 70},
+    {3.95f, 80},
+    {4.02f, 90},
+    {4.10f, 100},
 };
 
 static bool furi_hal_power_adc_calibration_init(
@@ -280,6 +285,16 @@ static void furi_hal_power_refresh_sample(void) {
 }
 
 static float furi_hal_power_get_estimated_battery_voltage(void) {
+#ifdef BOARD_HAS_M5PM1
+    /* M5Stick: battery voltage comes from the M5PM1 PMIC (regs 0x22/0x23), not a GPIO
+     * ADC — the board has no battery ADC divider, so this is the only real source. */
+    {
+        uint16_t vbat_mv = 0;
+        if(furi_hal_m5pm1_get_vbat_mv(&vbat_mv) && vbat_mv > 500) {
+            return (float)vbat_mv / 1000.0f;
+        }
+    }
+#endif
     furi_hal_power_refresh_sample();
 
     if(!furi_hal_power.last_sample_ok) {
@@ -540,15 +555,13 @@ uint8_t furi_hal_power_get_pct(void) {
     if(furi_hal_bq27220_is_present()) {
         return furi_hal_bq27220_get_charge_pct();
     }
-    if(!furi_hal_power.adc_handle) {
-        return 100; /* No ADC, no fuel gauge → USB powered */
-    }
+    /* Voltage source: M5PM1 PMIC (M5Stick) or the GPIO ADC divider (Cardputer/others). */
     const float battery_voltage = furi_hal_power_get_estimated_battery_voltage();
-    if(battery_voltage <= 0.0f) {
-        return 0;
+    if(battery_voltage > 0.5f) {
+        return furi_hal_power_voltage_to_pct(battery_voltage);
     }
-
-    return furi_hal_power_voltage_to_pct(battery_voltage);
+    /* No usable reading: on a board with neither a gauge, PMIC, nor ADC, assume USB. */
+    return furi_hal_power.adc_handle ? 0 : 100;
 }
 
 uint8_t furi_hal_power_get_bat_health_pct(void) {

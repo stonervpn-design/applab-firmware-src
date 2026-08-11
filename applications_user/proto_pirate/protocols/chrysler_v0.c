@@ -345,7 +345,7 @@ void* subghz_protocol_encoder_chrysler_v0_alloc(SubGhzEnvironment* environment) 
 
     instance->base.protocol = &chrysler_protocol_v0;
     instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 2;
+    instance->encoder.repeat = 4; // bumped from 2: the A/B counter pair needs more repeats for reliable RX
     instance->encoder.size_upload = 0;
     instance->encoder.upload = NULL;
     instance->encoder.is_running = false;

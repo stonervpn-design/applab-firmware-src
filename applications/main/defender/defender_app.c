@@ -24,6 +24,7 @@ static void defender_app_tick_event_callback(void* context) {
 
 DefenderApp* defender_app_alloc(void) {
     DefenderApp* app = malloc(sizeof(DefenderApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
 
     app->gui = furi_record_open(RECORD_GUI);
     app->notifications = furi_record_open(RECORD_NOTIFICATION);

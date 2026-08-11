@@ -51,10 +51,14 @@ typedef struct {
     int resp_len;
     uint8_t resp[256];
 } DnsCacheEntry;
-static EXT_RAM_BSS_ATTR DnsCacheEntry s_dns_cache[DNS_CACHE_SIZE];
+// On-demand: allocated in evil_portal_start_worker() for the DNS task's lifetime
+// and freed in evil_portal_stop_worker(), so the ~2.7 KB internal SRAM is
+// reclaimed whenever the portal is off (e.g. during Sub-GHz). NULL = feature off.
+static DnsCacheEntry* s_dns_cache = NULL;
 static int s_dns_cache_next = 0;
 
 static int dns_cache_lookup(const char* domain, uint16_t qtype, uint8_t* out, int out_max) {
+    if(!s_dns_cache) return 0;
     uint64_t now = esp_timer_get_time() / 1000;
     for(int i = 0; i < DNS_CACHE_SIZE; i++) {
         DnsCacheEntry* e = &s_dns_cache[i];
@@ -70,6 +74,7 @@ static int dns_cache_lookup(const char* domain, uint16_t qtype, uint8_t* out, in
 }
 
 static void dns_cache_insert(const char* domain, uint16_t qtype, const uint8_t* resp, int resp_len) {
+    if(!s_dns_cache) return;
     if(resp_len < 12 || resp_len > (int)sizeof(((DnsCacheEntry*)0)->resp)) return;
     if(!domain || !domain[0]) return;
     DnsCacheEntry* e = &s_dns_cache[s_dns_cache_next];
@@ -83,7 +88,8 @@ static void dns_cache_insert(const char* domain, uint16_t qtype, const uint8_t* 
 }
 
 static void dns_cache_clear(void) {
-    memset(s_dns_cache, 0, sizeof(s_dns_cache));
+    if(!s_dns_cache) return;
+    memset(s_dns_cache, 0, DNS_CACHE_SIZE * sizeof(DnsCacheEntry));
     s_dns_cache_next = 0;
 }
 
@@ -878,7 +884,10 @@ typedef struct {
 } KarmaEntry;
 
 static portMUX_TYPE s_karma_mux = portMUX_INITIALIZER_UNLOCKED;
-static KarmaEntry s_karma_tbl[KARMA_MAX_SSIDS];
+// On-demand: allocated in karma_start() before the promiscuous cb / karma task
+// are wired up, freed in karma_stop() after both are torn down, so the ~960 B
+// is reclaimed whenever Karma isn't running. NULL = feature off.
+static KarmaEntry* s_karma_tbl = NULL;
 static volatile uint16_t s_karma_count = 0;
 static volatile bool s_karma_enabled = false;
 static volatile bool s_karma_run = false;
@@ -909,6 +918,10 @@ static void karma_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t type) {
 
     uint32_t now = esp_log_timestamp();
     portENTER_CRITICAL(&s_karma_mux);
+    if(!s_karma_tbl) {
+        portEXIT_CRITICAL(&s_karma_mux);
+        return;
+    }
     int found = -1, weakest = 0;
     for(int i = 0; i < (int)s_karma_count; i++) {
         if(strcmp(s_karma_tbl[i].ssid, ssid) == 0) {
@@ -1009,10 +1022,12 @@ static void karma_beacon_flood(void) {
     char ssids[KARMA_MAX_SSIDS][33];
     int cnt = 0;
     portENTER_CRITICAL(&s_karma_mux);
-    for(int i = 0; i < (int)s_karma_count && i < KARMA_MAX_SSIDS; i++) {
-        strncpy(ssids[cnt], s_karma_tbl[i].ssid, 32);
-        ssids[cnt][32] = 0;
-        cnt++;
+    if(s_karma_tbl) {
+        for(int i = 0; i < (int)s_karma_count && i < KARMA_MAX_SSIDS; i++) {
+            strncpy(ssids[cnt], s_karma_tbl[i].ssid, 32);
+            ssids[cnt][32] = 0;
+            cnt++;
+        }
     }
     portEXIT_CRITICAL(&s_karma_mux);
     for(int i = 0; i < cnt; i++) karma_send_beacon(ssids[i]);
@@ -1060,6 +1075,16 @@ static void karma_task(void* param) {
 }
 
 static void karma_start(const char* base_ssid) {
+    // Allocate the harvest table before the promiscuous cb / karma task are wired
+    // up so it is live before any access. On failure, skip enabling Karma.
+    if(!s_karma_tbl) {
+        s_karma_tbl = heap_caps_calloc(
+            KARMA_MAX_SSIDS, sizeof(KarmaEntry), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if(!s_karma_tbl) {
+            ESP_LOGE(TAG, "[karma] table alloc FAILED");
+            return;
+        }
+    }
     portENTER_CRITICAL(&s_karma_mux);
     s_karma_count = 0;
     portEXIT_CRITICAL(&s_karma_mux);
@@ -1074,6 +1099,9 @@ static void karma_start(const char* base_ssid) {
     esp_err_t err = esp_wifi_set_promiscuous(true);
     if(err != ESP_OK) {
         ESP_LOGW(TAG, "[karma] set_promiscuous: %s", esp_err_to_name(err));
+        esp_wifi_set_promiscuous_rx_cb(NULL);
+        free(s_karma_tbl);
+        s_karma_tbl = NULL;
         return;
     }
     s_karma_enabled = true;
@@ -1083,6 +1111,9 @@ static void karma_start(const char* base_ssid) {
         s_karma_run = false;
         s_karma_enabled = false;
         esp_wifi_set_promiscuous(false);
+        esp_wifi_set_promiscuous_rx_cb(NULL);
+        free(s_karma_tbl);
+        s_karma_tbl = NULL;
     }
 }
 
@@ -1093,6 +1124,11 @@ static void karma_stop(void) {
     while(s_karma_task) vTaskDelay(pdMS_TO_TICKS(10));
     esp_wifi_set_promiscuous(false);
     esp_wifi_set_promiscuous_rx_cb(NULL);
+    // Task joined and RX cb removed; no context can touch the table now. Reclaim.
+    if(s_karma_tbl) {
+        free(s_karma_tbl);
+        s_karma_tbl = NULL;
+    }
     portENTER_CRITICAL(&s_karma_mux);
     s_karma_count = 0;
     portEXIT_CRITICAL(&s_karma_mux);
@@ -1292,6 +1328,18 @@ static void evil_portal_start_worker(void* arg) {
     }
 
     ESP_LOGI(TAG, "[worker] starting DNS task");
+    // Allocate the DNS forward cache before the DNS task exists so the buffer is
+    // live before any lookup/insert. Freed in evil_portal_stop_worker().
+    s_dns_cache = heap_caps_calloc(
+        DNS_CACHE_SIZE, sizeof(DnsCacheEntry), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if(!s_dns_cache) {
+        ESP_LOGE(TAG, "  DNS cache alloc FAILED");
+        stop_http();
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        return;
+    }
+    s_dns_cache_next = 0;
     s_dns_run = true;
     // This board has NO PSRAM, so the DNS task stack must come from internal RAM
     // (the original MALLOC_CAP_SPIRAM always failed here → "DNS task create
@@ -1302,6 +1350,8 @@ static void evil_portal_start_worker(void* arg) {
            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) != pdPASS) {
         ESP_LOGE(TAG, "  DNS task create FAILED");
         s_dns_run = false;
+        free(s_dns_cache);
+        s_dns_cache = NULL;
         stop_http();
         esp_wifi_stop();
         esp_wifi_deinit();
@@ -1387,6 +1437,11 @@ static void evil_portal_stop_worker(void* arg) {
     ESP_LOGI(TAG, "[worker]   stopping DNS task");
     s_dns_run = false;
     while(s_dns_task) vTaskDelay(pdMS_TO_TICKS(10));
+    // DNS task is dead; no lookup/insert can run now. Reclaim the cache.
+    if(s_dns_cache) {
+        free(s_dns_cache);
+        s_dns_cache = NULL;
+    }
 
     ESP_LOGI(TAG, "[worker]   stopping Karma");
     karma_stop();

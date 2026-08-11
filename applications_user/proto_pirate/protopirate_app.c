@@ -1,4 +1,8 @@
 // protopirate_app.c
+// NOTE: proto_pirate carries car RKE decoders/encoders. It is kept out of public
+// builds by default via fam_config.py; the owner may authorize it on the public
+// applab custom-build path (password Romandoe420, 2026-08-10), so the former
+// PUBLIC_BUILD #error tripwire is removed to allow that authorized compile.
 #include "protopirate_app_i.h"
 
 #include <furi.h>

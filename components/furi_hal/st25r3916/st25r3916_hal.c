@@ -15,6 +15,7 @@
 #include <board.h>
 #include <string.h>
 #include <stdio.h>
+#include <esp_heap_caps.h>
 
 #define TAG "St25rHal"
 
@@ -577,8 +578,18 @@ St25rHalStatus st25r3916_hal_field_on(void) {
 
 static void emu_trace_dump(void); /* defined below; flushes the emulation trace */
 
+/* On-demand NFC card-emulation trace buffer (see EMU_TRACE_CAP below). Declared
+ * here so field_off() can release it before the buffer's definition site. */
+static char* s_emu_trace = NULL;
+
 void st25r3916_hal_field_off(void) {
     emu_trace_dump(); /* if we were emulating, dump the exchange now (CDC free) */
+    /* Release the on-demand emulation trace buffer. This is the teardown that pairs
+     * with the listen_start alloc; field_off is also called for poller (reader)
+     * sessions where the buffer was never allocated, and heap_caps_free(NULL) is a
+     * documented no-op, so this is safe on every field_off path. */
+    heap_caps_free(s_emu_trace);
+    s_emu_trace = NULL;
     st25r3916_cmd(ST25R3916_CMD_STOP); /* abort any active transceive */
     /* Drop the RF field (tx/rx) but KEEP the oscillator + all configuration.
      * The reader's poll loop cycles the field off/on every ~100ms to reset tag
@@ -653,7 +664,9 @@ static bool s_listen_encrypted;
  * we record the reader<->card exchange into this RAM buffer and flush it out
  * AFTER the loop stops (field_off on teardown), when the CDC has recovered. */
 #define EMU_TRACE_CAP 3072
-static char s_emu_trace[EMU_TRACE_CAP];
+/* On-demand: allocated in listen_start, freed in field_off, so this 3 KB is
+ * resident ONLY during an active NFC card-emulation session and is reclaimed
+ * the rest of the time (e.g. while Sub-GHz runs). NULL when no session is up. */
 static uint16_t s_emu_trace_len;
 static uint16_t s_emu_seq;
 static uint16_t s_emu_poll_calls; /* how many times listen_poll ran */
@@ -675,6 +688,7 @@ static void emu_trace_reset(void) {
 }
 
 static void emu_trace_add(const char* tag, const uint8_t* d, uint16_t n) {
+    if(!s_emu_trace) return; /* trace buffer not allocated (no session / alloc failed) */
     if(s_emu_trace_len + 56 >= EMU_TRACE_CAP) return; /* buffer full: drop */
     int w = snprintf(
         s_emu_trace + s_emu_trace_len,
@@ -715,12 +729,14 @@ static void emu_trace_dump(void) {
     /* fsm bitmask: bit N set => pta_state N was observed. 0=PWROFF 1=IDLE
      * 2=READY_L1 3=READY_L2 5=ACTIVE 9=HALT 0xA=RDY_L1* 0xB=RDY_L2* 0xD=ACTIVE* */
     uint16_t start = 0;
-    for(uint16_t i = 0; i < s_emu_trace_len; i++) {
-        if(s_emu_trace[i] == '\n') {
-            s_emu_trace[i] = '\0';
-            FURI_LOG_I(TAG, "%s", &s_emu_trace[start]);
-            start = (uint16_t)(i + 1);
-            furi_delay_ms(2); /* let the CDC drain each line */
+    if(s_emu_trace) {
+        for(uint16_t i = 0; i < s_emu_trace_len; i++) {
+            if(s_emu_trace[i] == '\n') {
+                s_emu_trace[i] = '\0';
+                FURI_LOG_I(TAG, "%s", &s_emu_trace[start]);
+                start = (uint16_t)(i + 1);
+                furi_delay_ms(2); /* let the CDC drain each line */
+            }
         }
     }
     FURI_LOG_I(TAG, "=== EMU TRACE end ===");
@@ -896,6 +912,16 @@ St25rHalStatus st25r3916_hal_listen_start(
      * no_crc_rx on and the anticollision/reception is corrupted (observed: first
      * enter activates, subsequent re-arms stall at READY_L1). */
     st25r_listen_set_rx_mode(false);
+    /* On-demand: allocate the diagnostic trace buffer for this emulation session.
+     * Guarded (if !s_emu_trace) so a re-listen / re-sense that re-enters
+     * listen_start WITHOUT an intervening field_off reuses the existing buffer and
+     * never leaks. It is a pure debug ring-buffer: if the alloc fails we log and
+     * proceed — emu_trace_add is null-guarded and simply drops trace output, so a
+     * transient low-memory condition must not block NFC card emulation. */
+    if(!s_emu_trace) {
+        s_emu_trace = heap_caps_malloc(EMU_TRACE_CAP, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if(!s_emu_trace) FURI_LOG_W(TAG, "emu trace alloc failed; tracing disabled");
+    }
     emu_trace_reset(); /* fresh trace for this emulation session */
     st25r3916_cmd(ST25R3916_CMD_GOTO_SENSE); /* ready to be sensed/activated */
     s_irq_target = 0;

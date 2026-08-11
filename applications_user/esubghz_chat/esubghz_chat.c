@@ -38,10 +38,25 @@ void set_chat_input_header(ESubGhzChatState *state)
 
 /* Appends the latest message to the chat box and prepares the message preview.
  */
+#define CHAT_BOX_STORE_MAX 4096
+
 void append_msg(ESubGhzChatState *state, const char *msg)
 {
 	/* append message to text box */
 	furi_string_cat_printf(state->chat_box_store, "\n%s", msg);
+
+	/* Keep the chat buffer bounded: trim whole lines off the front once it
+	 * grows past the cap, so the TextBox render stays fast (avoids the
+	 * ViewPort-lockup contention) and RAM stays flat over long sessions. */
+	size_t store_len = furi_string_size(state->chat_box_store);
+	if (store_len > CHAT_BOX_STORE_MAX) {
+		size_t cut = store_len - CHAT_BOX_STORE_MAX;
+		const char *store_cstr = furi_string_get_cstr(state->chat_box_store);
+		while (cut < store_len && store_cstr[cut] != '\n') {
+			cut++;
+		}
+		furi_string_right(state->chat_box_store, cut);
+	}
 
 	/* prepare message preview */
 	strncpy(state->msg_preview, msg, MSG_PREVIEW_SIZE);

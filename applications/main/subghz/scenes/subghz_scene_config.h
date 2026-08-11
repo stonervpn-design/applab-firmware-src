@@ -11,6 +11,7 @@ ADD_SCENE(subghz, rolling_analyzer, RollingAnalyzer)
 ADD_SCENE(subghz, psa_bruteforce, PsaBruteforce)
 ADD_SCENE(subghz, rollback_capture, RollbackCapture)
 ADD_SCENE(subghz, rollback_replay, RollbackReplay)
+ADD_SCENE(subghz, hitag2_forge, Hitag2Forge)
 #endif
 ADD_SCENE(subghz, protoview, Protoview)
 ADD_SCENE(subghz, save_name, SaveName)

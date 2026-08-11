@@ -233,19 +233,23 @@ static void psa_build_buffer_mode23(
     uint8_t initial_button = buffer[8] & 0xF;
 
     bool found = false;
-    uint8_t buffer9_to_use = has_original_key2 ? original_buffer9 : 0;
-    uint8_t buffer9_end = has_original_key2 ? original_buffer9 + 1 : 255;
+    // uint16_t bounds so the 0xFF case is covered: with uint8_t, buffer9_end =
+    // original_buffer9 + 1 wraps to 0 when the preserved validation low byte is 0xFF
+    // (search skipped -> CRC-corrupting fallback), and the no-original path (end=255)
+    // never tried buffer9 == 255.
+    uint16_t buffer9_to_use = has_original_key2 ? original_buffer9 : 0;
+    uint16_t buffer9_end = has_original_key2 ? (uint16_t)(original_buffer9 + 1) : 256;
 
-    for(uint8_t buffer9_try = buffer9_to_use; buffer9_try < buffer9_end && !found; buffer9_try++) {
-        for(uint8_t buffer8_high_try = 0; buffer8_high_try < 16 && !found; buffer8_high_try++) {
+    for(uint16_t buffer9_try = buffer9_to_use; buffer9_try < buffer9_end && !found; buffer9_try++) {
+        for(uint16_t buffer8_high_try = 0; buffer8_high_try < 16 && !found; buffer8_high_try++) {
             buffer[2] = initial_plaintext[0];
             buffer[3] = initial_plaintext[1];
             buffer[4] = initial_plaintext[2];
             buffer[5] = initial_plaintext[3];
             buffer[6] = initial_plaintext[4];
             buffer[7] = initial_plaintext[5];
-            buffer[8] = initial_button | (buffer8_high_try << 4);
-            buffer[9] = buffer9_try;
+            buffer[8] = initial_button | (uint8_t)(buffer8_high_try << 4);
+            buffer[9] = (uint8_t)buffer9_try;
 
             psa_second_stage_xor_encrypt(buffer);
 
@@ -586,16 +590,22 @@ SubGhzProtocolStatus
     }
     instance->crc = (uint16_t)(crc_val & 0xFFFFU);
 
+    // Seed is OPTIONAL: seed == serial by construction and is never consumed by the
+    // encoder, so a capture without a "Seed" field is still valid. Default to 0 when
+    // the field is absent instead of failing deserialize.
     uint32_t seed_val = 0;
     flipper_format_rewind(flipper_format);
     if(!flipper_format_read_uint32(flipper_format, "Seed", &seed_val, 1)) {
-        return SubGhzProtocolStatusError;
+        seed_val = 0;
     }
     instance->seed = (uint8_t)(seed_val & 0xFFU);
 
     instance->mode = (instance->type == 0x36) ? 0x36 : 0x23;
 
     psa_encoder_build_upload(instance);
+    // Honor the capture's Repeat field. build_upload hardcodes encoder.repeat = 10,
+    // so read Repeat AFTER the build call (default 10 when the field is absent/0).
+    instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 10);
     instance->is_running = true;
     return SubGhzProtocolStatusOk;
 }

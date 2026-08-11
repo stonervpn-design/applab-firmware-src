@@ -9,11 +9,14 @@
 
 // #define ENABLE_TIMING_TUNER_SCENE
 #define ENABLE_SUB_DECODE_SCENE
-// ESP32 static port: TX/emulate disabled. Its 21 protocols are macro-generated
-// from ONE source compiled per-protocol as separate PLUGIN modules — impossible
-// to flatten into a single static image, and this port has no plugin loader.
-// Decoding (RX) is unaffected. Keep this off to match the RX-only static build.
-// #define ENABLE_EMULATE_FEATURE
+// ESP32 static port: TX/emulate ENABLED. Upstream ships each TX protocol as a
+// per-protocol .fal plugin, but every protocol's encoder is already compiled
+// into this single image (behind PROTOPIRATE_WITH_ENCODER), so instead of a
+// runtime plugin loader the 22 TX-capable protocols are wired statically in
+// helpers/protopirate_protocol_plugin_host.c (protopirate_static_tx_plugin) and
+// the emulate scene is dispatched via protopirate_emulate_plugin_ep() directly.
+// Requires application.fam to NOT define PROTOPIRATE_PROTOCOL_RX_ONLY.
+#define ENABLE_EMULATE_FEATURE
 
 #if defined(ENABLE_EMULATE_FEATURE) && !defined(PROTOPIRATE_PROTOCOL_RX_ONLY)
 #define PROTOPIRATE_WITH_ENCODER 1

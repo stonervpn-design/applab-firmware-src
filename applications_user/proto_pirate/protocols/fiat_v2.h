@@ -29,3 +29,11 @@ SubGhzProtocolStatus subghz_protocol_decoder_fiat_v2_serialize(
 SubGhzProtocolStatus
     subghz_protocol_decoder_fiat_v2_deserialize(void* context, FlipperFormat* flipper_format);
 void subghz_protocol_decoder_fiat_v2_get_string(void* context, FuriString* output);
+
+extern const SubGhzProtocolEncoder subghz_protocol_fiat_v2_encoder;
+
+#if PROTOPIRATE_WITH_ENCODER
+void* subghz_protocol_encoder_fiat_v2_alloc(SubGhzEnvironment* environment);
+SubGhzProtocolStatus
+    subghz_protocol_encoder_fiat_v2_deserialize(void* context, FlipperFormat* flipper_format);
+#endif

@@ -1,6 +1,7 @@
 #include "../subghz_i.h"
 #include "../helpers/vehicle_vuln_db.h"
 
+#ifndef PUBLIC_BUILD
 static void subghz_scene_vuln_makes_callback(void* context, uint32_t index) {
     SubGhz* subghz = context;
     scene_manager_set_scene_state(subghz->scene_manager, SubGhzSceneVulnMakes, index);
@@ -32,3 +33,4 @@ void subghz_scene_vuln_makes_on_exit(void* context) {
     SubGhz* subghz = context;
     submenu_reset(subghz->submenu);
 }
+#endif /* !PUBLIC_BUILD — vehicle vuln browser is car-only, stripped from public */

@@ -449,6 +449,12 @@ SubGhzProtocolStatus
         instance->generic.btn = instance->btn;
         instance->generic.cnt = instance->cnt;
 
+        // Auto-advance the rolling counter by 1 per logical send so a resend
+        // doesn't replay an already-used counter (matches vag.c and other
+        // rolling encoders that bump cnt on deserialize). Kia cnt is 16-bit.
+        instance->cnt = (uint16_t)((instance->cnt + 1U) & 0xFFFFU);
+        instance->generic.cnt = instance->cnt;
+
         // Read version - ONLY use file version if protocol name didn't specify one
         flipper_format_rewind(flipper_format);
         uint32_t version_temp;
@@ -460,8 +466,16 @@ SubGhzProtocolStatus
             instance->version = 0;
         }
 
-        instance->encoder.repeat =
-            (int32_t)pp_encoder_read_repeat(flipper_format, KIA_V3_V4_DEFAULT_REPEAT);
+        // Round the effective repeat up to a whole multiple of the CRC sweep so
+        // all KIA_V3_V4_CRC_SWEEP_COUNT (16) CRC candidates are always sent; a
+        // partial final sweep would drop some candidates (yield bumps crc_iter
+        // once per burst, so one full sweep == 16 bursts).
+        uint32_t kia_repeat = pp_encoder_read_repeat(flipper_format, KIA_V3_V4_DEFAULT_REPEAT);
+        kia_repeat =
+            ((kia_repeat + KIA_V3_V4_CRC_SWEEP_COUNT - 1U) / KIA_V3_V4_CRC_SWEEP_COUNT) *
+            KIA_V3_V4_CRC_SWEEP_COUNT;
+        if(kia_repeat == 0) kia_repeat = KIA_V3_V4_CRC_SWEEP_COUNT;
+        instance->encoder.repeat = (int32_t)kia_repeat;
 
         instance->crc_iter = 0;
         instance->bursts_sent = 0;

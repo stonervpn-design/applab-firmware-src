@@ -58,7 +58,11 @@ static void keeloq_fob_draw_callback(Canvas* canvas, void* _model) {
         0,
         AlignCenter,
         AlignTop,
+#ifndef PUBLIC_BUILD
         m->kind == SubGhzFobKindVag ? "VAG Fob" : "Fob Emulator");
+#else
+        "Fob Emulator"); // VAG (car) label stripped on public
+#endif
     const uint8_t rx[4] = {2, 66, 2, 66};
     const uint8_t ry[4] = {13, 13, 35, 35};
     canvas_set_font(canvas, FontSecondary);

@@ -20,6 +20,7 @@ static void esp_now_app_tick_event_callback(void* context) {
 
 static EspNowApp* esp_now_app_alloc(void) {
     EspNowApp* app = malloc(sizeof(EspNowApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     if(!app) return NULL;
 
     app->gui = furi_record_open(RECORD_GUI);

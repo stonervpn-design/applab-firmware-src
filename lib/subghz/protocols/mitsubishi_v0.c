@@ -47,7 +47,10 @@ static void mitsubishi_unscramble_payload(uint8_t* payload) {
     uint8_t mask2 = (lo & 0xAAU) | (hi & 0x55U);
     uint8_t mask3 = mask1 ^ mask2;
 
-    for(uint8_t i = 0; i < 5; i++) {
+    // XOR the counter-derived mask over the SERIAL bytes [0..3] only. Byte [4] is
+    // the counter HIGH byte and must NOT be de-masked (mask3 == hi^lo, so
+    // payload[4]^mask3 would collapse it to lo, losing the real 16-bit counter).
+    for(uint8_t i = 0; i < 4; i++) {
         payload[i] ^= mask3;
     }
 }
@@ -284,14 +287,17 @@ typedef struct SubGhzProtocolEncoderMitsubishi {
 
 // Inverse of mitsubishi_unscramble_payload(): turn the clear fields
 // (serial in [0..3], counter in [4..5], button in [6]) into the on-air bytes.
-// The decoder derives its de-scramble mask solely from the post-inversion
-// bytes [4] and [5], and that mask reduces algebraically to (A[4] ^ A[5]).
-// Because of this the decoded counter always has equal high and low bytes, so
-// we rebuild the frame with the mask forced to zero (byte[4] == byte[5]); the
-// XOR stage then vanishes and only the bitwise inversion of bytes [0..7]
-// remains to undo.
+// The decoder derives mask3 = A[4] ^ A[5] from the post-inversion counter bytes
+// and XORs it over the SERIAL bytes [0..3] only, preserving the real 16-bit
+// counter in [4..5]. We invert that here: apply mask3 to the serial, keep the
+// counter, then bitwise-invert all 8 bytes to the on-air form. (The old code
+// forced payload[4]=payload[5] to match the buggy decoder, discarding the
+// counter high byte.)
 static void mitsubishi_scramble_payload(uint8_t* payload) {
-    payload[4] = payload[5];
+    uint8_t mask3 = (uint8_t)(payload[4] ^ payload[5]);
+    for(uint8_t i = 0; i < 4; i++) {
+        payload[i] ^= mask3;
+    }
     for(uint8_t i = 0; i < 8; i++) {
         payload[i] = (uint8_t)~payload[i];
     }

@@ -10,7 +10,11 @@ bool subbrute_resume_is_valid(const SubBruteResume* r) {
     if(r->schema_version != SUBBRUTE_RESUME_SCHEMA) return false;
     if(r->attack >= SUBBRUTE_RESUME_ATTACK_TOTAL) return false;
     if(r->attack == SUBBRUTE_RESUME_ATTACK_DEBRUIJN) return false; // single burst, no step
-    if(r->attack == SUBBRUTE_RESUME_ATTACK_LOADFILE) return false; // deferred (phase 2)
+    if(r->attack == SUBBRUTE_RESUME_ATTACK_LOADFILE) {
+        // LoadFile resumes by reloading the source .sub; without a path there is
+        // nothing to rebuild the protocol/frequency/preset from.
+        if(r->file_path[0] == '\0') return false;
+    }
     return true;
 }
 

@@ -13,6 +13,10 @@
 #define SP_WF_BYTES  ((SUBGHZ_SPECTRUM_NBINS + 7) / 8) // 16
 #define SP_SPEC_BASE 37 // spectrum baseline y
 #define SP_HOT       (SUBGHZ_SPECTRUM_SPEC_H / 3) // waterfall "carrier present" threshold
+#define SP_SIGNAL_MARGIN 4 // Tune gate: peak must clear the mean noise floor by this many
+                           // bars (~1.42 dB/bar over the -97..-60 dBm window => ~5.7 dB SNR)
+#define SP_MIN_ABS_BARS  6 // ...AND an absolute floor (~-88 dBm) so a lone noise spike over a
+                           // near-zero mean can't satisfy the relative margin and tune to noise
 
 struct SubGhzViewSpectrum {
     View* view;
@@ -93,6 +97,31 @@ uint32_t subghz_view_spectrum_get_peak_freq(SubGhzViewSpectrum* instance) {
     with_view_model(
         instance->view, SubGhzViewSpectrumModel * model, { f = model->peak_freq; }, false);
     return f;
+}
+
+bool subghz_view_spectrum_peak_is_signal(SubGhzViewSpectrum* instance) {
+    furi_assert(instance);
+    bool present = false;
+    with_view_model(
+        instance->view,
+        SubGhzViewSpectrumModel * model,
+        {
+            if(model->have_data) {
+                // Noise-floor estimate: mean bar height across the sweep. A real
+                // carrier lights only a few bins, so the mean tracks the floor.
+                uint32_t sum = 0;
+                for(size_t i = 0; i < SUBGHZ_SPECTRUM_NBINS; i++) sum += model->spec[i];
+                uint8_t floor = (uint8_t)(sum / SUBGHZ_SPECTRUM_NBINS);
+                uint8_t peak = model->spec[model->peak_bin];
+                // Present only when the peak rises off the absolute RSSI floor
+                // (bar > 0, i.e. > -97 dBm) AND clears the noise floor by a margin,
+                // so a noise-only sweep never tunes the receiver to the floor.
+                present = (peak >= SP_MIN_ABS_BARS) && (peak > floor) &&
+                          ((uint8_t)(peak - floor) >= SP_SIGNAL_MARGIN);
+            }
+        },
+        false);
+    return present;
 }
 
 static void subghz_view_spectrum_draw(Canvas* canvas, SubGhzViewSpectrumModel* model) {

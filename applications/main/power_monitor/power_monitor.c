@@ -36,6 +36,7 @@ static void power_monitor_tick(void* context) {
 int32_t power_monitor_app(void* p) {
     UNUSED(p);
     PowerMonitorApp* app = malloc(sizeof(PowerMonitorApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     app->gui = furi_record_open(RECORD_GUI);
     app->power = furi_record_open(RECORD_POWER);
     app->view_dispatcher = view_dispatcher_alloc();

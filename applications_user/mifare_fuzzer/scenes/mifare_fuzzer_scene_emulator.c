@@ -162,15 +162,18 @@ bool mifare_fuzzer_scene_emulator_on_event(void* context, SceneManagerEvent even
                     }
                 }
             } else if(app->attack == MifareFuzzerAttackLoadUidsFromFile) {
-                //bool end_of_list = false;
-                // read stream
+                // read stream — find the next valid UID line. Bounded so a file with no
+                // valid UID line (all comments / wrong length / empty) can't spin forever
+                // and trip the task watchdog: once a full pass from the top yields no match,
+                // stop looking (uid_str stays empty -> parse below emits a harmless zero UID).
+                uint8_t rewinds = 0;
                 while(true) {
                     furi_string_reset(app->uid_str);
                     if(!stream_read_line(app->uids_stream, app->uid_str)) {
-                        // restart from beginning on empty line
+                        // restart from beginning at EOF
                         stream_rewind(app->uids_stream);
+                        if(++rewinds >= 2) break; // one full pass yielded no valid UID
                         continue;
-                        //end_of_list = true;
                     }
                     // Skip comments
                     if(furi_string_get_char(app->uid_str, 0) == '#') continue;
@@ -187,7 +190,10 @@ bool mifare_fuzzer_scene_emulator_on_event(void* context, SceneManagerEvent even
                 // parse string to UID
                 // TODO: a better validation on input?
                 for(uint8_t i = 0; i < nfc_data->uid_len; i++) {
-                    if(i <= ((furi_string_size(app->uid_str) - 1) / 2)) {
+                    // size>=2 guard: an empty uid_str (no valid line found) would underflow
+                    // (size-1) to SIZE_MAX and over-read; fall through to the 0x00 default.
+                    if(furi_string_size(app->uid_str) >= 2 &&
+                       i <= ((furi_string_size(app->uid_str) - 1) / 2)) {
                         char temp_str[3];
                         temp_str[0] = furi_string_get_cstr(app->uid_str)[i * 2];
                         temp_str[1] = furi_string_get_cstr(app->uid_str)[i * 2 + 1];
@@ -279,5 +285,7 @@ void mifare_fuzzer_scene_emulator_on_exit(void* context) {
         furi_string_reset(app->uid_str);
         stream_rewind(app->uids_stream);
         buffered_file_stream_close(app->uids_stream);
+        stream_free(app->uids_stream);
+        app->uids_stream = NULL;
     }
 }

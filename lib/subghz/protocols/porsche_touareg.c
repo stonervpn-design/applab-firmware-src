@@ -247,7 +247,11 @@ SubGhzProtocolStatus subghz_protocol_encoder_porsche_cayenne_deserialize(
         uint32_t serial = (uint32_t)((instance->generic.data >> 32) & 0xFFFFFFU);
         uint32_t btn = (uint32_t)(pkt0 >> 4);
         uint32_t cnt = instance->generic.cnt;
-        pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, NULL);
+        // Prefer a persisted Type field when present; otherwise keep the
+        // frame_type recovered from the Key above (captures predating the field).
+        uint32_t frame_type = instance->frame_type;
+        pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, &frame_type);
+        instance->frame_type = (uint8_t)(frame_type & 0x07U);
 
         instance->serial = serial & 0xFFFFFFU;
         instance->btn = (uint8_t)(btn & 0x0FU);
@@ -467,13 +471,16 @@ SubGhzProtocolStatus subghz_protocol_decoder_porsche_cayenne_serialize(
     SubGhzProtocolStatus ret =
         subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
     if(ret == SubGhzProtocolStatusOk) {
+        // Persist the decoded frame type (First/Cont/Final = bits 58..56 of the
+        // frame). frame_type is XORed into the obfuscation, so a captured
+        // Cont/Final frame must not be re-encoded as the default First.
         pp_serialize_fields(
             flipper_format,
-            PP_FIELD_SERIAL | PP_FIELD_BTN | PP_FIELD_CNT,
+            PP_FIELD_SERIAL | PP_FIELD_BTN | PP_FIELD_CNT | PP_FIELD_TYPE,
             instance->generic.serial & 0xFFFFFF,
             instance->generic.btn,
             instance->generic.cnt,
-            0);
+            (uint8_t)((instance->generic.data >> 56) & 0x07));
     }
 
     return ret;

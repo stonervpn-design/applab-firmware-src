@@ -13,7 +13,10 @@
 
 #define TAG "ProtoPirateSceneEmulate"
 
-#define EMULATE_PLUGIN_PATH APP_ASSETS_PATH("plugins/protopirate_emulate_plugin.fal")
+// Static wiring: this port has no runtime FAP loader, so the emulate plugin is
+// compiled into the image and reached through its stock _ep() (see below), not
+// loaded from a .fal by the stub plugin_manager.
+extern const FlipperAppPluginDescriptor* protopirate_emulate_plugin_ep(void);
 
 static bool host_radio_init(void* app) {
     return protopirate_radio_init((ProtoPirateApp*)app);
@@ -114,42 +117,23 @@ static bool emulate_plugin_load(ProtoPirateApp* app) {
         emulate_plugin_unload(app);
     }
 
-    CompositeApiResolver* resolver = composite_api_resolver_alloc();
-    if(!resolver) {
-        FURI_LOG_E(TAG, "Failed to allocate emulate plugin resolver");
-        return false;
-    }
-    composite_api_resolver_add(resolver, firmware_api_interface);
-
-    PluginManager* manager = plugin_manager_alloc(
-        PROTOPIRATE_EMULATE_PLUGIN_APP_ID,
-        PROTOPIRATE_EMULATE_PLUGIN_API_VERSION,
-        composite_api_resolver_get(resolver));
-    if(!manager) {
-        FURI_LOG_E(TAG, "Failed to allocate emulate plugin manager");
-        composite_api_resolver_free(resolver);
+    const FlipperAppPluginDescriptor* descriptor = protopirate_emulate_plugin_ep();
+    if(!descriptor || descriptor->ep_api_version != PROTOPIRATE_EMULATE_PLUGIN_API_VERSION) {
+        FURI_LOG_E(TAG, "Emulate plugin descriptor invalid");
         return false;
     }
 
-    PluginManagerError error = plugin_manager_load_single(manager, EMULATE_PLUGIN_PATH);
-    if(error != PluginManagerErrorNone) {
-        FURI_LOG_E(TAG, "Failed to load emulate plugin %s: %d", EMULATE_PLUGIN_PATH, (int)error);
-        plugin_manager_free(manager);
-        composite_api_resolver_free(resolver);
-        return false;
-    }
-
-    const ProtoPirateEmulatePlugin* plugin = plugin_manager_get_ep(manager, 0U);
+    const ProtoPirateEmulatePlugin* plugin =
+        (const ProtoPirateEmulatePlugin*)descriptor->entry_point;
     if(!plugin || !plugin->on_enter || !plugin->on_event || !plugin->on_exit ||
        !plugin->set_host_api) {
         FURI_LOG_E(TAG, "Emulate plugin entry point is invalid");
-        plugin_manager_free(manager);
-        composite_api_resolver_free(resolver);
         return false;
     }
 
-    app->emulate_plugin_resolver = resolver;
-    app->emulate_plugin_manager = manager;
+    // No manager/resolver in the static build; the descriptor is a compiled-in const.
+    app->emulate_plugin_resolver = NULL;
+    app->emulate_plugin_manager = NULL;
     app->emulate_plugin = plugin;
 
     plugin->set_host_api(&protopirate_emulate_host_api);

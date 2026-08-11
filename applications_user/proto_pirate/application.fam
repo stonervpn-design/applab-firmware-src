@@ -29,20 +29,23 @@ App(
     fap_icon_assets="images",
     fap_file_assets="keystore",
     fap_author="RocketGod-git (ProtoPirate) / ESP32 static port",
-    cdefines=["PROTOPIRATE_PROTOCOL_RX_ONLY=1"],
+    # TX/emulate is ENABLED and wired statically (see defines.h). Do NOT define
+    # PROTOPIRATE_PROTOCOL_RX_ONLY here — that would force PROTOPIRATE_WITH_ENCODER
+    # to 0 and compile every encoder out again.
     sources=[
         # Everything, recursively — including the five RX registry plugin .c
-        # (protocols/plugins/protopirate_{am,am_vag,fm,fm_f4,fm_honda1}_plugin.c)
-        # and all decoder sources, compiled directly into the app.
+        # (protocols/plugins/protopirate_{am,am_vag,fm,fm_f4,fm_honda1}_plugin.c),
+        # all decoder/encoder sources, and scenes/plugins/protopirate_emulate_plugin.c
+        # (the emulate UI + TX logic, called via its _ep() by the emulate scene).
         "*.c*",
-        # Tool-scene + emulate PLUGIN wrappers are separate ELF entry points that
-        # the static build never loads; leaving them in would add stray eps.
-        "!scenes/plugins",
+        # PSA brute-force tool-scene plugin is still runtime-loaded (stub loader),
+        # so its ELF wrapper stays out; the emulate plugin above is kept in.
+        "!scenes/plugins/protopirate_psa_bf_plugin.c",
         # TX protocol plugin template: macro-compiled once-per-protocol on real
         # Flipper via per-instance cdefines; it can't be built a single time here.
+        # Replaced by the static protopirate_static_tx_plugin table in
+        # helpers/protopirate_protocol_plugin_host.c.
         "!protocols/plugins/protopirate_tx_protocol_plugin.c",
-        # Emulate (TX) disabled — scene relies on the .fam excluding it.
-        "!scenes/protopirate_scene_emulate.c",
         # Timing tuner disabled.
         "!scenes/protopirate_scene_timing_tuner.c",
         "!protocols/protocol_timings.c",

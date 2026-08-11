@@ -64,10 +64,18 @@ bool subghz_rollback_capture(SubGhz* subghz, SubGhzProtocolDecoderBase* decoder)
 
         Stream* st = flipper_format_get_raw_stream(ff);
         stream_rewind(st);
-        size_t len = stream_read(
-            st, (uint8_t*)subghz->rollback_frame[next], sizeof(subghz->rollback_frame[0]) - 1);
-        subghz->rollback_frame[next][len] = '\0';
-        ok = subghz_rollback_store_add(&subghz->rollback_store, &s); // append at [next]
+        // Reject captures whose serialized body would overflow the fixed frame buffer:
+        // stream_read would silently truncate, and replay would later TX a corrupt .sub.
+        if(stream_size(st) > sizeof(subghz->rollback_frame[0]) - 1) {
+            ok = false;
+        } else {
+            size_t len = stream_read(
+                st,
+                (uint8_t*)subghz->rollback_frame[next],
+                sizeof(subghz->rollback_frame[0]) - 1);
+            subghz->rollback_frame[next][len] = '\0';
+            ok = subghz_rollback_store_add(&subghz->rollback_store, &s); // append at [next]
+        }
     }
     flipper_format_free(ff);
     furi_string_free(text);

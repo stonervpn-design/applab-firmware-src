@@ -347,13 +347,15 @@ static void text_input_view_draw_callback(Canvas* canvas, void* _model) {
     }
 }
 
+/* When the default text is highlighted (cursor_select mode) the arrow keys edit
+ * the text line, not the on-screen keyboard grid. Horizontal cursor movement
+ * lives on Left/Right so it matches the physical arrow keys on boards that have
+ * them (Cardputer ADV); Up/Down leave the highlighted text and drop into the
+ * keyboard grid. Naming a .sub is the common case that opens in this mode. */
 static void text_input_handle_up(TextInput* text_input, TextInputModel* model) {
     UNUSED(text_input);
     if(model->cursor_select) {
-        model->clear_default_text = false;
-        if(model->cursor_pos > 0) {
-            model->cursor_pos = CLAMP(model->cursor_pos - 1, strlen(model->text_buffer), 0u);
-        }
+        model->cursor_select = false;
     } else if(model->selected_column > 0) {
         model->selected_column--;
     } else {
@@ -365,8 +367,7 @@ static void text_input_handle_up(TextInput* text_input, TextInputModel* model) {
 static void text_input_handle_down(TextInput* text_input, TextInputModel* model) {
     UNUSED(text_input);
     if(model->cursor_select) {
-        model->clear_default_text = false;
-        model->cursor_pos = CLAMP(model->cursor_pos + 1, strlen(model->text_buffer), 0u);
+        model->cursor_select = false;
     } else if(model->selected_column < get_row_size(model, model->selected_row) - 1) {
         model->selected_column++;
     } else {
@@ -378,7 +379,10 @@ static void text_input_handle_down(TextInput* text_input, TextInputModel* model)
 static void text_input_handle_left(TextInput* text_input, TextInputModel* model) {
     UNUSED(text_input);
     if(model->cursor_select) {
-        model->cursor_select = false;
+        model->clear_default_text = false;
+        if(model->cursor_pos > 0) {
+            model->cursor_pos = CLAMP(model->cursor_pos - 1, strlen(model->text_buffer), 0u);
+        }
     } else if(model->selected_row > 0) {
         model->selected_row--;
         uint8_t new_row_size = get_row_size(model, model->selected_row);
@@ -391,7 +395,8 @@ static void text_input_handle_left(TextInput* text_input, TextInputModel* model)
 static void text_input_handle_right(TextInput* text_input, TextInputModel* model) {
     UNUSED(text_input);
     if(model->cursor_select) {
-        model->cursor_select = false;
+        model->clear_default_text = false;
+        model->cursor_pos = CLAMP(model->cursor_pos + 1, strlen(model->text_buffer), 0u);
     } else if(model->selected_row < keyboard_row_count - 1) {
         model->selected_row++;
         uint8_t new_row_size = get_row_size(model, model->selected_row);

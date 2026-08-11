@@ -1,0 +1,7 @@
+# Build for THIS host's CPU: enables BMI2 (PEXT), AVX2, etc. for the guess-and-
+# determine hot path. This is a PERFORMANCE optimization only — correctness does
+# NOT depend on it: pext() in src/gd.rs runtime-detects BMI2 and falls back to a
+# portable scalar path when absent. Safe to remove for a portable binary (you
+# just lose the single-instruction PEXT and native codegen).
+[build]
+rustflags = ["-C", "target-cpu=native"]

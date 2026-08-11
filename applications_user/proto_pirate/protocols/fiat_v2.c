@@ -69,12 +69,102 @@ const SubGhzProtocolDecoder subghz_protocol_fiat_v2_decoder = {
 };
 
 #if PROTOPIRATE_WITH_ENCODER
+
+// Replay encoder: Fiat V2 carries a Hitag2-encrypted rolling "Hop" that cannot
+// be regenerated on this port without the vehicle key/cipher, so TX replays the
+// captured 14-byte frame (biphase, each bit = two inverted cells => Manchester).
+#define FIAT_V2_TX_TE     FIAT_V2_TE_SHORT
+#define FIAT_V2_TX_GAP_US 1200U
+#define FIAT_V2_UPLOAD_CAPACITY ((FIAT_V2_WIRE_BITS * 2U) + 2U)
+_Static_assert(
+    FIAT_V2_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
+    "FIAT_V2_UPLOAD_CAPACITY exceeds shared upload slab");
+
+typedef struct SubGhzProtocolEncoderFiatV2 {
+    SubGhzProtocolEncoderBase base;
+    SubGhzProtocolBlockEncoder encoder;
+    SubGhzBlockGeneric generic;
+    uint8_t raw[FIAT_V2_WIRE_BYTES];
+} SubGhzProtocolEncoderFiatV2;
+
+static bool fiat_v2_build_upload(SubGhzProtocolEncoderFiatV2* instance) {
+    furi_check(instance);
+    LevelDuration* up = instance->encoder.upload;
+    const size_t cap = FIAT_V2_UPLOAD_CAPACITY;
+    size_t i = 0;
+
+    for(uint16_t b = 0; b < FIAT_V2_WIRE_BITS; b++) {
+        const bool bit = (instance->raw[b >> 3] >> (7U - (b & 7U))) & 1U;
+        i = pp_emit_manchester_bit(up, i, cap, bit, FIAT_V2_TX_TE);
+    }
+    i = pp_emit(up, i, cap, false, FIAT_V2_TX_GAP_US);
+
+    instance->encoder.front = 0;
+    instance->encoder.size_upload = i;
+    return i > 0;
+}
+
+void* subghz_protocol_encoder_fiat_v2_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+    SubGhzProtocolEncoderFiatV2* instance = calloc(1, sizeof(SubGhzProtocolEncoderFiatV2));
+    furi_check(instance);
+    instance->base.protocol = &fiat_v2_protocol;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    instance->encoder.repeat = 6;
+    instance->encoder.front = 0;
+    instance->encoder.is_running = false;
+    pp_encoder_buffer_ensure(instance, FIAT_V2_UPLOAD_CAPACITY);
+    return instance;
+}
+
+SubGhzProtocolStatus
+    subghz_protocol_encoder_fiat_v2_deserialize(void* context, FlipperFormat* flipper_format) {
+    furi_check(context);
+    SubGhzProtocolEncoderFiatV2* instance = context;
+    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+
+    instance->encoder.is_running = false;
+    instance->encoder.front = 0;
+
+    do {
+        if(pp_verify_protocol_name(flipper_format, instance->base.protocol->name) !=
+           SubGhzProtocolStatusOk) {
+            break;
+        }
+
+        flipper_format_rewind(flipper_format);
+        if(subghz_block_generic_deserialize_check_count_bit(
+               &instance->generic,
+               flipper_format,
+               subghz_protocol_fiat_v2_const.min_count_bit_for_found) != SubGhzProtocolStatusOk) {
+            break;
+        }
+
+        flipper_format_rewind(flipper_format);
+        if(!flipper_format_read_hex(
+               flipper_format, FIAT_V2_RAW_FIELD, instance->raw, FIAT_V2_WIRE_BYTES)) {
+            break; // replay requires the captured frame
+        }
+
+        instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 6);
+
+        if(!fiat_v2_build_upload(instance) || instance->encoder.size_upload == 0) {
+            break;
+        }
+
+        instance->encoder.is_running = true;
+        ret = SubGhzProtocolStatusOk;
+    } while(false);
+
+    return ret;
+}
+
 const SubGhzProtocolEncoder subghz_protocol_fiat_v2_encoder = {
-    .alloc = NULL,
-    .free = NULL,
-    .deserialize = NULL,
-    .stop = NULL,
-    .yield = NULL,
+    .alloc = subghz_protocol_encoder_fiat_v2_alloc,
+    .free = pp_encoder_free,
+    .deserialize = subghz_protocol_encoder_fiat_v2_deserialize,
+    .stop = pp_encoder_stop,
+    .yield = pp_encoder_yield,
 };
 #endif
 
@@ -82,7 +172,11 @@ const SubGhzProtocol fiat_v2_protocol = {
     .name = FIAT_V2_PROTOCOL_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
-            SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
+            SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save
+#if PROTOPIRATE_WITH_ENCODER
+            | SubGhzProtocolFlag_Send
+#endif
+    ,
 #if PROTOPIRATE_WITH_DECODER
     .decoder = &subghz_protocol_fiat_v2_decoder,
 #else

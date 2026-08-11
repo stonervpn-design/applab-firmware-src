@@ -426,11 +426,12 @@ static bool honda_v2_build_upload(SubGhzProtocolEncoderHondaV2* instance) {
     }
 
     bool previous_bit = true;
-    if(!honda_v2_encoder_add_bit(instance, &index, &previous_bit, false)) {
-        return false;
-    }
-
-    for(uint8_t bit_index = 2; bit_index < 64; bit_index++) {
+    // bit0 is implicit (decoder forces raw bit0=1 at SyncLow); emit bits 1..63
+    // straight from the key so the command signature's 2nd MSB (bit1 == key_bytes[0]
+    // bit6) is the REAL value. The old code hardcoded bit1=0, making LOCK
+    // (sig 0xC2..., bit6=1) impossible to TX (it came out 0x82...). Round-trip
+    // proven vs the decoder for both LOCK and UNLOCK.
+    for(uint8_t bit_index = 1; bit_index < 64; bit_index++) {
         const uint8_t byte_index = bit_index / 8U;
         const uint8_t bit_in_byte = 7U - (bit_index % 8U);
         const bool bit = (key_bytes[byte_index] >> bit_in_byte) & 1U;

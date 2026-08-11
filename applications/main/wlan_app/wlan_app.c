@@ -37,6 +37,7 @@ static void wlan_app_tick_event_callback(void* context) {
 
 static WlanApp* wlan_app_alloc(void) {
     WlanApp* app = malloc(sizeof(WlanApp));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
 
     /* Fix the per-boot loot session id here (single-threaded app startup, before
      * any capture runs). No-op after the first app launch of the boot. */

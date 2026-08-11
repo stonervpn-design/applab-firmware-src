@@ -5,6 +5,7 @@
 
 #include <esp_log.h>
 #include <esp_netif.h>
+#include <esp_heap_caps.h>
 #include <furi.h>
 #include <lwip/etharp.h>
 #include <lwip/ip4_addr.h>
@@ -80,7 +81,7 @@ struct WlanNetcut {
 static WlanNetcut* s_hook_engine = NULL;
 static struct netif* s_hooked_netif = NULL;
 static netif_input_fn s_original_input = NULL;
-static uint8_t s_fwd_buf[NETCUT_FWD_BUF_SIZE];
+static uint8_t* s_fwd_buf = NULL;
 // Optionaler Live-Credential-Dissektor (siehe wlan_netcut_set_cred_sniff).
 static WlanCredSniff* s_hook_cred = NULL;
 
@@ -276,7 +277,7 @@ static err_t netcut_input_hook(struct pbuf* p, struct netif* inp) {
             nc,
             nc ? nc->device_count : 0);
     }
-    if(!nc || !p || p->len < SIZEOF_ETH_HDR) {
+    if(!nc || !p || p->len < SIZEOF_ETH_HDR || !s_fwd_buf) {
         if(verbose) ESP_LOGI(TAG, "hook[%lu]: early-pass nc=%p p=%p len=%u",
             (unsigned long)s_hook_total, nc, p, p ? p->len : 0);
         goto pass;
@@ -499,6 +500,16 @@ static void install_l2_hook(WlanNetcut* nc) {
     if(s_hooked_netif) return;
     struct netif* nif = netif_default;
     if(!nif) return;
+    // On-demand: the forward buffer lives only while the L2 hook is installed.
+    // Alloc it before the input-fn swap so the hook never runs without it.
+    if(!s_fwd_buf) {
+        s_fwd_buf = heap_caps_malloc(
+            NETCUT_FWD_BUF_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if(!s_fwd_buf) {
+            ESP_LOGE(TAG, "install_l2_hook: s_fwd_buf alloc failed — not hooking");
+            return; // leave s_hooked_netif NULL so the forwarder never runs
+        }
+    }
     LOCK_TCPIP_CORE();
     s_original_input = nif->input;
     nif->input = netcut_input_hook;
@@ -526,6 +537,12 @@ static void uninstall_l2_hook(void) {
     s_hooked_netif = NULL;
     s_original_input = NULL;
     s_hook_engine = NULL;
+    // Input fn was restored above under LOCK_TCPIP_CORE, so no tcpip-thread
+    // reader can still be inside the hook — the forward buffer is safe to free.
+    if(s_fwd_buf) {
+        free(s_fwd_buf);
+        s_fwd_buf = NULL;
+    }
     ESP_LOGI(TAG, "L2 hook uninstalled");
 }
 

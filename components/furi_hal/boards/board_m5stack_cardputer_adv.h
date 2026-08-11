@@ -17,6 +17,10 @@
 #define BOARD_NAME        "M5Stack Cardputer-ADV"
 #define BOARD_TARGET      "esp32s3"
 
+/* Weak USB power path: nRF24 PA_MAX on USB browns out and reboots this board even with
+ * the Hydra module's caps, so keep the jammer's USB PA clamp engaged (see board.h). */
+#define BOARD_NRF24_USB_PA_UNCLAMP_OK 0
+
 /* ---- LCD (ST7789V2) via SPI2 ---- */
 #define BOARD_PIN_LCD_MOSI      35
 #define BOARD_PIN_LCD_SCLK      36

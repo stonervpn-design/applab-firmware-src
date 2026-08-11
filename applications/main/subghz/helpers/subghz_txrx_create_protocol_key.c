@@ -222,7 +222,11 @@ bool subghz_txrx_gen_keeloq_bft_protocol(
 
         flipper_format_write_hex(txrx->fff_data, "Seed", seed_data, sizeof(uint32_t));
 
-        flipper_format_write_string_cstr(txrx->fff_data, "Manufacture", "BFT");
+        // Label with the actual maker (BFT vs Erreka use different mfr keys); a hardcoded
+        // "BFT" would make an Erreka clone reload with the wrong key. Fall back to "BFT".
+        flipper_format_write_string_cstr(
+            txrx->fff_data, "Manufacture",
+            (manufacture_name && manufacture_name[0]) ? manufacture_name : "BFT");
     }
 
     subghz_transmitter_free(txrx->transmitter);

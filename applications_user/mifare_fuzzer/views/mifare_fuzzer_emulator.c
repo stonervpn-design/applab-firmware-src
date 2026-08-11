@@ -151,6 +151,7 @@ static void mifare_fuzzer_emulator_enter_callback(void* context) {
 /// @return
 MifareFuzzerEmulator* mifare_fuzzer_emulator_alloc() {
     MifareFuzzerEmulator* mifare_fuzzer_emulator = malloc(sizeof(MifareFuzzerEmulator));
+    furi_check(mifare_fuzzer_emulator);
     mifare_fuzzer_emulator->view = view_alloc();
     view_set_context(mifare_fuzzer_emulator->view, mifare_fuzzer_emulator);
     view_allocate_model(

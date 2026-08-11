@@ -1,0 +1,10 @@
+App(
+    appid="camera_hunter",
+    name="Camera Hunter",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="camera_hunter_app",
+    stack_size=8 * 1024,
+    icon="A_Plugins_14",
+    order=71,
+    fap_libs=["assets"],
+)

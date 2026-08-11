@@ -47,6 +47,120 @@ const SubGhzProtocolDecoder subghz_protocol_scher_khan_decoder = {
     .get_string = subghz_protocol_decoder_scher_khan_get_string,
 };
 
+#if PROTOPIRATE_WITH_ENCODER
+
+// Replay encoder: Scher-Khan / MAGIC CODE is a rolling scheme whose next-code
+// generator is not implemented (the decoder only captures the raw key bits), so
+// TX replays the captured frame. bit 0 = (short high, short low); bit 1 = (long
+// high, long low), preceded by a header burst.
+#define SK_TE_SHORT_TX 750U
+#define SK_TE_LONG_TX  1100U
+#define SK_TE_HEADER   1500U
+#define SK_TX_GAP_US   6000U
+#define SK_HEADER_PAIRS 3U
+#define SCHER_KHAN_UPLOAD_CAPACITY ((SK_HEADER_PAIRS * 2U) + 2U + (64U * 2U) + 2U)
+_Static_assert(
+    SCHER_KHAN_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
+    "SCHER_KHAN_UPLOAD_CAPACITY exceeds shared upload slab");
+
+typedef struct SubGhzProtocolEncoderScherKhan {
+    SubGhzProtocolEncoderBase base;
+    SubGhzProtocolBlockEncoder encoder;
+    SubGhzBlockGeneric generic;
+} SubGhzProtocolEncoderScherKhan;
+
+static bool scher_khan_build_upload(SubGhzProtocolEncoderScherKhan* instance) {
+    furi_check(instance);
+    LevelDuration* up = instance->encoder.upload;
+    const size_t cap = SCHER_KHAN_UPLOAD_CAPACITY;
+    size_t i = 0;
+
+    uint32_t bits = instance->generic.data_count_bit;
+    if(bits == 0U || bits > 64U) {
+        return false;
+    }
+
+    // Header burst + start bit.
+    for(uint8_t h = 0; h < SK_HEADER_PAIRS; h++) {
+        i = pp_emit(up, i, cap, true, SK_TE_HEADER);
+        i = pp_emit(up, i, cap, false, SK_TE_HEADER);
+    }
+    i = pp_emit(up, i, cap, true, SK_TE_SHORT_TX);
+    i = pp_emit(up, i, cap, false, SK_TE_SHORT_TX);
+
+    for(uint32_t b = 0; b < bits; b++) {
+        const bool bit = (instance->generic.data >> (bits - 1U - b)) & 1U;
+        const uint32_t te = bit ? SK_TE_LONG_TX : SK_TE_SHORT_TX;
+        i = pp_emit(up, i, cap, true, te);
+        i = pp_emit(up, i, cap, false, te);
+    }
+    i = pp_emit(up, i, cap, true, SK_TX_GAP_US);
+
+    instance->encoder.front = 0;
+    instance->encoder.size_upload = i;
+    return i > 0;
+}
+
+void* subghz_protocol_encoder_scher_khan_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+    SubGhzProtocolEncoderScherKhan* instance = calloc(1, sizeof(SubGhzProtocolEncoderScherKhan));
+    furi_check(instance);
+    instance->base.protocol = &subghz_protocol_scher_khan;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    instance->encoder.repeat = 6;
+    instance->encoder.front = 0;
+    instance->encoder.is_running = false;
+    pp_encoder_buffer_ensure(instance, SCHER_KHAN_UPLOAD_CAPACITY);
+    return instance;
+}
+
+SubGhzProtocolStatus
+    subghz_protocol_encoder_scher_khan_deserialize(void* context, FlipperFormat* flipper_format) {
+    furi_check(context);
+    SubGhzProtocolEncoderScherKhan* instance = context;
+    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+
+    instance->encoder.is_running = false;
+    instance->encoder.front = 0;
+
+    do {
+        if(pp_verify_protocol_name(flipper_format, instance->base.protocol->name) !=
+           SubGhzProtocolStatusOk) {
+            break;
+        }
+
+        flipper_format_rewind(flipper_format);
+        if(subghz_block_generic_deserialize(&instance->generic, flipper_format) !=
+           SubGhzProtocolStatusOk) {
+            break;
+        }
+        if(instance->generic.data_count_bit <
+               subghz_protocol_scher_khan_const.min_count_bit_for_found ||
+           instance->generic.data_count_bit > 64U) {
+            break;
+        }
+
+        instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 6);
+
+        if(!scher_khan_build_upload(instance) || instance->encoder.size_upload == 0) {
+            break;
+        }
+
+        instance->encoder.is_running = true;
+        ret = SubGhzProtocolStatusOk;
+    } while(false);
+
+    return ret;
+}
+
+const SubGhzProtocolEncoder subghz_protocol_scher_khan_encoder = {
+    .alloc = subghz_protocol_encoder_scher_khan_alloc,
+    .free = pp_encoder_free,
+    .deserialize = subghz_protocol_encoder_scher_khan_deserialize,
+    .stop = pp_encoder_stop,
+    .yield = pp_encoder_yield,
+};
+#else
 const SubGhzProtocolEncoder subghz_protocol_scher_khan_encoder = {
     .alloc = NULL,
     .free = NULL,
@@ -55,11 +169,16 @@ const SubGhzProtocolEncoder subghz_protocol_scher_khan_encoder = {
     .stop = NULL,
     .yield = NULL,
 };
+#endif
 
 const SubGhzProtocol subghz_protocol_scher_khan = {
     .name = SUBGHZ_PROTOCOL_SCHER_KHAN_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable,
+    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable
+#if PROTOPIRATE_WITH_ENCODER
+            | SubGhzProtocolFlag_Send
+#endif
+    ,
 
 #if PROTOPIRATE_WITH_DECODER
 

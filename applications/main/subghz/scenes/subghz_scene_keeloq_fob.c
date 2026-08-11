@@ -109,16 +109,29 @@ void subghz_scene_keeloq_fob_on_enter(void* context) {
         flipper_format_read_uint32(fff, "CloneJump", &v, 1);
         jump = (uint16_t)v;
     } else {
-        // Build the no-desync clone into fff_data from the gen_info the Clone action set.
-        bool ok = subghz_txrx_gen_keeloq_clone(
-            subghz->txrx,
-            subghz->gen_info->mod,
-            subghz->gen_info->freq,
-            subghz->gen_info->keeloq.serial,
-            subghz->gen_info->keeloq.btn,
-            subghz->gen_info->keeloq.cnt,
-            subghz->keeloq_clone_jump,
-            subghz->gen_info->keeloq.manuf);
+        // Build the clone into fff_data from the gen_info the Clone action set. BFT/Erreka
+        // (non-zero seed) route through the seed-aware builder so the derived device key is
+        // correct; normal KeeLoq uses the no-desync clone builder.
+        bool ok =
+            subghz->gen_info->keeloq.seed ?
+                subghz_txrx_gen_keeloq_bft_protocol(
+                    subghz->txrx,
+                    subghz->gen_info->mod,
+                    subghz->gen_info->freq,
+                    subghz->gen_info->keeloq.serial,
+                    subghz->gen_info->keeloq.btn,
+                    subghz->gen_info->keeloq.cnt,
+                    subghz->gen_info->keeloq.seed,
+                    subghz->gen_info->keeloq.manuf) :
+                subghz_txrx_gen_keeloq_clone(
+                    subghz->txrx,
+                    subghz->gen_info->mod,
+                    subghz->gen_info->freq,
+                    subghz->gen_info->keeloq.serial,
+                    subghz->gen_info->keeloq.btn,
+                    subghz->gen_info->keeloq.cnt,
+                    subghz->keeloq_clone_jump,
+                    subghz->gen_info->keeloq.manuf);
         subghz->keeloq_clone_flow = false;
         if(!ok) {
             furi_string_set(

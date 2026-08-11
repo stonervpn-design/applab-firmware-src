@@ -8,7 +8,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define SUBBRUTE_RESUME_SCHEMA 1u
+#define SUBBRUTE_RESUME_SCHEMA 2u
+
+// Max source .sub path persisted for a LoadFile resume (schema 2). Long enough
+// for EXT_PATH("subghz")/<name>.sub; an over-long path is rejected at save time.
+#define SUBBRUTE_RESUME_MAX_PATH 256u
 
 // Mirrors of the SubBruteAttacks enum (helpers/subbrute_protocols.h), duplicated
 // here so the pure validator has NO furi dependency and stays host-testable. The
@@ -25,11 +29,23 @@ typedef struct {
     uint8_t extra_repeats;
     uint8_t two_bytes; // bool; affects the keyspace via calc_max_value
     uint8_t opencode;
+
+    // LoadFile-attack resume state (schema 2). Zero/empty for preset + DeBruijn
+    // records. A LoadFile sweep can't be rebuilt from step alone — the protocol,
+    // frequency, preset and bits all live in the source .sub — so we persist its
+    // path and reload it, then re-seed the captured key, the selected group, and
+    // any function mask.
+    uint8_t load_index; // bit_index (group) chosen in the load-select scene
+    uint64_t file_key; // captured key; a reload must reproduce it (tamper guard)
+    uint64_t mask_var; // function-mask variable bits (0 when unmasked)
+    uint8_t mask_active; // bool; function-mask brute engaged
+    char file_path[SUBBRUTE_RESUME_MAX_PATH]; // source .sub for the LoadFile sweep
 } SubBruteResume;
 
 // Pure (no furi): a record is resumable iff the schema matches, the attack index
 // is in range, and it is a resumable KIND — not DeBruijn (single continuous
-// burst, no step) and not LoadFile (deferred to phase 2).
+// burst, no step). A LoadFile record additionally requires a non-empty source
+// path, since its sweep is rebuilt by reloading that .sub.
 bool subbrute_resume_is_valid(const SubBruteResume* r);
 
 // FlipperFormat glue (subbrute_resume_io.c). All use the canonical resume file

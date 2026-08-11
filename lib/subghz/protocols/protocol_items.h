@@ -76,6 +76,7 @@
 
 #include "bmw_cas4.h"
 #include "hyundai_kia_rio.h"
+#include "hyundai_tl.h"
 #include "mazda_siemens.h"
 #include "sheriff_cfm.h"
 #include "chrysler_v0.h"

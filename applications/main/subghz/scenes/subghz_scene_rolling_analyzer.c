@@ -6,6 +6,8 @@
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/protocols/keeloq.h>
 #include <lib/subghz/protocols/vag.h>
+#include <lib/subghz/protocols/hitag2.h> // SUBGHZ_PROTOCOL_HITAG2_NAME (Forge spoke)
+#include <lib/subghz/protocols/hitag2.h> // SUBGHZ_PROTOCOL_HITAG2_NAME (Forge spoke)
 #include <lib/subghz/protocols/subaru.h>
 #include <lib/subghz/protocols/honda_v2_v3.h>
 #include <lib/subghz/protocols/protocols_common.h> // FF_CNT field name
@@ -168,6 +170,22 @@ static void subghz_scene_rolling_analyzer_predict_button_callback(
     }
 }
 
+// Hitag2 "Forge" button (Center): route to the known-key counter-recovery + forge
+// scene. Kept separate from the KeeLoq clone callback so Center means "Forge" (not
+// "Clone") for a Hitag2 capture. Right "Save" (plain replay) stays on the generic
+// save callback.
+static void subghz_scene_rolling_analyzer_hitag2_button_callback(
+    GuiButtonType result,
+    InputType type,
+    void* context) {
+    furi_assert(context);
+    SubGhz* subghz = context;
+    if((result == GuiButtonTypeCenter) && (type == InputTypeShort)) {
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventSceneRollingAnalyzerForge);
+    }
+}
+
 void subghz_scene_rolling_analyzer_on_enter(void* context) {
     SubGhz* subghz = context;
 
@@ -318,6 +336,20 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
             subghz_scene_rolling_analyzer_button_callback,
             subghz);
     }
+
+    // Hitag2 (NXP RKE) known-key forge: recover the full 28-bit counter from THIS
+    // frame + the 48-bit key, then emit valid FUTURE frames (not a single replay).
+    // Center "Forge" -> dedicated key-entry scene. The Right "Save" from
+    // can_save_generic above still offers a plain single-use replay. Independent
+    // `if` (not part of the clone/vag/predict chain) so it co-exists with Save.
+    if(protocol_name && strcmp(protocol_name, SUBGHZ_PROTOCOL_HITAG2_NAME) == 0) {
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeCenter,
+            "Forge",
+            subghz_scene_rolling_analyzer_hitag2_button_callback,
+            subghz);
+    }
 #endif
 
     furi_string_free(body);
@@ -328,6 +360,18 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
 
 bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent event) {
     SubGhz* subghz = context;
+
+    // Hitag2 known-key forge: stop RX/hopper (the forge scene re-loads the capture,
+    // enters the key, recovers the counter and hands a forged .sub to the
+    // Transmitter), then open the dedicated key-entry scene.
+    if(event.type == SceneManagerEventTypeCustom &&
+       event.event == SubGhzCustomEventSceneRollingAnalyzerForge) {
+        subghz->state_notifications = SubGhzNotificationStateIDLE;
+        subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
+        subghz_txrx_stop(subghz->txrx);
+        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneHitag2Forge);
+        return true;
+    }
 
     // Next-code prediction (keyless-predictable dynamic fobs): synthesize + TX the
     // next rolling code(s). Center "Next" = one code, advancing +1 per press; Left
@@ -535,8 +579,21 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
 
         uint32_t fix = subghz_rollback_hex_after(t, "Fix:");
         uint32_t cnt = subghz_rollback_hex_after(t, "Cnt:");
+        // BFT/Erreka secure-learning seed recovered from a programming/pairing frame.
+        // can_clone() already gated on this being non-zero for those makes; carry it so
+        // the clone derives the real device key = secure_learning(serial, seed, mfr_key)
+        // instead of dropping it (which produced a wrong-key, non-functional clone).
+        uint32_t seed = subghz_rollback_hex_after(t, "Sd:");
         char mf[24] = {0};
         subghz_rollback_manufacturer(t, mf, sizeof(mf));
+        // BFT/Erreka get_string is "MF:BFT Sd:XXXXXXXX" with only a space before " Sd:",
+        // so subghz_rollback_manufacturer captures "BFT Sd:..." — truncate at the first
+        // space to the bare keystore name or the mfr-key strcmp lookup fails (garbage clone).
+        // No-op for space-free normal manufacturer names.
+        {
+            char* sp = strchr(mf, ' ');
+            if(sp) *sp = '\0';
+        }
         furi_string_free(text);
 
         strncpy(
@@ -556,19 +613,33 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
         subghz->gen_info->keeloq.btn = (uint8_t)((fix >> 28) & 0x0F);
         subghz->gen_info->keeloq.cnt = (uint16_t)cnt;
         subghz->gen_info->keeloq.manuf = subghz_scene_rolling_analyzer_clone_manuf;
+        subghz->gen_info->keeloq.seed = seed;
 
         if(do_save) {
             // Build the clone into fff_data and persist it to the Garage, then open
-            // the fob on the just-built clone (from_garage => no rebuild).
-            if(subghz_txrx_gen_keeloq_clone(
-                   subghz->txrx,
-                   subghz->gen_info->mod,
-                   subghz->gen_info->freq,
-                   subghz->gen_info->keeloq.serial,
-                   subghz->gen_info->keeloq.btn,
-                   subghz->gen_info->keeloq.cnt,
-                   subghz->keeloq_clone_jump, /* 0 = no lead (desync-safe default) */
-                   subghz->gen_info->keeloq.manuf)) {
+            // the fob on the just-built clone (from_garage => no rebuild). BFT/Erreka
+            // (non-zero seed) use the seed-aware builder so the derived key is correct;
+            // normal KeeLoq uses the no-desync clone builder.
+            bool built =
+                seed ? subghz_txrx_gen_keeloq_bft_protocol(
+                           subghz->txrx,
+                           subghz->gen_info->mod,
+                           subghz->gen_info->freq,
+                           subghz->gen_info->keeloq.serial,
+                           subghz->gen_info->keeloq.btn,
+                           subghz->gen_info->keeloq.cnt,
+                           seed,
+                           subghz->gen_info->keeloq.manuf) :
+                       subghz_txrx_gen_keeloq_clone(
+                           subghz->txrx,
+                           subghz->gen_info->mod,
+                           subghz->gen_info->freq,
+                           subghz->gen_info->keeloq.serial,
+                           subghz->gen_info->keeloq.btn,
+                           subghz->gen_info->keeloq.cnt,
+                           subghz->keeloq_clone_jump, /* 0 = no lead (desync-safe default) */
+                           subghz->gen_info->keeloq.manuf);
+            if(built) {
                 FuriString* path = furi_string_alloc();
                 furi_string_printf(
                     path,

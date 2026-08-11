@@ -8,7 +8,6 @@ static void bus_tools_scene_start_submenu_callback(void* context, uint32_t index
 void bus_tools_scene_start_on_enter(void* context) {
     furi_assert(context);
     BusToolsApp* app = context;
-    SceneManager* scene_manager = app->scene_manager;
     submenu_reset(app->submenu);
     submenu_add_item(
         app->submenu, "I2C Scanner", 0, bus_tools_scene_start_submenu_callback, app);

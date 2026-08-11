@@ -591,13 +591,18 @@ SubGhzProtocolStatus
             for(size_t i = 0; i < sizeof(key_bytes); i++) key = (key << 8) | key_bytes[i];
             uint32_t counter = 0;
             flipper_format_rewind(flipper_format);
-            flipper_format_read_uint32(flipper_format, "Counter", &counter, 1);
-            uint32_t uid = (uint32_t)(instance->generic.data >> 32);
-            uint8_t btn = (uint8_t)((instance->generic.data >> 28) & 0x0F);
-            instance->generic.cnt = hitag2_rke_ks(key, uid, counter, btn); // forged Ks
-            uint16_t lctr = (uint16_t)(counter & 0x03FFu);
-            instance->generic.data =
-                (instance->generic.data & ~((uint64_t)0x03FFu << 18)) | ((uint64_t)lctr << 18);
+            // Forge only when the capture carries a Counter. Without it we cannot know
+            // which frame in the sequence to synthesize, so forging with counter=0 would
+            // emit an out-of-window Ks the receiver rejects. Fall back to faithful replay
+            // of the captured Ks (instance->generic.cnt is left as serialized).
+            if(flipper_format_read_uint32(flipper_format, "Counter", &counter, 1)) {
+                uint32_t uid = (uint32_t)(instance->generic.data >> 32);
+                uint8_t btn = (uint8_t)((instance->generic.data >> 28) & 0x0F);
+                instance->generic.cnt = hitag2_rke_ks(key, uid, counter, btn); // forged Ks
+                uint16_t lctr = (uint16_t)(counter & 0x03FFu);
+                instance->generic.data =
+                    (instance->generic.data & ~((uint64_t)0x03FFu << 18)) | ((uint64_t)lctr << 18);
+            }
         }
 
         instance->generic.protocol_name = instance->base.protocol->name;

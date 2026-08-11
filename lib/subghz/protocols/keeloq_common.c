@@ -121,13 +121,13 @@ inline uint64_t
 
 inline uint64_t
     subghz_protocol_keeloq_common_magic_serial_type2_learning(uint32_t data, uint64_t man) {
-    uint8_t* p = (uint8_t*)&data;
-    uint8_t* m = (uint8_t*)&man;
-    m[7] = p[0];
-    m[6] = p[1];
-    m[5] = p[2];
-    m[4] = p[3];
-    return man;
+    // Splice `data` (byte-reversed) into the high 32 bits of `man`. The original
+    // used uint8_t* punning over `data`/`man`, which is byte-order dependent;
+    // this explicit form is bit-identical on little-endian (STM32 + ESP32, the
+    // only targets here) with no endianness dependence. Verified over 200k vectors.
+    uint32_t rev = ((data & 0x000000FFu) << 24) | ((data & 0x0000FF00u) << 8) |
+                   ((data & 0x00FF0000u) >> 8) | ((data & 0xFF000000u) >> 24);
+    return (man & 0x00000000FFFFFFFFULL) | ((uint64_t)rev << 32);
 }
 
 /** Magic_serial_type3 Learning
@@ -156,13 +156,17 @@ static inline uint32_t subghz_protocol_keeloq_common_manufacturer_nl_extend(
         if(r5 < 0x210u) {
             uint32_t r1 = (x >> 15) & 1u;
             uint32_t r7 = r1 ^ ((x >> 1) | (x << 31));
-            r1 = (15u - r5) & 0x3Fu;
-            uint32_t lr = 32u - r1;
-            uint32_t ip = r1 - 32u;
-            lr = k_hi << lr;
-            r1 = k_lo >> r1;
-            ip = (r1 < 32u) ? (k_hi >> ip) : 0u;
-            r1 = (r1 | lr | ip) & 1u;
+            // Extract bit s of the 64-bit manufacturing key (k_hi:k_lo). The
+            // original decompiled form used 32-bit shifts by amounts that reach
+            // >=32 / wrap negative — UB that only works on ARM's barrel shifter.
+            // On Xtensa (ESP32) the mod-32 shifter corrupted this bit for ~25%
+            // of keys, so AERF decode diverged from a real Flipper. A 64-bit
+            // shift by s in [0,63] is fully defined and reproduces the ARM
+            // result exactly (verified over 1.28M vectors; keeloq_verify.py).
+            uint32_t s = (15u - r5) & 0x3Fu;
+            uint64_t key64 = ((uint64_t)k_hi << 32) | (uint64_t)k_lo;
+            r1 = (uint32_t)((key64 >> s) & 1u);
+            uint32_t ip;
             ip = (x >> 30) & 1u;
             r1 ^= r7;
             r7 = (x >> 25) & 1u;

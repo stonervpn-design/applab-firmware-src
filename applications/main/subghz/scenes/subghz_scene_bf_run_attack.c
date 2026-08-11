@@ -25,6 +25,20 @@ static void subghz_scene_bf_run_attack_checkpoint(SubGhz* subghz) {
         .two_bytes = d->two_bytes ? 1u : 0u,
         .opencode = d->opencode,
     };
+    if(d->attack == SubBruteAttackLoadFile) {
+        // A LoadFile sweep can't be rebuilt from step alone — persist the group
+        // index, the captured key (reload tamper-guard), the mask, and the source
+        // path so the resume path can reload the .sub and re-seed everything.
+        r.load_index = d->bit_index;
+        r.file_key = d->key_from_file;
+        SubBruteWorker* w = subghz->subbrute_worker;
+        if(w && subbrute_worker_is_masked(w)) {
+            r.mask_var = subbrute_worker_get_mask_var(w);
+            r.mask_active = 1u;
+        }
+        strncpy(r.file_path, d->load_file_path, sizeof(r.file_path) - 1);
+        r.file_path[sizeof(r.file_path) - 1] = '\0';
+    }
     if(subbrute_resume_is_valid(&r)) subbrute_resume_save(&r);
 }
 #endif
@@ -55,12 +69,18 @@ void subghz_scene_bf_run_attack_on_exit(void* context) {
     furi_assert(context);
     SubGhz* subghz = (SubGhz*)context;
     notification_message(subghz->notifications, &sequence_blink_stop);
+#ifndef PUBLIC_BUILD
+    // Persist a final checkpoint only if the sweep was still running when we left (user
+    // backed out mid-sweep). A naturally FINISHED sweep already cleared worker_running
+    // (worker.c sets it false when the Tx loop ends) and cleared its checkpoint on
+    // TransmitFinished, so is_running is false and we don't re-save. Using is_running
+    // instead of comparing current_step to d->max_value is correct for MASKED LoadFile
+    // sweeps too, where d->max_value (byte-granular) != the worker's masked 2^k space.
+    bool unfinished = subbrute_worker_is_running(subghz->subbrute_worker);
+#endif
     subbrute_worker_stop(subghz->subbrute_worker);
 #ifndef PUBLIC_BUILD
-    // Persist a final checkpoint if the sweep is unfinished (a completed sweep was
-    // already cleared on TransmitFinished). current_step+1 < max_value == work left.
-    SubBruteDevice* d = subghz->subbrute_device;
-    if(d && d->max_value > 0 && (d->current_step + 1) < d->max_value) {
+    if(unfinished && subghz->subbrute_device) {
         subghz_scene_bf_run_attack_checkpoint(subghz);
     }
 #endif

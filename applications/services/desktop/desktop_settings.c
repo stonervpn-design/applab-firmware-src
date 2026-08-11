@@ -73,6 +73,9 @@ void desktop_settings_load(DesktopSettings* settings) {
     if(!success) {
         FURI_LOG_W(TAG, "Failed to load file, using defaults");
         memset(settings, 0, sizeof(DesktopSettings));
+        // Default the status-bar battery to the numeric percent inside the icon (100/60/..)
+        // rather than the plain fill bar. Changeable in Settings > Desktop > Battery view.
+        settings->displayBatteryPercentage = DISPLAY_BATTERY_PERCENT;
         desktop_settings_save(settings);
     }
 }

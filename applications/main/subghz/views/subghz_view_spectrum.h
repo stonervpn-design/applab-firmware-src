@@ -34,3 +34,8 @@ void subghz_view_spectrum_push_row(
 
 // Current peak frequency (Hz) for tune-to-peak; 0 if no data yet.
 uint32_t subghz_view_spectrum_get_peak_freq(SubGhzViewSpectrum* instance);
+
+// True only when the latest sweep's peak stands clearly above the noise floor
+// (peak bar rises off the absolute RSSI floor AND clears the sweep's mean floor
+// by a margin). Used to gate tune-to-peak so a noise-only sweep never retunes.
+bool subghz_view_spectrum_peak_is_signal(SubGhzViewSpectrum* instance);

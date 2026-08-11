@@ -1,4 +1,5 @@
 #include "subbrute_device.h"
+#include "subbrute_debruijn.h"
 
 #include <storage/storage.h>
 #include <lib/flipper_format/flipper_format_i.h>
@@ -22,6 +23,10 @@ SubBruteDevice* subbrute_device_alloc(const SubGhzDevice* radio_device) {
     instance->radio_device = radio_device;
 
     subbrute_device_attack_set_default_values(instance, SubBruteAttackCAME12bit433);
+
+#ifndef PUBLIC_BUILD
+    instance->load_file_path[0] = '\0'; // no LoadFile source loaded yet
+#endif
 
     return instance;
 }
@@ -96,7 +101,35 @@ bool subbrute_device_save_file(SubBruteDevice* instance, const char* dev_file_na
             break;
         }
         Stream* stream = flipper_format_get_raw_stream(file);
-        if(instance->attack == SubBruteAttackLoadFile) {
+        if(instance->attack == SubBruteAttackDeBruijn) {
+            // De Bruijn has no per-code protocol frame; the whole sweep is a single
+            // RAW OOK burst. Render the generated B(2,n) sequence into a Flipper RAW
+            // .sub so it can be replayed/exported like any other capture. n mirrors
+            // the worker's clamp of extra_repeats (subbrute_worker_init_default_attack).
+            uint8_t n = CLAMP(
+                instance->extra_repeats,
+                SUBBRUTE_DEBRUIJN_MAX_TX_N,
+                SUBBRUTE_DEBRUIJN_MIN_TX_N);
+            uint32_t te = instance->protocol_info->te ? instance->protocol_info->te : 250;
+            size_t seq_len = 0;
+            uint8_t* seq = subbrute_debruijn_generate(n, &seq_len);
+            char* raw = seq ? subbrute_debruijn_raw_data(seq, seq_len, te) : NULL;
+            if(raw == NULL) {
+                // OOM (no-PSRAM) or bad n: leave result=false so the caller shows
+                // a save error rather than writing a truncated/invalid .sub.
+                FURI_LOG_E(TAG, "De Bruijn RAW render failed (n=%d)", n);
+                free(seq); // free(NULL) is a no-op when generate() failed
+                break;
+            }
+            stream_write_format(
+                stream,
+                "Filetype: Flipper SubGhz RAW File\nVersion: 1\nFrequency: %lu\nPreset: %s\nProtocol: RAW\nRAW_Data: %s\n",
+                (unsigned long)instance->protocol_info->frequency,
+                subbrute_protocol_preset(instance->protocol_info->preset),
+                raw);
+            free(raw);
+            free(seq);
+        } else if(instance->attack == SubBruteAttackLoadFile) {
             subbrute_protocol_file_generate_file(
                 stream,
                 instance->file_protocol_info->frequency,

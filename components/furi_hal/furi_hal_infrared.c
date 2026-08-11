@@ -85,6 +85,10 @@ static FuriHalInfraredTxPin active_tx_pin = FuriHalInfraredTxPinInternal;
 #define IR_RMT_RX_RESOLUTION_HZ     1000000 /* 1 MHz = 1 us per tick */
 #define IR_RMT_TX_RESOLUTION_HZ     1000000 /* 1 MHz = 1 us per tick */
 #define IR_RMT_RX_MAX_SYMBOLS       1024
+/* Byte length of the RX symbol buffer. The buffer is now heap-allocated (a
+ * pointer), so sizeof(ir_rx.symbols) no longer gives the buffer size — pass
+ * this to the rmt_receive() calls that formerly used sizeof(ir_rx.symbols). */
+#define IR_RMT_RX_SYMBOLS_BYTES     (IR_RMT_RX_MAX_SYMBOLS * sizeof(rmt_symbol_word_t))
 
 /* When the RX line returns to idle, RMT ends the burst and records the
  * terminating space as a zero-duration "end marker" — so the long inter-frame
@@ -115,7 +119,7 @@ typedef enum {
 static struct {
     rmt_channel_handle_t channel;
     rmt_receive_config_t rx_config;
-    rmt_symbol_word_t symbols[IR_RMT_RX_MAX_SYMBOLS];
+    rmt_symbol_word_t* symbols; /* on-demand IR_RMT_RX_SYMBOLS_BYTES: alloc in async_rx_start, free in async_rx_stop */
     FuriHalInfraredRxCaptureCallback capture_callback;
     void* capture_context;
     FuriHalInfraredRxTimeoutCallback timeout_callback;
@@ -208,9 +212,11 @@ static bool IRAM_ATTR ir_rmt_rx_done_callback(rmt_channel_handle_t channel,
         ir_rx_restart_timeout();
     }
 
-    /* Re-start receiving for next burst */
-    if(ir_state == InfraredStateAsyncRx) {
-        rmt_receive(channel, ir_rx.symbols, sizeof(ir_rx.symbols), &ir_rx.rx_config);
+    /* Re-start receiving for next burst. The buffer is always non-NULL while
+     * state==AsyncRx (alloc precedes the AsyncRx transition, free follows the
+     * Idle transition + channel delete), so the NULL check is purely defensive. */
+    if(ir_state == InfraredStateAsyncRx && ir_rx.symbols) {
+        rmt_receive(channel, ir_rx.symbols, IR_RMT_RX_SYMBOLS_BYTES, &ir_rx.rx_config);
     }
 
     return false;
@@ -223,6 +229,16 @@ void furi_hal_infrared_async_rx_start(void) {
     return;
 #endif
     furi_hal_ir_rx_perf(true); /* keep CPU at max while capturing IR edges */
+
+    /* Allocate the RX symbol buffer on demand so its ~4 KB of internal RAM is
+     * reclaimed whenever IR RX is idle (e.g. during Sub-GHz). Internal RAM is
+     * fine here (the RX channel uses with_dma=false). Allocated before the RMT
+     * channel is created and before the AsyncRx transition, so no ISR can run
+     * against it yet; fail hard on OOM, mirroring the TX path's furi_check().
+     * Freed in furi_hal_infrared_async_rx_stop(). */
+    ir_rx.symbols =
+        heap_caps_malloc(IR_RMT_RX_SYMBOLS_BYTES, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    furi_check(ir_rx.symbols);
 
     /* Route RX to the active input: the Grove M5Unit TSOP when an external
      * module is selected, otherwise the board's internal IR RX pin. */
@@ -266,7 +282,7 @@ void furi_hal_infrared_async_rx_start(void) {
     ir_state = InfraredStateAsyncRx;
 
     /* Start receiving */
-    ESP_ERROR_CHECK(rmt_receive(ir_rx.channel, ir_rx.symbols, sizeof(ir_rx.symbols), &ir_rx.rx_config));
+    ESP_ERROR_CHECK(rmt_receive(ir_rx.channel, ir_rx.symbols, IR_RMT_RX_SYMBOLS_BYTES, &ir_rx.rx_config));
 }
 
 void furi_hal_infrared_async_rx_stop(void) {
@@ -280,6 +296,14 @@ void furi_hal_infrared_async_rx_stop(void) {
     rmt_disable(ir_rx.channel);
     rmt_del_channel(ir_rx.channel);
     ir_rx.channel = NULL;
+
+    /* The channel is deleted above (after ir_state was set to Idle), so the
+     * RX-done ISR can no longer fire or re-arm against this buffer — free it
+     * here to reclaim ~4 KB of internal RAM until the next async_rx_start().
+     * Safe on every teardown: the early-return above skips this when RX was
+     * never started (buffer stays NULL), and NULLing guards against double-free. */
+    heap_caps_free(ir_rx.symbols);
+    ir_rx.symbols = NULL;
 
     /* Stop and delete timeout timer if active */
     if(ir_rx.timeout_timer) {

@@ -542,6 +542,119 @@ const SubGhzProtocolDecoder subghz_protocol_ford_v3_decoder = {
     .get_string = subghz_protocol_decoder_ford_v3_get_string,
 };
 
+#if PROTOPIRATE_WITH_ENCODER
+
+// Replay encoder: Ford V3 carries an encrypted rolling "Hop" the decoder cannot
+// regenerate, so TX replays the captured 13-byte frame (Manchester). A fresh
+// capture is accepted once before the vehicle counter advances; this is not a
+// computed rolling code.
+#define FORD_V3_TX_TE            240U
+#define FORD_V3_TX_PREAMBLE_BITS 32U
+#define FORD_V3_TX_GAP_US        12000U
+#define FORD_V3_UPLOAD_CAPACITY \
+    ((FORD_V3_TX_PREAMBLE_BITS * 2U) + (FORD_V3_DATA_BITS * 2U) + 2U)
+_Static_assert(
+    FORD_V3_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
+    "FORD_V3_UPLOAD_CAPACITY exceeds shared upload slab");
+
+typedef struct SubGhzProtocolEncoderFordV3 {
+    SubGhzProtocolEncoderBase base;
+    SubGhzProtocolBlockEncoder encoder;
+    SubGhzBlockGeneric generic;
+    uint8_t raw[FORD_V3_DATA_BYTES];
+} SubGhzProtocolEncoderFordV3;
+
+static bool ford_v3_build_upload(SubGhzProtocolEncoderFordV3* instance) {
+    furi_check(instance);
+    LevelDuration* up = instance->encoder.upload;
+    const size_t cap = FORD_V3_UPLOAD_CAPACITY;
+    size_t i = 0;
+
+    for(uint8_t p = 0; p < FORD_V3_TX_PREAMBLE_BITS; p++) {
+        i = pp_emit_manchester_bit(up, i, cap, true, FORD_V3_TX_TE);
+    }
+    for(uint16_t b = 0; b < FORD_V3_DATA_BITS; b++) {
+        const bool bit = (instance->raw[b >> 3] >> (7U - (b & 7U))) & 1U;
+        i = pp_emit_manchester_bit(up, i, cap, bit, FORD_V3_TX_TE);
+    }
+    i = pp_emit(up, i, cap, false, FORD_V3_TX_GAP_US);
+
+    instance->encoder.front = 0;
+    instance->encoder.size_upload = i;
+    return i > 0;
+}
+
+void* subghz_protocol_encoder_ford_v3_alloc(SubGhzEnvironment* environment) {
+    UNUSED(environment);
+    SubGhzProtocolEncoderFordV3* instance = calloc(1, sizeof(SubGhzProtocolEncoderFordV3));
+    furi_check(instance);
+    instance->base.protocol = &ford_protocol_v3;
+    instance->generic.protocol_name = instance->base.protocol->name;
+    instance->encoder.repeat = 6;
+    instance->encoder.front = 0;
+    instance->encoder.is_running = false;
+    pp_encoder_buffer_ensure(instance, FORD_V3_UPLOAD_CAPACITY);
+    return instance;
+}
+
+SubGhzProtocolStatus
+    subghz_protocol_encoder_ford_v3_deserialize(void* context, FlipperFormat* flipper_format) {
+    furi_check(context);
+    SubGhzProtocolEncoderFordV3* instance = context;
+    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+
+    instance->encoder.is_running = false;
+    instance->encoder.front = 0;
+
+    do {
+        if(pp_verify_protocol_name(flipper_format, instance->base.protocol->name) !=
+           SubGhzProtocolStatusOk) {
+            break;
+        }
+
+        flipper_format_rewind(flipper_format);
+        if(subghz_block_generic_deserialize_check_count_bit(
+               &instance->generic,
+               flipper_format,
+               subghz_protocol_ford_v3_const.min_count_bit_for_found) != SubGhzProtocolStatusOk) {
+            break;
+        }
+
+        const uint64_t d = instance->generic.data;
+        for(uint8_t i = 0; i < 8U; i++) {
+            instance->raw[i] = (uint8_t)(d >> (56 - i * 8));
+        }
+        memset(&instance->raw[8], 0, FORD_V3_DATA_BYTES - 8U);
+
+        flipper_format_rewind(flipper_format);
+        // Replay requires the captured frame: bytes 8-12 hold the encrypted rolling Hop,
+        // which only lives in "Raw". Without it the hop stays zero and we would silently TX
+        // a broken null-hop frame, so fail cleanly (mirrors fiat_v2's missing-Raw handling).
+        if(!flipper_format_read_hex(flipper_format, "Raw", instance->raw, FORD_V3_DATA_BYTES)) {
+            break;
+        }
+
+        instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 6);
+
+        if(!ford_v3_build_upload(instance) || instance->encoder.size_upload == 0) {
+            break;
+        }
+
+        instance->encoder.is_running = true;
+        ret = SubGhzProtocolStatusOk;
+    } while(false);
+
+    return ret;
+}
+
+const SubGhzProtocolEncoder subghz_protocol_ford_v3_encoder = {
+    .alloc = subghz_protocol_encoder_ford_v3_alloc,
+    .free = pp_encoder_free,
+    .deserialize = subghz_protocol_encoder_ford_v3_deserialize,
+    .stop = pp_encoder_stop,
+    .yield = pp_encoder_yield,
+};
+#else
 const SubGhzProtocolEncoder subghz_protocol_ford_v3_encoder = {
     .alloc = NULL,
     .free = NULL,
@@ -549,13 +662,18 @@ const SubGhzProtocolEncoder subghz_protocol_ford_v3_encoder = {
     .stop = NULL,
     .yield = NULL,
 };
+#endif
 
 const SubGhzProtocol ford_protocol_v3 = {
     .name = FORD_PROTOCOL_V3_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
             SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load |
-            SubGhzProtocolFlag_Save,
+            SubGhzProtocolFlag_Save
+#if PROTOPIRATE_WITH_ENCODER
+            | SubGhzProtocolFlag_Send
+#endif
+    ,
 #if PROTOPIRATE_WITH_DECODER
     .decoder = &subghz_protocol_ford_v3_decoder,
 #else

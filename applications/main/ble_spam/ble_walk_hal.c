@@ -42,7 +42,12 @@ static BleWalkService s_services[BLE_WALK_MAX_SERVICES];
 static uint16_t s_service_count = 0;
 static volatile bool s_services_ready = false;
 
-static BleWalkChar s_chars[BLE_WALK_MAX_CHARS];
+// On-demand (was ~768 B always-resident BSS). Mirror of the s_devices
+// conversion above: allocated in ble_walk_hal_start before the NimBLE host task
+// starts, freed in ble_walk_hal_stop after nimble_port_deinit() so disc_chr_cb
+// can no longer fire. Written by disc_chr_cb on the NimBLE host task; read by
+// scenes via ble_walk_hal_get_chars().
+static BleWalkChar* s_chars;
 static uint16_t s_char_count = 0;
 static volatile bool s_chars_ready = false;
 
@@ -180,6 +185,7 @@ static int disc_chr_cb(
     UNUSED(conn_handle);
     UNUSED(arg);
     if(error == NULL) return 0;
+    if(!s_chars) return 0; /* table freed / not allocated */
 
     if(error->status == 0 && chr != NULL) {
         if(s_char_count < BLE_WALK_MAX_CHARS) {
@@ -431,6 +437,18 @@ bool ble_walk_hal_start(void) {
         }
     }
 
+    // GATT-client characteristic table — same on-demand lifecycle as s_devices,
+    // allocated before the host task so a failure is a clean early return.
+    if(!s_chars) {
+        s_chars = calloc(BLE_WALK_MAX_CHARS, sizeof(*s_chars));
+        if(!s_chars) {
+            ESP_LOGE(TAG, "s_chars alloc failed");
+            free(s_devices);
+            s_devices = NULL;
+            return false;
+        }
+    }
+
     // Controller init/enable — UNCHANGED across the Bluedroid->NimBLE migration.
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     esp_err_t err = esp_bt_controller_init(&bt_cfg);
@@ -526,6 +544,8 @@ void ble_walk_hal_stop(void) {
     // Host task is gone (nimble_port_deinit above) → no callback can touch it.
     free(s_devices);
     s_devices = NULL;
+    free(s_chars);
+    s_chars = NULL;
     s_hal_started = false;
     ESP_LOGI(TAG, "BLE Walk HAL stopped");
 }
@@ -722,6 +742,10 @@ bool ble_walk_hal_chars_ready(void) {
 }
 
 BleWalkChar* ble_walk_hal_get_chars(uint16_t* count) {
+    if(!s_chars) {
+        *count = 0;
+        return NULL;
+    }
     *count = s_char_count;
     return s_chars;
 }

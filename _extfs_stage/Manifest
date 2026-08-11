@@ -1,5 +1,5 @@
 V:1
-T:1785358834
+T:1786206829
 D:infrared
 D:infrared/assets
 F:7a32edeccabacaf10091c17708a5a0cd:202376:infrared/assets/ac.ir
@@ -21,4 +21,3 @@ F:d309deff31d39091a437676fd2db1810:3752:nfc/assets/vendors.nfc
 D:subghz
 D:subghz/assets
 F:50cf77ba8b935ee6cb3b6f111cf2d93d:286:subghz/assets/dangerous_settings
-F:c5e9552b3fcdb42125450dda1f3b1b6a:4257:subghz/assets/keeloq_mfcodes_user

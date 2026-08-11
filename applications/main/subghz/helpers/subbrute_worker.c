@@ -19,7 +19,8 @@
 #define SUBBRUTE_FAST_REPEAT              2 // repeat clamp in fast mode (receiver-latch floor)
 
 // Defined lower down; forward-declared so the manual-transmit path can call it.
-static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance);
+// Returns true when the burst was generated and transmitted, false on failure.
+static bool subbrute_worker_debruijn_transmit(SubBruteWorker* instance);
 
 SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device) {
     SubBruteWorker* instance = malloc(sizeof(SubBruteWorker));
@@ -113,6 +114,11 @@ bool subbrute_worker_is_masked(SubBruteWorker* instance) {
 uint8_t subbrute_worker_get_mask_bits(SubBruteWorker* instance) {
     furi_assert(instance);
     return instance->mask_active ? subbrute_mask_var_bits(instance->mask_var) : 0;
+}
+
+uint64_t subbrute_worker_get_mask_var(SubBruteWorker* instance) {
+    furi_assert(instance);
+    return instance->mask_active ? instance->mask_var : 0;
 }
 #endif
 
@@ -371,8 +377,8 @@ bool subbrute_worker_transmit_current_key(SubBruteWorker* instance, uint64_t ste
     instance->step = step;
 
     if(instance->attack == SubBruteAttackDeBruijn) {
-        subbrute_worker_debruijn_transmit(instance);
-        return true;
+        // Report the generate/TX outcome instead of an unconditional success.
+        return subbrute_worker_debruijn_transmit(instance);
     }
 
     bool result;
@@ -417,6 +423,13 @@ bool subbrute_worker_transmit_current_key(SubBruteWorker* instance, uint64_t ste
 
 bool subbrute_worker_is_running(SubBruteWorker* instance) {
     return instance->worker_running;
+}
+
+void subbrute_worker_clear_tx_guard(SubBruteWorker* instance) {
+    furi_assert(instance);
+    // furi_get_tick() is always >> the 250ms interval after boot, so resetting
+    // the timestamp to 0 makes the next transmit_current_key() guard check pass.
+    instance->last_time_tx_data = 0;
 }
 
 bool subbrute_worker_can_manual_transmit(SubBruteWorker* instance) {
@@ -466,7 +479,7 @@ static LevelDuration subbrute_worker_debruijn_yield(void* context) {
     return level_duration_make((bool)bit, (uint32_t)(run * ctx->te));
 }
 
-static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance) {
+static bool subbrute_worker_debruijn_transmit(SubBruteWorker* instance) {
     const uint8_t timeout = instance->tx_timeout_ms;
     while(instance->transmit_mode) {
         furi_delay_ms(timeout);
@@ -478,7 +491,7 @@ static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance) {
     if(seq == NULL) {
         FURI_LOG_E(TAG, "De Bruijn generate failed (n=%d)", instance->bits);
         instance->transmit_mode = false;
-        return;
+        return false;
     }
 
     SubBruteDebruijnTx ctx = {
@@ -511,6 +524,8 @@ static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance) {
     subghz_devices_idle(instance->radio_device);
     free(seq);
     instance->transmit_mode = false;
+    // tx_started is the only failure path left once the sequence generated.
+    return tx_started;
 }
 
 void subbrute_worker_subghz_transmit(SubBruteWorker* instance, FlipperFormat* flipper_format) {
@@ -632,8 +647,11 @@ int32_t subbrute_worker_thread(void* context) {
     while(instance->worker_running) {
         if(instance->attack == SubBruteAttackDeBruijn) {
             // One continuous burst covers every code; transmit once and finish.
-            subbrute_worker_debruijn_transmit(instance);
-            local_state = SubBruteWorkerStateFinished;
+            // On a generate/TX failure fall to IDLE (the scene maps IDLE -> error)
+            // instead of falsely reporting a completed sweep.
+            local_state = subbrute_worker_debruijn_transmit(instance) ?
+                              SubBruteWorkerStateFinished :
+                              SubBruteWorkerStateIDLE;
             break;
         }
         stream_clean(stream);

@@ -402,7 +402,9 @@ bool gen2_poller_can_write_block(const MfClassicData* target_data, uint8_t block
         // the wipe's block-0 default (gen2_poller.c) hard-codes SAK/ATQA at the 4-byte-UID offsets
         // (bytes 5-7); a 7-byte UID puts them at 7-9, so writing block 0 would corrupt it. When
         // adding 7-byte support, derive the offsets from uid_len (or use nfc_generate_mf_classic_block_0).
-        can_write = false;
+        // MUST return here: block 0 is not a sector trailer, so the data-block check below would
+        // otherwise overwrite can_write and defeat this guard, corrupting block 0.
+        return false;
     }
 
     if(mf_classic_is_sector_trailer(block_num)) {
