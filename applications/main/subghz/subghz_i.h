@@ -18,7 +18,7 @@
 #include "views/subghz_keeloq_fob.h"
 #ifndef PUBLIC_BUILD
 #include "helpers/fuzzer_worker.h" // Protocol Fuzzer (PRIVATE-only)
-#include "helpers/fuzzer_mutate.h"
+#include "fuzzer_mutate.h"
 #include "views/subghz_view_fuzzer.h"
 #endif
 #include "helpers/subghz_rollback.h"
