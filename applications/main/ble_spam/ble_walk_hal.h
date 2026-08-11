@@ -71,3 +71,39 @@ uint8_t* ble_walk_hal_get_read_value(uint16_t* len);
 uint8_t ble_walk_hal_get_read_status(void);
 
 bool ble_walk_hal_write_char(uint16_t handle, const uint8_t* data, uint16_t len);
+
+#ifndef PUBLIC_BUILD
+// ---------------------------------------------------------------------------
+// GATT fuzz + connection-DoS primitives (private-only: new attack surface).
+// All operate against the currently-connected/locked target only (the flood
+// start is the sole exception — it takes its own target and drives its own
+// connect/disconnect churn on an internal worker thread).
+// ---------------------------------------------------------------------------
+
+// Fire-and-forget write (Write Without Response). No completion callback, no
+// flow control — fastest way to hammer a characteristic with fuzz payloads.
+bool ble_walk_hal_write_char_norsp(uint16_t handle, const uint8_t* data, uint16_t len);
+
+// Write Long Characteristic Values (queued/prepared-write procedure). Use for
+// payloads longer than the negotiated ATT_MTU - 3, or to specifically exercise
+// a peer's prepare-write/execute-write queue handling during fuzzing.
+bool ble_walk_hal_write_char_long(uint16_t handle, uint16_t offset, const uint8_t* data, uint16_t len);
+
+// MTU fuzzing: sets our preferred MTU then re-triggers the ATT MTU exchange
+// on the current connection. Negotiated result is captured by the GAP event
+// callback and readable via ble_walk_hal_get_negotiated_mtu().
+bool ble_walk_hal_fuzz_mtu(uint16_t preferred_mtu);
+uint16_t ble_walk_hal_get_negotiated_mtu(void);
+
+// Connection-flood DoS: repeatedly connects to `target`'s address, holds the
+// link open briefly (hold_count-scaled dwell, 0 == disconnect immediately for
+// maximum churn rate), then disconnects and reconnects — driven by an
+// internal worker thread + stop flag until ble_walk_hal_dos_flood_stop() is
+// called. ble_walk_hal_dos_counter() reports completed connect cycles so far.
+// Requires the HAL to already be started (ble_walk_hal_start()); operates
+// only on target->addr / target->addr_type, independent of any other
+// in-progress connection this HAL instance holds.
+bool ble_walk_hal_dos_connect_flood_start(const BleWalkDevice* target, uint16_t hold_count);
+void ble_walk_hal_dos_flood_stop(void);
+uint32_t ble_walk_hal_dos_counter(void);
+#endif // PUBLIC_BUILD

