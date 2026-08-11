@@ -521,6 +521,15 @@ void ble_walk_hal_stop(void) {
     }
     ESP_LOGI(TAG, "Stopping BLE Walk HAL...");
 
+#ifndef PUBLIC_BUILD
+    // Tear down any running DoS flood BEFORE the NimBLE host/controller go
+    // away — otherwise dos_flood_worker keeps calling ble_gap_connect/
+    // ble_gap_terminate/ble_gap_conn_cancel against an already-deinitialized
+    // host, and its s_dos_thread handle would leak. Idempotent no-op if no
+    // flood is running.
+    ble_walk_hal_dos_flood_stop();
+#endif
+
     if(s_connected && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
         ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
         furi_delay_ms(100);
