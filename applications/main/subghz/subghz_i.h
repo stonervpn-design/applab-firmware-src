@@ -16,6 +16,11 @@
 #include "views/subghz_view_protoview.h"
 #include "views/subghz_view_spectrum.h"
 #include "views/subghz_keeloq_fob.h"
+#ifndef PUBLIC_BUILD
+#include "helpers/fuzzer_worker.h" // Protocol Fuzzer (PRIVATE-only)
+#include "helpers/fuzzer_mutate.h"
+#include "views/subghz_view_fuzzer.h"
+#endif
 #include "helpers/subghz_rollback.h"
 #include "helpers/subbrute_device.h"
 #include "helpers/subbrute_worker.h"
@@ -162,6 +167,25 @@ struct SubGhz {
     SubGhzLoadTypeFile load_type_file;
     uint8_t tx_power;
     void* rpc_ctx;
+
+#ifndef PUBLIC_BUILD
+    // Protocol Fuzzer (PRIVATE-only): filled in by the config scene, consumed
+    // by fuzzer_worker_set_config() in the run scene. fuzzer_cfg carries the
+    // mutation-side settings (mode/strategy/seed/...); the rest mirror the
+    // separate params fuzzer_worker_set_config() takes (protocol/freq/preset
+    // aren't part of FuzzConfig). Worker + view are lazy-alloc'd by the run
+    // scene (mirrors the Jammer/Spectrum lifecycle — see
+    // subghz_scene_protocol_fuzzer_run.c and the safety-net free in
+    // subghz_free()).
+    FuzzConfig fuzzer_cfg;
+    char fuzzer_protocol[16]; // e.g. "Princeton", "CAME", "Nice FLO", "Holtek", "Linear"
+    uint32_t fuzzer_freq;
+    char fuzzer_preset[40]; // FuriHalSubGhzPreset enum name (subbrute_protocol_convert_preset)
+    uint32_t fuzzer_te;
+    uint8_t fuzzer_repeat;
+    FuzzerWorker* fuzzer_worker;
+    SubGhzViewFuzzer* fuzzer_view;
+#endif
 };
 
 void subghz_blink_start(SubGhz* subghz);

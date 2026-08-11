@@ -48,6 +48,12 @@ void subghz_scene_start_on_enter(void* context) {
         SubmenuIndexJammer,
         subghz_scene_start_submenu_callback,
         subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "Protocol Fuzzer",
+        SubmenuIndexProtocolFuzzer,
+        subghz_scene_start_submenu_callback,
+        subghz);
 #endif
     submenu_add_item(
         subghz->submenu,
@@ -180,6 +186,11 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexJammer);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneJammer);
+            return true;
+        } else if(event.event == SubmenuIndexProtocolFuzzer) {
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexProtocolFuzzer);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneProtocolFuzzerConfig);
             return true;
         }
 #endif

@@ -45,6 +45,8 @@ ADD_SCENE(subghz, radio_settings, ExtModuleSettings)
 ADD_SCENE(subghz, read_raw, ReadRAW)
 #ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, jammer, Jammer)
+ADD_SCENE(subghz, protocol_fuzzer_config, ProtocolFuzzerConfig)
+ADD_SCENE(subghz, protocol_fuzzer_run, ProtocolFuzzerRun)
 #endif
 ADD_SCENE(subghz, playlist, Playlist)
 ADD_SCENE(subghz, bf_start, BfStart)

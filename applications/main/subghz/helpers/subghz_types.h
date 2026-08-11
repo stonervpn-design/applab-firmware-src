@@ -86,6 +86,9 @@ typedef enum {
     SubGhzViewIdProtoview,
     SubGhzViewIdSpectrum,
     SubGhzViewIdKeeloqFob,
+#ifndef PUBLIC_BUILD
+    SubGhzViewIdFuzzer,
+#endif
 
 } SubGhzViewId;
 

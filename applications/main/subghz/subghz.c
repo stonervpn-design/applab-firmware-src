@@ -5,6 +5,7 @@
 #include <lib/toolbox/path.h>
 #include <float_tools.h>
 #include <esp_heap_caps.h>
+#include <string.h>
 #include "subghz_i.h"
 
 #define TAG "SubGhzApp"
@@ -226,6 +227,21 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
         // Playlist — lazy-loaded (see subghz_scene_playlist.c on_enter/on_exit)
         subghz->subghz_playlist = NULL;
 
+#ifndef PUBLIC_BUILD
+        // Protocol Fuzzer — worker+view lazy-loaded (see
+        // subghz_scene_protocol_fuzzer_run.c on_enter/on_exit). malloc() does
+        // not zero: clear the config fields explicitly too (the config scene
+        // repopulates these with real defaults on first entry).
+        subghz->fuzzer_worker = NULL;
+        subghz->fuzzer_view = NULL;
+        memset(&subghz->fuzzer_cfg, 0, sizeof(FuzzConfig));
+        subghz->fuzzer_protocol[0] = '\0';
+        subghz->fuzzer_freq = 0;
+        subghz->fuzzer_preset[0] = '\0';
+        subghz->fuzzer_te = 0;
+        subghz->fuzzer_repeat = 0;
+#endif
+
         // SubBrute Bruteforcer — heap-gated. This whole feature (radio device +
         // device + worker + settings + 2 views) is a large allocation. On this
         // no-PSRAM board, allocating it during SubGhz startup when heap is
@@ -435,6 +451,18 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdSpectrum);
         subghz_view_spectrum_free(subghz->subghz_spectrum);
         subghz->subghz_spectrum = NULL;
+    }
+    // Protocol Fuzzer — worker+view lazy-loaded; freed by its run scene on
+    // exit. Safety net in case teardown happens while still allocated.
+    if(subghz->fuzzer_worker) {
+        fuzzer_worker_stop(subghz->fuzzer_worker);
+        fuzzer_worker_free(subghz->fuzzer_worker);
+        subghz->fuzzer_worker = NULL;
+    }
+    if(subghz->fuzzer_view) {
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFuzzer);
+        subghz_view_fuzzer_free(subghz->fuzzer_view);
+        subghz->fuzzer_view = NULL;
     }
 #endif
     if(!alloc_for_tx_only) {

@@ -20,4 +20,7 @@ enum SubmenuIndex {
     SubmenuIndexSpectrum,
     SubmenuIndexResumeBrute,
     SubmenuIndexTpmsSpoof,
+#ifndef PUBLIC_BUILD
+    SubmenuIndexProtocolFuzzer,
+#endif
 };
