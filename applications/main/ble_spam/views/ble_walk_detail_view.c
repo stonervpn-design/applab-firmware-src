@@ -52,10 +52,16 @@ static void walk_detail_draw_callback(Canvas* canvas, void* _model) {
     const char* hint = "";
     if((model->properties & 0x02) && (model->properties & 0x08)) {
         hint = "OK:Read  Down:Write";
+#ifndef PUBLIC_BUILD
+        hint = "OK:Read Dn:Write R:Fuzz";
+#endif
     } else if(model->properties & 0x02) {
         hint = "OK: Read";
     } else if(model->properties & 0x08) {
         hint = "OK: Write";
+#ifndef PUBLIC_BUILD
+        hint = "OK:Write R:Fuzz";
+#endif
     }
     canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, hint);
 }
@@ -63,7 +69,15 @@ static void walk_detail_draw_callback(Canvas* canvas, void* _model) {
 static bool walk_detail_input_callback(InputEvent* event, void* context) {
     ViewDispatcher* vd = context;
     if(event->type == InputTypeShort) {
-        if(event->key == InputKeyOk || event->key == InputKeyDown) {
+        if(event->key == InputKeyOk || event->key == InputKeyDown
+#ifndef PUBLIC_BUILD
+           // BLE GATT Fuzzer entry point (private-only): Right -> "Fuzz" on
+           // scene_walk_char_detail.c, gated there on chr->properties & 0x08
+           // (Write), same property this view already requires for the
+           // Down/Write hint above.
+           || event->key == InputKeyRight
+#endif
+        ) {
             view_dispatcher_send_custom_event(vd, event->key);
             return true;
         }

@@ -87,6 +87,26 @@ bool ble_spam_scene_walk_scan_on_event(void* context, SceneManagerEvent event) {
                 }
             }
             consumed = true;
+#ifndef PUBLIC_BUILD
+        } else if(event.event == InputKeyRight) {
+            // Target Info / DoS (BLE GATT Fuzzer, private-only): stage the
+            // highlighted device (no connect needed -- DoS drives its own
+            // connect/disconnect churn) and hand off to the target-info
+            // panel, which offers "Arm DoS".
+            BleWalkScanModel* model = view_get_model(app->view_walk_scan);
+            uint16_t selected = model->selected;
+            uint16_t dev_count = model->count;
+            if(dev_count > 0) {
+                uint16_t count;
+                BleWalkDevice* devices = ble_walk_hal_get_devices(&count);
+                if(selected < count) {
+                    app->walk_selected_device = selected;
+                    app->fuzz_target = devices[selected];
+                    scene_manager_next_scene(app->scene_manager, BleSpamSceneWalkTargetInfo);
+                }
+            }
+            consumed = true;
+#endif
         }
     } else if(event.type == SceneManagerEventTypeBack) {
         ble_walk_hal_stop_scan();

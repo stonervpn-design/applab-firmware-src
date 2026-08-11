@@ -50,7 +50,11 @@ static void walk_scan_draw_callback(Canvas* canvas, void* _model) {
     }
 
     canvas_set_font(canvas, FontPrimary);
+#ifndef PUBLIC_BUILD
+    canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, "OK:Connect R:Info");
+#else
     canvas_draw_str_aligned(canvas, 64, 63, AlignCenter, AlignBottom, "OK:Connect");
+#endif
 
     // Draw centered status overlay
     if(model->connect_status != WalkScanStatusNone) {
@@ -79,7 +83,13 @@ static void walk_scan_draw_callback(Canvas* canvas, void* _model) {
 static bool walk_scan_input_callback(InputEvent* event, void* context) {
     ViewDispatcher* vd = context;
     if(event->type == InputTypeShort) {
-        if(event->key == InputKeyOk || event->key == InputKeyUp || event->key == InputKeyDown) {
+        if(event->key == InputKeyOk || event->key == InputKeyUp || event->key == InputKeyDown
+#ifndef PUBLIC_BUILD
+           // BLE GATT Fuzzer/DoS entry point (private-only): Right -> "Target
+           // Info" on the highlighted device, handled by scene_walk_scan.c.
+           || event->key == InputKeyRight
+#endif
+        ) {
             view_dispatcher_send_custom_event(vd, event->key);
             return true;
         }

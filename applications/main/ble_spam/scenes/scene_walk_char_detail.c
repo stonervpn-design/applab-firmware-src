@@ -72,6 +72,23 @@ bool ble_spam_scene_walk_char_detail_on_event(void* context, SceneManagerEvent e
             uint8_t val = 0x01;
             ble_walk_hal_write_char(chr->handle, &val, 1);
             consumed = true;
+#ifndef PUBLIC_BUILD
+        } else if(event.event == InputKeyRight && chr && (chr->properties & 0x08)) {
+            // Fuzz (BLE GATT Fuzzer, private-only): Mode A (Sweep) against
+            // this already-connected characteristic. Stage the locked target
+            // by value (same device the connection was made to, looked up by
+            // the index WalkScan recorded) + the char handle, then hand off
+            // to the shared Fuzz/DoS config scene.
+            uint16_t dev_count;
+            BleWalkDevice* devices = ble_walk_hal_get_devices(&dev_count);
+            if(app->walk_selected_device < dev_count) {
+                app->fuzz_target = devices[app->walk_selected_device];
+            }
+            app->fuzz_char_handle = chr->handle;
+            app->fuzz_mode = BleFuzzModeSweep;
+            scene_manager_next_scene(app->scene_manager, BleSpamSceneWalkFuzzConfig);
+            consumed = true;
+#endif
         }
     } else if(event.type == SceneManagerEventTypeTick) {
         if(ble_walk_hal_read_ready()) {

@@ -12,6 +12,9 @@
 #include "views/race_detector_view.h"
 #include "views/whisperpair_detector_view.h"
 #include <gui/modules/text_input.h>
+#ifndef PUBLIC_BUILD
+#include <string.h> // memset for fuzz_target/fuzz_cfg init
+#endif
 
 static bool ble_spam_custom_event_callback(void* context, uint32_t event) {
     furi_assert(context);
@@ -115,6 +118,32 @@ static BleSpamApp* ble_spam_app_alloc(void) {
         app->view_whisperpair_detector);
     app->wp_probe_abort = false;
 
+#ifndef PUBLIC_BUILD
+    // BLE GATT Fuzzer + connection-flood DoS (private-only).
+    app->widget = widget_alloc();
+    view_dispatcher_add_view(
+        app->view_dispatcher, BleSpamViewWalkTargetInfo, widget_get_view(app->widget));
+
+    app->fuzz_config_list = variable_item_list_alloc();
+    view_dispatcher_add_view(
+        app->view_dispatcher,
+        BleSpamViewWalkFuzzConfig,
+        variable_item_list_get_view(app->fuzz_config_list));
+
+    app->fuzz_view = ble_fuzz_view_alloc();
+    view_dispatcher_add_view(
+        app->view_dispatcher, BleSpamViewFuzz, ble_fuzz_view_get_view(app->fuzz_view));
+
+    app->walk_fuzz = NULL; // lazy-alloc'd by scene_walk_fuzz_run on_enter
+    memset(&app->fuzz_target, 0, sizeof(app->fuzz_target));
+    app->fuzz_char_handle = 0;
+    app->fuzz_mode = BleFuzzModeSweep;
+    memset(&app->fuzz_cfg, 0, sizeof(app->fuzz_cfg));
+    app->fuzz_write_norsp = false;
+    app->fuzz_rate_ms = 0;
+    app->fuzz_count = 0;
+#endif
+
     // State
     app->attack_type = BleSpamAttackAppleDevice;
     app->running = false;
@@ -138,6 +167,11 @@ static void ble_spam_app_free(BleSpamApp* app) {
     view_dispatcher_remove_view(app->view_dispatcher, BleSpamViewTrackerGeiger);
     view_dispatcher_remove_view(app->view_dispatcher, BleSpamViewRaceDetector);
     view_dispatcher_remove_view(app->view_dispatcher, BleSpamViewWhisperpairDetector);
+#ifndef PUBLIC_BUILD
+    view_dispatcher_remove_view(app->view_dispatcher, BleSpamViewWalkTargetInfo);
+    view_dispatcher_remove_view(app->view_dispatcher, BleSpamViewWalkFuzzConfig);
+    view_dispatcher_remove_view(app->view_dispatcher, BleSpamViewFuzz);
+#endif
 
     submenu_free(app->submenu);
     ble_spam_view_free(app->view_running);
@@ -149,6 +183,19 @@ static void ble_spam_app_free(BleSpamApp* app) {
     race_detector_view_free(app->view_race_detector);
     whisperpair_detector_view_free(app->view_whisperpair_detector);
     text_input_free(app->text_input);
+#ifndef PUBLIC_BUILD
+    // Stop+free the engine FIRST (safety net -- normally already torn down by
+    // scene_walk_fuzz_run's on_exit) so no engine callback can touch the view
+    // being freed right after.
+    if(app->walk_fuzz) {
+        ble_walk_fuzz_stop(app->walk_fuzz);
+        ble_walk_fuzz_free(app->walk_fuzz);
+        app->walk_fuzz = NULL;
+    }
+    widget_free(app->widget);
+    variable_item_list_free(app->fuzz_config_list);
+    ble_fuzz_view_free(app->fuzz_view);
+#endif
 
     scene_manager_free(app->scene_manager);
     view_dispatcher_free(app->view_dispatcher);
