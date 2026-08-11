@@ -21,6 +21,18 @@ Non-goals (v1): notify/CCCD feedback (open-loop like the Sub-GHz fuzzer), custom
 - **Reuse the mutation engine.** Promote `fuzzer_mutate.{c,h}` (built for the Sub-GHz fuzzer, pure/host-tested — bit-flip / boundary / length / random / field-walk over a byte vector) into a **shared component `components/fuzz_core/`**. Repoint the Sub-GHz fuzzer's `#include "fuzzer_mutate.h"` (the component goes on the include path, so the include string is unchanged — verify the subghz build still green after the move). `ble_spam` then `REQUIRES fuzz_core` in its CMakeLists. This keeps mutation logic DRY across both fuzzers and avoids an `ble_spam → subghz` dependency.
 - **New UI** in `ble_spam`: `scene_walk_fuzz_config` + `scene_walk_fuzz_run` (+ a small run view), reached via a "Fuzz / DoS" action added to `scene_walk_char_detail` (for A/B, char-scoped) and to the device/scan level (for C, target-scoped). All `#ifndef PUBLIC_BUILD`.
 
+## 2.1 Target lock & full info (safety + usability)
+
+All three modes bind to **one explicitly-selected target**, locked by its BLE address — never a broadcast/any-device attack. The operator scans, picks a device, and the fuzz/DoS scenes carry that `BleWalkDevice` (keyed on `addr`); every HAL fuzz/DoS call operates against that locked address only and refuses if no target is locked. This enforces the single-target/authorized-device property at the code level.
+
+A **Target Info** panel (new `scene_walk_target_info`, reachable before arming any mode) shows everything the tool knows about the locked target — `BleWalkDevice` already captures it:
+- **Address** (6-byte BLE addr) + **address type** (public / random / RPA).
+- **RSSI**, **advertised name**.
+- **Decoded advertising data** (`adv_data[31]`): flags, advertised **service UUIDs**, TX power, manufacturer data — via a new small `ble_adv_decode` helper.
+- **Post-connect:** discovered service + characteristic UUIDs (from BLE Walk), and the **negotiated MTU**.
+
+The locked address + this full info block is what Mark records (§5), so every saved finding names exactly which device it came from.
+
 ## 3. Modes
 
 ### Mode A — Mutation-sweep write fuzz (parser bugs)
@@ -31,6 +43,7 @@ From a selected **writable** characteristic: config = strategy (bit-flip / bound
 - **Long-write:** `ble_gattc_write_long(conn, handle, offset, om)` with payload lengths increasing past the characteristic's declared max and varied offsets — reuses the mutation engine's Length strategy extended to large sizes. Probes the server's prepared-write buffer handling.
 
 ### Mode C — BLE DoS (availability)
+Operates ONLY against the locked target address (§2.1) — refuses to arm with no target selected.
 - **Connection-exhaustion flood:** repeatedly `ble_gap_connect` the target (hold N connections open + churn) to fill its connection table so legitimate clients can't attach. Knobs: connect rate, hold count.
 - **GATT write flood:** once connected, max-rate `write_no_rsp` to a chosen characteristic to saturate GATT processing (this is the Mode-A run loop with mutation disabled and rate maxed — same run engine).
 - Clear **Stop** + live packet/connection counter; in-app authorized-use note.
@@ -55,7 +68,7 @@ uint32_t ble_walk_hal_dos_counter(void);   // conns opened / writes sent
 ## 5. Reproducibility & UX
 
 - Run view (128x64): target name/addr, mode, current char UUID/handle, frame/packet index + total, TX blink, counter; controls Start‑Pause / Step / Mark / Stop (Cardputer keyboard direct; M5Stick 2-button tap=Step / hold=Start‑Pause / KEY2=Stop, Mark=auto-save-on-stop — mirrors the Sub-GHz fuzzer input note).
-- **Mark** dumps the last-sent payload + (mode, strategy, seed, index, char handle) to `/ext/ble_fuzz/mark_<n>.txt` on SD so a fault is reproducible.
+- **Mark** dumps the **full locked-target info** (§2.1: addr + addr-type + name + RSSI + decoded adv) plus the last-sent payload + (mode, strategy, seed, index, char handle/UUID, negotiated MTU) to `/ext/ble_fuzz/mark_<n>.txt` on SD, so a fault names exactly which device + stimulus caused it and is reproducible.
 - Open-loop: no automatic crash detection; operator observes the target.
 
 ## 6. Gating (private-only inside a public app)
@@ -69,12 +82,12 @@ uint32_t ble_walk_hal_dos_counter(void);   // conns opened / writes sent
 
 ## 8. Testing
 
-- **Host:** `fuzz_core` mutation tests already exist (moved with the component — re-run under WSL gcc to confirm the relocation didn't break the include). No new pure logic needs host tests beyond the DoS/flood counters (a small host-testable rate/counter helper if extracted).
+- **Host:** `fuzz_core` mutation tests already exist (moved with the component — re-run under WSL gcc to confirm the relocation didn't break the include). New `ble_adv_decode` is a pure parser → give it host tests (feed known adv payloads, assert decoded flags / service UUIDs / TX power / mfr data). A small host-testable rate/counter helper for the flood if extracted.
 - **On-device smoke:** against a spare BLE peripheral you own — Mode A writes a mutated sweep to a writable char; Mode B runs MTU cycle + an oversized long-write; Mode C connection-floods and the target becomes unreachable to a second client; confirm Mark writes a reproducible log.
 - **Public gate:** public build green, `nm` zero fuzz/DoS symbols, existing BLE Walk intact.
 
 ## 9. Files (planned)
 
 Move: `applications/main/subghz/helpers/fuzzer_mutate.{c,h}` → `components/fuzz_core/fuzzer_mutate.{c,h}` (+ `components/fuzz_core/CMakeLists.txt`); repoint subghz include path (component on include path → include string unchanged); `ble_spam/CMakeLists.txt` (or its `.fam`) `REQUIRES fuzz_core`.
-New (private, in `applications/main/ble_spam/`): `ble_walk_fuzz.{c,h}` (fuzz/DoS run engine over ble_walk_hal + fuzz_core), `scenes/scene_walk_fuzz_config.c`, `scenes/scene_walk_fuzz_run.c`, `views/ble_fuzz_view.{c,h}`.
+New (private, in `applications/main/ble_spam/`): `ble_walk_fuzz.{c,h}` (fuzz/DoS run engine over ble_walk_hal + fuzz_core, target-address-locked), `ble_adv_decode.{c,h}` (decode `adv_data[31]` → flags / service UUIDs / TX power / mfr data; host-testable pure parser), `scenes/scene_walk_target_info.c` (full target-info panel + arm-mode entry), `scenes/scene_walk_fuzz_config.c`, `scenes/scene_walk_fuzz_run.c`, `views/ble_fuzz_view.{c,h}`.
 Edit (guarded `#ifndef PUBLIC_BUILD`): `ble_walk_hal.{c,h}` (new primitives §4), `scenes/scene_walk_char_detail.c` (+ "Fuzz" entry), `scenes/scene_walk_scan.c` or device scene (+ "DoS" entry), `scenes/scenes.h` + `scenes/scene_config.h` (scene registration).
