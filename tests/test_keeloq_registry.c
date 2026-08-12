@@ -38,18 +38,21 @@ int main(void) {
     assert(subghz_keeloq_registry_type_info(11, "KIAV6A").family == KlFamKiaCar);
     assert(subghz_keeloq_registry_type_info(11, "KIAV6A").decode_only);
     assert(!subghz_keeloq_registry_type_info(11, "KIAV6A").encodable);
-    // Beninca appears under types 9/10/11 but has a real GenBenincaARC route
+    // Beninca appears under types 9/10/11, but beninca_arc.c's key lookup
+    // (get_subghz_protocol_beninca_arc_aes_key) only ever matches a keystore
+    // entry with type==9, regardless of name — so only type-9 Beninca has a
+    // real GenBenincaARC route; type-10/11 Beninca are decode-only.
     assert(subghz_keeloq_registry_type_info(9, "Beninca_ARC").family == KlFamBeninca);
     assert(subghz_keeloq_registry_type_info(9, "Beninca_ARC").encodable);
     assert(subghz_keeloq_registry_type_info(9, "Beninca_ARC").generator == GenBenincaARC);
-    // type-10 Beninca
+    // type-10 Beninca: decode-only (protocol's key lookup is type==9-only)
     assert(subghz_keeloq_registry_type_info(10, "Beninca_ARC").family == KlFamBeninca);
-    assert(subghz_keeloq_registry_type_info(10, "Beninca_ARC").generator == GenBenincaARC);
-    assert(subghz_keeloq_registry_type_info(10, "Beninca_ARC").encodable);
-    // type-11 Beninca
+    assert(subghz_keeloq_registry_type_info(10, "Beninca_ARC").decode_only);
+    assert(!subghz_keeloq_registry_type_info(10, "Beninca_ARC").encodable);
+    // type-11 Beninca: decode-only (same reason)
     assert(subghz_keeloq_registry_type_info(11, "BenincaVA").family == KlFamBeninca);
-    assert(subghz_keeloq_registry_type_info(11, "BenincaVA").generator == GenBenincaARC);
-    assert(subghz_keeloq_registry_type_info(11, "BenincaVA").encodable);
+    assert(subghz_keeloq_registry_type_info(11, "BenincaVA").decode_only);
+    assert(!subghz_keeloq_registry_type_info(11, "BenincaVA").encodable);
     // Kia is decode-only (capture/car path), not catalog-encodable
     assert(!subghz_keeloq_registry_type_info(9, "KIA_Hyundai_V5").encodable);
     assert(subghz_keeloq_registry_type_info(9, "KIA_Hyundai_V5").decode_only);

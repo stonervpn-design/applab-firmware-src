@@ -1,4 +1,14 @@
 #include "../subghz_i.h" // IWYU pragma: keep
+
+// KeeLoq Console = master-key attack surface (browse+generate across every
+// keystore family) — PRIVATE builds only. The whole scene compiles to nothing
+// in public; its ADD_SCENE (subghz_scene_config.h) and its only route to it
+// (the Car Keys hub's "KeeLoq Console" row, subghz_scene_car_keys.c — itself
+// already whole-file PUBLIC_BUILD-gated) are also gated. Same precedent as
+// subghz_scene_garage.c. Without this, SubGhzSceneKeeloqConsole (referenced
+// below) would be undeclared in a public compile: it only exists when the
+// private ADD_SCENE line is active.
+#ifndef PUBLIC_BUILD
 #include "../helpers/subghz_txrx_i.h"
 #include "../helpers/subghz_keeloq_registry.h"
 #include <lib/subghz/environment.h>
@@ -341,3 +351,4 @@ void subghz_scene_keeloq_console_on_exit(void* context) {
     submenu_reset(subghz->submenu);
     widget_reset(subghz->widget);
 }
+#endif /* !PUBLIC_BUILD — KeeLoq Console is car/master-key-only, stripped from public */

@@ -29,6 +29,12 @@ void subghz_scene_keeloq_action_submenu_callback(void* context, uint32_t index) 
         scene_manager_next_scene(subghz->scene_manager, SubGhzSceneSaveName);
         break;
     case SubGhzSceneKeeloqActionClone:
+        // Defense-in-depth: on_enter only adds this item when gen_info->type
+        // == GenKeeloq, but guard here too since subghz_scene_keeloq_fob.c
+        // unconditionally trusts gen_info->keeloq.* with no type check.
+        if(subghz->gen_info->type != GenKeeloq) {
+            break;
+        }
         // No-desync clone: set the flow flag and collect the jump before generating.
         subghz->keeloq_mfr_emulate_flow = false;
         subghz->keeloq_clone_flow = true;
@@ -57,12 +63,23 @@ void subghz_scene_keeloq_action_on_enter(void* context) {
         SubGhzSceneKeeloqActionSave,
         subghz_scene_keeloq_action_submenu_callback,
         subghz);
-    submenu_add_item(
-        subghz->submenu,
-        "Clone (no desync)",
-        SubGhzSceneKeeloqActionClone,
-        subghz_scene_keeloq_action_submenu_callback,
-        subghz);
+
+    // Clone (no desync) is KeeLoq-specific: subghz_scene_keeloq_fob.c
+    // unconditionally reads gen_info->keeloq.* (serial/btn/cnt/seed/manuf) to
+    // build the clone, with no gen_info->type check of its own. Since this
+    // action scene is now also reached after generating a FaacSLH/KingGates/
+    // Jarolift/Beninca entry from the KeeLoq Console (all of which populate a
+    // DIFFERENT GenInfo union member), offering Clone there would silently
+    // reinterpret that union as KeeLoq fields and produce a bogus result.
+    // Only offer it when the just-generated entry actually is GenKeeloq.
+    if(subghz->gen_info->type == GenKeeloq) {
+        submenu_add_item(
+            subghz->submenu,
+            "Clone (no desync)",
+            SubGhzSceneKeeloqActionClone,
+            subghz_scene_keeloq_action_submenu_callback,
+            subghz);
+    }
 
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdMenu);
 }
