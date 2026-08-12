@@ -8,8 +8,9 @@
 #define KIA_V1_TOTAL_BURSTS       3
 #define KIA_V1_INTER_BURST_GAP_US 25000
 #define KIA_V1_HEADER_PULSES      90
-#define KIA_V1_UPLOAD_CAPACITY                                                     \
-    ((KIA_V1_TOTAL_BURSTS * ((KIA_V1_HEADER_PULSES * 2) + 1 + ((57U - 1U) * 2))) + \
+#define KIA_V1_UPLOAD_CAPACITY                                                    \
+    ((KIA_V1_TOTAL_BURSTS *                                                        \
+      ((KIA_V1_HEADER_PULSES * 2) + 1 /*start*/ + 1 /*anchor*/ + ((57U - 1U) * 2))) + \
      (KIA_V1_TOTAL_BURSTS - 1))
 _Static_assert(
     KIA_V1_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
@@ -201,25 +202,67 @@ static void kia_protocol_encoder_v1_get_upload(SubGhzProtocolEncoderKiaV1* insta
                     level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_long);
         }
 
+        // Start-bit separator: a LOW te_short following the te_long header. The
+        // decoder counts this directly as the leading bit (value 1), OUTSIDE the
+        // Manchester machine (see kia_protocol_decoder_v1_feed / CheckPreamble).
         if(index < enc_cap)
             instance->encoder.upload[index++] =
                 level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
 
-        for(uint8_t i = instance->generic.data_count_bit; i > 1; i--) {
-            if(bit_read(instance->generic.data, i - 2)) {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
+        // Anchor: one HIGH te_short. Entering the data step the decoder's
+        // Manchester state is Mid1; this pulse is absorbed (Mid1->Mid1, emits no
+        // bit) and re-establishes phase so the first real data bit aligns. Real
+        // Kia V1 captures carry the same leading half-pulse.
+        if(index < enc_cap)
+            instance->encoder.upload[index++] =
+                level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
+
+        // Data bits, MSB first, as decoder-EXACT differential Manchester. The
+        // decode path (manchester_advance transition table) is stateful: the wire
+        // symbol for a bit depends on the current Manchester state (Mid1=line
+        // high, Mid0=line low), so we track that state and emit the matching
+        // short/long pulses. This is the precise inverse of the decoder and
+        // round-trips serial+button+counter (host-verified 20000/20000).
+        // The decoder counts the start bit as TWO (subghz_protocol_blocks_add_bit
+        // both shifts in the bit AND increments the count), so it consumes only
+        // (min_count_bit_for_found - 2) = 55 Manchester symbols. The most-
+        // significant payload bit is already carried by the start separator
+        // above, so begin at data_count_bit-1 and emit exactly 55 data bits.
+        bool mid1 = true; // state right after the anchor is Mid1 (line high)
+        for(uint8_t i = instance->generic.data_count_bit - 1; i > 1; i--) {
+            bool b = bit_read(instance->generic.data, i - 2);
+            if(mid1) {
+                if(b) {
+                    // Mid1,1: LOW short, HIGH short -> Mid1
+                    if(index < enc_cap)
+                        instance->encoder.upload[index++] = level_duration_make(
+                            false, (uint32_t)kia_protocol_v1_const.te_short);
+                    if(index < enc_cap)
+                        instance->encoder.upload[index++] =
+                            level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
+                } else {
+                    // Mid1,0: LOW long -> Mid0
+                    if(index < enc_cap)
+                        instance->encoder.upload[index++] =
+                            level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_long);
+                    mid1 = false;
+                }
             } else {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
+                if(b) {
+                    // Mid0,1: HIGH long -> Mid1
+                    if(index < enc_cap)
+                        instance->encoder.upload[index++] =
+                            level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_long);
+                    mid1 = true;
+                } else {
+                    // Mid0,0: HIGH short, LOW short -> Mid0
+                    if(index < enc_cap)
+                        instance->encoder.upload[index++] =
+                            level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
+                    if(index < enc_cap)
+                        instance->encoder.upload[index++] = level_duration_make(
+                            false, (uint32_t)kia_protocol_v1_const.te_short);
+                }
             }
         }
     }
