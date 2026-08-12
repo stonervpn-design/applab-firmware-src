@@ -55,3 +55,12 @@ gcc -std=gnu11 -g -O1 -w -Wno-implicit-function-declaration \
   -o "$HT/keeloq_coverage"
 set +x
 echo "BUILD OK -> $HT/keeloq_coverage"
+
+# This tool's OWN source (not the vendored lib/components files, which stay
+# -w above) must compile clean under -Wall -Wextra. Syntax-only recompile so
+# this is reproducible from the committed script, not just a claim in a report.
+set -x
+gcc -std=gnu11 -c -Wall -Wextra -Wno-unused-parameter -fsyntax-only \
+  $INC $DEFS "$HT/keeloq_coverage.c"
+set +x
+echo "keeloq_coverage.c: -Wall -Wextra clean"
