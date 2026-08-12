@@ -1,5 +1,8 @@
 #include "subghz_keeloq_fob.h"
 #include "../helpers/subghz_fob_nav.h"
+#include "../helpers/subghz_fob_buttons.h"
+#include <lib/subghz/protocols/vag.h>
+#include <lib/subghz/protocols/keeloq.h>
 #include <gui/elements.h>
 #include <furi.h>
 
@@ -9,33 +12,40 @@
 #include BOARD_INCLUDE
 #endif
 
-static const uint8_t FOB_CODES[4] = {0x1, 0x2, 0x4, 0x8};
-static const char* const FOB_LABELS[4] = {"LOCK", "UNLOCK", "TRUNK", "PANIC"};
-// VAG (AUT64): 3 buttons, codes per vag_button_name (0x1=Unlock,0x2=Lock,0x4=Boot).
-static const uint8_t VAG_CODES[3] = {0x1, 0x2, 0x4};
-static const char* const VAG_LABELS[3] = {"UNLOCK", "LOCK", "BOOT"};
-
+// One table-driven model. The button grid, title, counter width and the VAG
+// desync note are all data now: VAG/KeeLoq are just two preset tables (see
+// subghz_keeloq_fob_set_state) and every supported car protocol reaches the same
+// render/nav path via subghz_keeloq_fob_set_table. Only a pointer + count are
+// stored (the tables are static const from the provider) so nothing is heap-held
+// on the no-PSRAM Cardputer.
 typedef struct {
     uint8_t sel; // 0..n_tiles-1
-    uint8_t kind; // SubGhzFobKind
-    uint8_t n_tiles; // 4 = KeeLoq, 3 = VAG
+    uint8_t n_tiles; // 1..SUBGHZ_KEELOQ_FOB_MAX_TILES
     uint8_t real_btn; // captured code, marks confirmed-real tile
     uint32_t cnt; // up to 24-bit for VAG
     uint16_t jump;
     bool sent;
+    bool wide_cnt; // VAG 24-bit counter (%06lX) vs KeeLoq-style 16-bit (%04lX)
+    bool desync_caution; // draw VAG "adv cnt / desync!" note in the empty 4th cell
+    const SubGhzFobButton* buttons; // static provider table (not owned, no copy)
+    const char* title; // static title string (not owned)
 } SubGhzKeeloqFobModel;
 
-// Active button table for a fob kind. Returns tile count; fills code/label ptrs
-// (labels may be NULL when only codes are needed).
-static uint8_t fob_tiles(uint8_t kind, const uint8_t** codes, const char* const** labels) {
-    if(kind == SubGhzFobKindVag) {
-        *codes = VAG_CODES;
-        if(labels) *labels = VAG_LABELS;
-        return 3;
+// Tile rectangle for tile i of n. n<=4 reproduces the exact legacy 2x2 layout
+// (60x18 boxes at the original coordinates) so VAG (3) and KeeLoq (4) render
+// pixel-identically to before; n>4 packs a denser 2-column grid (up to 8 tiles).
+static void fob_tile_rect(uint8_t i, uint8_t n, uint8_t* x, uint8_t* y, uint8_t* w, uint8_t* h) {
+    if(n <= 4) {
+        *x = (i & 1) ? 66 : 2;
+        *y = (i < 2) ? 13 : 35;
+        *w = 60;
+        *h = 18;
+    } else {
+        *x = (i & 1) ? 66 : 2;
+        *y = (uint8_t)(12 + (i >> 1) * 13);
+        *w = 60;
+        *h = 11;
     }
-    *codes = FOB_CODES;
-    if(labels) *labels = FOB_LABELS;
-    return 4;
 }
 
 struct SubGhzKeeloqFob {
@@ -46,40 +56,30 @@ struct SubGhzKeeloqFob {
 
 static void keeloq_fob_draw_callback(Canvas* canvas, void* _model) {
     SubGhzKeeloqFobModel* m = _model;
-    const uint8_t* codes;
-    const char* const* labels;
-    uint8_t n = fob_tiles(m->kind, &codes, &labels);
+    const SubGhzFobButton* btns = m->buttons;
+    uint8_t n = m->n_tiles;
     canvas_clear(canvas);
     canvas_set_color(canvas, ColorBlack);
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str_aligned(
-        canvas,
-        64,
-        0,
-        AlignCenter,
-        AlignTop,
-#ifndef PUBLIC_BUILD
-        m->kind == SubGhzFobKindVag ? "VAG Fob" : "Fob Emulator");
-#else
-        "Fob Emulator"); // VAG (car) label stripped on public
-#endif
-    const uint8_t rx[4] = {2, 66, 2, 66};
-    const uint8_t ry[4] = {13, 13, 35, 35};
+        canvas, 64, 0, AlignCenter, AlignTop, m->title ? m->title : "Fob Emulator");
     canvas_set_font(canvas, FontSecondary);
     for(uint8_t i = 0; i < n; i++) {
-        uint8_t x = rx[i], y = ry[i];
+        uint8_t x, y, w, h;
+        fob_tile_rect(i, n, &x, &y, &w, &h);
         if(i == m->sel) {
-            canvas_draw_rbox(canvas, x, y, 60, 18, 3);
+            canvas_draw_rbox(canvas, x, y, w, h, 3);
             canvas_invert_color(canvas);
         } else {
-            canvas_draw_rframe(canvas, x, y, 60, 18, 3);
+            canvas_draw_rframe(canvas, x, y, w, h, 3);
         }
-        canvas_draw_str_aligned(canvas, x + 30, y + 9, AlignCenter, AlignCenter, labels[i]);
-        if(m->real_btn == codes[i]) canvas_draw_disc(canvas, x + 54, y + 4, 2);
+        canvas_draw_str_aligned(
+            canvas, x + w / 2, y + h / 2, AlignCenter, AlignCenter, btns[i].name);
+        if(m->real_btn == btns[i].code) canvas_draw_disc(canvas, x + w - 6, y + 4, 2);
         if(i == m->sel) canvas_invert_color(canvas);
     }
     // VAG has only 3 tiles; the empty 4th cell carries the desync caution.
-    if(m->kind == SubGhzFobKindVag) {
+    if(m->desync_caution) {
         canvas_draw_str_aligned(canvas, 66 + 30, 35 + 5, AlignCenter, AlignCenter, "adv cnt");
         canvas_draw_str_aligned(canvas, 66 + 30, 35 + 14, AlignCenter, AlignCenter, "desync!");
     }
@@ -88,7 +88,7 @@ static void keeloq_fob_draw_callback(Canvas* canvas, void* _model) {
     snprintf(
         st,
         sizeof(st),
-        m->kind == SubGhzFobKindVag ? "cnt %06lX  jump %u%s" : "cnt %04lX  jump %u%s",
+        m->wide_cnt ? "cnt %06lX  jump %u%s" : "cnt %04lX  jump %u%s",
         (unsigned long)m->cnt,
         m->jump,
         m->sent ? "  SENT" : "");
@@ -143,6 +143,43 @@ static bool keeloq_fob_input_callback(InputEvent* event, void* context) {
     return false;
 }
 
+// Shared internal setter: stores a static button table + presentation flags and
+// derives the initial selection from the captured button. All public setters
+// funnel through here so there is exactly one render/nav configuration path.
+static void fob_apply_table(
+    SubGhzKeeloqFob* instance,
+    const SubGhzFobButton* buttons,
+    size_t n,
+    const char* title,
+    bool wide_cnt,
+    bool desync_caution,
+    uint8_t real_btn,
+    uint32_t cnt,
+    uint16_t jump) {
+    furi_assert(instance);
+    furi_check(buttons && n > 0); // provider must have a table for a routed protocol
+    if(n > SUBGHZ_KEELOQ_FOB_MAX_TILES) n = SUBGHZ_KEELOQ_FOB_MAX_TILES;
+    uint8_t sel = 0;
+    for(size_t i = 0; i < n; i++)
+        if(buttons[i].code == real_btn) sel = (uint8_t)i;
+    with_view_model(
+        instance->view,
+        SubGhzKeeloqFobModel * m,
+        {
+            m->buttons = buttons;
+            m->n_tiles = (uint8_t)n;
+            m->title = title;
+            m->wide_cnt = wide_cnt;
+            m->desync_caution = desync_caution;
+            m->real_btn = real_btn;
+            m->cnt = cnt;
+            m->jump = jump;
+            m->sel = sel;
+            m->sent = false;
+        },
+        true);
+}
+
 SubGhzKeeloqFob* subghz_keeloq_fob_alloc(void) {
     SubGhzKeeloqFob* instance = malloc(sizeof(SubGhzKeeloqFob));
 
@@ -152,13 +189,20 @@ SubGhzKeeloqFob* subghz_keeloq_fob_alloc(void) {
     view_set_draw_callback(instance->view, keeloq_fob_draw_callback);
     view_set_input_callback(instance->view, keeloq_fob_input_callback);
 
+    // Default to the generic KeeLoq layout so the view is valid before any
+    // set_state/set_table call (matches the previous alloc-time defaults).
+    size_t n = 0;
+    const SubGhzFobButton* keeloq = subghz_fob_buttons(SUBGHZ_PROTOCOL_KEELOQ_NAME, &n);
     with_view_model(
         instance->view,
         SubGhzKeeloqFobModel * model,
         {
             model->sel = 0;
-            model->kind = SubGhzFobKindKeeloq;
-            model->n_tiles = 4;
+            model->buttons = keeloq;
+            model->n_tiles = (uint8_t)n; // 4
+            model->title = "Fob Emulator";
+            model->wide_cnt = false;
+            model->desync_caution = false;
             model->real_btn = 0;
             model->cnt = 0;
             model->jump = 100;
@@ -193,31 +237,43 @@ void subghz_keeloq_fob_set_callback(
     instance->context = context;
 }
 
+void subghz_keeloq_fob_set_table(
+    SubGhzKeeloqFob* instance,
+    const SubGhzFobButton* buttons,
+    size_t n,
+    uint8_t real_btn,
+    uint32_t cnt,
+    uint16_t jump) {
+    // Generic protocols: default title + 16-bit counter, no VAG desync note.
+    fob_apply_table(instance, buttons, n, "Fob Emulator", false, false, real_btn, cnt, jump);
+}
+
+void subghz_keeloq_fob_set_title(SubGhzKeeloqFob* instance, const char* title) {
+    furi_assert(instance);
+    with_view_model(instance->view, SubGhzKeeloqFobModel * m, { m->title = title; }, true);
+}
+
 void subghz_keeloq_fob_set_state(
     SubGhzKeeloqFob* instance,
     SubGhzFobKind kind,
     uint8_t real_btn,
     uint32_t cnt,
     uint16_t jump) {
-    const uint8_t* codes;
-    const char* const* labels;
-    uint8_t n = fob_tiles((uint8_t)kind, &codes, &labels);
-    uint8_t sel = 0;
-    for(uint8_t i = 0; i < n; i++)
-        if(codes[i] == real_btn) sel = i;
-    with_view_model(
-        instance->view,
-        SubGhzKeeloqFobModel * m,
-        {
-            m->kind = (uint8_t)kind;
-            m->n_tiles = n;
-            m->real_btn = real_btn;
-            m->cnt = cnt;
-            m->jump = jump;
-            m->sel = sel;
-            m->sent = false;
-        },
-        true);
+    size_t n = 0;
+    if(kind == SubGhzFobKindVag) {
+        // VAG: 3 tiles UNLOCK/LOCK/BOOT (0x1/0x2/0x4), 24-bit counter, desync note.
+        const SubGhzFobButton* vag = subghz_fob_buttons(VAG_PROTOCOL_NAME, &n);
+#ifndef PUBLIC_BUILD
+        const char* title = "VAG Fob";
+#else
+        const char* title = "Fob Emulator"; // VAG (car) label stripped on public
+#endif
+        fob_apply_table(instance, vag, n, title, true, true, real_btn, cnt, jump);
+    } else {
+        // KeeLoq: 4 tiles LOCK/UNLOCK/TRUNK/PANIC (0x1/0x2/0x4/0x8), 16-bit counter.
+        const SubGhzFobButton* keeloq = subghz_fob_buttons(SUBGHZ_PROTOCOL_KEELOQ_NAME, &n);
+        fob_apply_table(instance, keeloq, n, "Fob Emulator", false, false, real_btn, cnt, jump);
+    }
 }
 
 uint8_t subghz_keeloq_fob_selected_nibble(SubGhzKeeloqFob* instance) {
@@ -226,9 +282,7 @@ uint8_t subghz_keeloq_fob_selected_nibble(SubGhzKeeloqFob* instance) {
         instance->view,
         SubGhzKeeloqFobModel * m,
         {
-            const uint8_t* codes;
-            fob_tiles(m->kind, &codes, NULL);
-            nib = codes[m->sel];
+            if(m->buttons && m->sel < m->n_tiles) nib = m->buttons[m->sel].code;
         },
         false);
     return nib;
