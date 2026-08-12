@@ -38,7 +38,7 @@
   `Claude-Session: https://claude.ai/code/session_01Kk6c15xdcA4LAim6BJnEtv`
 
 **Approved open-item defaults (from spec):**
-1. Type-9: `KIA_Hyundai_V5` → Kia V5 (capture/car-fob emulate path); `Beninca_ARC` → decode-only.
+1. Type-9: `KIA_Hyundai_V5` → Kia V5 (capture/car-fob emulate path, decode-only). `Beninca_ARC` was initially slated decode-only, but review found a real `GenBenincaARC` generator, so Beninca (any of types 9/11) routes there and IS encodable. Only a bare type-9 that is neither KIA nor Beninca is a true orphan (decode-only).
 2. Console lives under the **Car Keys** hub (`subghz_scene_car_keys.c`).
 3. Type-0 generics (25) ship **decode/attack-only in v1** (no choose-mode generate yet).
 
