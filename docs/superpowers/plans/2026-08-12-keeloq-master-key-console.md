@@ -47,12 +47,14 @@
 ### Task 1: KeeLoq Master-Key Registry + host unit test
 
 **Files:**
+- Create: `applications/main/subghz/helpers/subghz_gen_type.h` (extract `GenType` enum — Step 0)
+- Modify: `applications/main/subghz/helpers/subghz_gen_info.h` (drop inline `GenType`, include the new leaf header)
 - Create: `applications/main/subghz/helpers/subghz_keeloq_registry.h`
 - Create: `applications/main/subghz/helpers/subghz_keeloq_registry.c`
 - Test: `tests/test_keeloq_registry.c`
 
 **Interfaces:**
-- Consumes: `keeloq_common.h` learning-type macros; `subghz_gen_info.h` `GenType`; `SubGhzKeystore` + `subghz_keystore_get_data`.
+- Consumes: `GenType` — but via a NEW dependency-free leaf header `subghz_gen_type.h` (extracted in Step 0), NOT `subghz_gen_info.h` (which pulls `subghz_types.h` → `<furi.h>` → mlib and will NOT host-compile). The registry switches on **literal** learning-type numbers (0–15, per Global Constraints) with symbolic names in comments, so it does NOT include `keeloq_common.h` (also furi-coupled). Net: the registry + its test compile with `-Iapplications/main/subghz/helpers` and nothing else.
 - Produces (later tasks depend on these EXACT names):
   - `typedef enum { KlFamGeneric, KlFamFaacSLH, KlFamKingGates, KlFamJarolift, KlFamBeninca, KlFamKiaCar, KlFamOrphan } KeeloqFamily;`
   - `typedef struct { KeeloqFamily family; GenType generator; bool encodable; bool decode_only; } KeeloqTypeInfo;`
@@ -72,19 +74,39 @@
 
 Name disambiguation (applied only for types 9/10/11, checked in this order): (1) name starts with `"KIA"` → `KlFamKiaCar`, `encodable=false`, `decode_only=true` (v1: capture/car-fob path, not catalog generate); (2) name contains `"Beninca"` → `KlFamBeninca`, generator `GenBenincaARC`, `encodable=true` (Beninca_ARC/BenincaVA appear under types 9 and 11 but have a real `GenBenincaARC` route); (3) otherwise type 10 → KingGates, type 11 → Jarolift; a bare type 9 that is neither KIA nor Beninca → `KlFamOrphan`, `decode_only=true`.
 
-- [ ] **Step 1: Write the header**
+- [ ] **Step 0: Extract `GenType` into a leaf header (so the registry is furi-free)**
+
+Create `applications/main/subghz/helpers/subghz_gen_type.h` containing ONLY the
+`GenType` enum, copied verbatim from `subghz_gen_info.h` (all 16 members in order:
+`GenData, GenFaacSLH, GenKeeloq, GenCameAtomo, GenKeeloqBFT, GenAlutechAt4n, GenSomfyTelis, GenSomfyKeytis, GenKingGatesStylo4k, GenBenincaARC, GenJarolift, GenDitecGOL4, GenNiceFlorS, GenSecPlus1, GenSecPlus2, GenPhoenixV2`):
+
+```c
+#pragma once
+// GenType lives here (leaf, no includes) so pure/host-testable helpers can use it
+// without dragging in subghz_types.h -> <furi.h>. subghz_gen_info.h includes this.
+typedef enum {
+    GenData, GenFaacSLH, GenKeeloq, GenCameAtomo, GenKeeloqBFT, GenAlutechAt4n,
+    GenSomfyTelis, GenSomfyKeytis, GenKingGatesStylo4k, GenBenincaARC, GenJarolift,
+    GenDitecGOL4, GenNiceFlorS, GenSecPlus1, GenSecPlus2, GenPhoenixV2,
+} GenType;
+```
+
+Then edit `subghz_gen_info.h`: DELETE its inline `typedef enum {...} GenType;` and add `#include "subghz_gen_type.h"` after its existing includes. (Firmware behavior unchanged — same enum, same values, just relocated.)
+
+- [ ] **Step 1: Write the registry header**
 
 ```c
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
-#include "subghz_gen_info.h" // GenType
+#include "subghz_gen_type.h" // GenType (furi-free leaf; NOT subghz_gen_info.h)
 
 typedef enum {
     KlFamGeneric,
     KlFamFaacSLH,
     KlFamKingGates,
     KlFamJarolift,
+    KlFamBeninca,
     KlFamKiaCar,
     KlFamOrphan,
 } KeeloqFamily;
@@ -110,7 +132,6 @@ bool subghz_keeloq_registry_type_encodable(uint16_t type);
 
 ```c
 #include "../applications/main/subghz/helpers/subghz_keeloq_registry.h"
-#include "../lib/subghz/protocols/keeloq_common.h"
 #include <assert.h>
 #include <string.h>
 #include <stdio.h>
@@ -157,15 +178,21 @@ int main(void) {
 
 - [ ] **Step 3: Run it, verify it fails to link**
 
-Run: `wsl.exe -e bash -lc 'cd "/mnt/c/Users/stone/Downloads/_fzcard_work/NEW_v2/src_m5stick_s3" && gcc -std=gnu11 -Iapplications/main/subghz/helpers -Ilib/subghz/protocols tests/test_keeloq_registry.c applications/main/subghz/helpers/subghz_keeloq_registry.c -o /tmp/tkr 2>&1 | tail'`
+Run: `wsl.exe -e bash -lc 'cd "/mnt/c/Users/stone/Downloads/_fzcard_work/NEW_v2/src_m5stick_s3" && gcc -std=gnu11 -Iapplications/main/subghz/helpers tests/test_keeloq_registry.c applications/main/subghz/helpers/subghz_keeloq_registry.c -o /tmp/tkr 2>&1 | tail'`
 Expected: link/compile FAIL (no `subghz_keeloq_registry.c` yet, or undefined symbols).
 
 - [ ] **Step 4: Implement `subghz_keeloq_registry.c`**
 
 ```c
 #include "subghz_keeloq_registry.h"
-#include "../../../../lib/subghz/protocols/keeloq_common.h"
 #include <string.h>
+
+// Learning-type numbers are the keystore's on-disk `type` field (a wire value),
+// not KeeLoq crypto, so we switch on literals (symbolic names in comments, per
+// Global Constraints) and stay furi-free / host-testable. Values:
+// 0 UNKNOWN,1 SIMPLE,2 NORMAL,3 SECURE,4 MAGIC_XOR_1,5 FAAC,6 MAGIC_SERIAL_1,
+// 7 MAGIC_SERIAL_2,8 MAGIC_SERIAL_3,10 SIMPLE_KINGGATES,11 NORMAL_JAROLIFT,
+// 12 ERREKA,13 PUJOL,14 AERF,15 SIMPLE_JCM (9 is undefined in the enum).
 
 static bool name_is_kia(const char* name) {
     return name && (strncmp(name, "KIA", 3) == 0);
@@ -178,32 +205,32 @@ static bool name_has_beninca(const char* name) {
 KeeloqTypeInfo subghz_keeloq_registry_type_info(uint16_t type, const char* name) {
     KeeloqTypeInfo r = {KlFamGeneric, GenKeeloq, false, false};
     switch(type) {
-    case KEELOQ_LEARNING_SIMPLE:
-    case KEELOQ_LEARNING_NORMAL:
-    case KEELOQ_LEARNING_SECURE:
-    case KEELOQ_LEARNING_MAGIC_XOR_TYPE_1:
-    case KEELOQ_LEARNING_MAGIC_SERIAL_TYPE_1:
-    case KEELOQ_LEARNING_MAGIC_SERIAL_TYPE_2:
-    case KEELOQ_LEARNING_MAGIC_SERIAL_TYPE_3:
-    case KEELOQ_LEARNING_ERREKA:
-    case KEELOQ_LEARNING_PUJOL:
-    case KEELOQ_LEARNING_AERF:
-    case KEELOQ_LEARNING_SIMPLE_JCM:
+    case 1:  // SIMPLE
+    case 2:  // NORMAL
+    case 3:  // SECURE
+    case 4:  // MAGIC_XOR_TYPE_1
+    case 6:  // MAGIC_SERIAL_TYPE_1
+    case 7:  // MAGIC_SERIAL_TYPE_2
+    case 8:  // MAGIC_SERIAL_TYPE_3
+    case 12: // ERREKA
+    case 13: // PUJOL
+    case 14: // AERF
+    case 15: // SIMPLE_JCM
         r.family = KlFamGeneric; r.generator = GenKeeloq; r.encodable = true;
         return r;
-    case KEELOQ_LEARNING_UNKNOWN: // 0 — generic dictionary key, v1 decode-only
+    case 0:  // UNKNOWN — generic dictionary key, v1 decode-only
         r.family = KlFamGeneric; r.decode_only = true; return r;
-    case KEELOQ_LEARNING_FAAC: // 5
+    case 5:  // FAAC
         r.family = KlFamFaacSLH; r.generator = GenFaacSLH; r.encodable = true; return r;
-    case KEELOQ_LEARNING_SIMPLE_KINGGATES: // 10
+    case 10: // SIMPLE_KINGGATES (or KIA/Beninca by name)
         if(name_is_kia(name)) { r.family = KlFamKiaCar; r.decode_only = true; return r; }
         if(name_has_beninca(name)) { r.family = KlFamBeninca; r.generator = GenBenincaARC; r.encodable = true; return r; }
         r.family = KlFamKingGates; r.generator = GenKingGatesStylo4k; r.encodable = true; return r;
-    case KEELOQ_LEARNING_NORMAL_JAROLIFT: // 11
+    case 11: // NORMAL_JAROLIFT (or KIA/Beninca by name)
         if(name_is_kia(name)) { r.family = KlFamKiaCar; r.decode_only = true; return r; }
         if(name_has_beninca(name)) { r.family = KlFamBeninca; r.generator = GenBenincaARC; r.encodable = true; return r; }
         r.family = KlFamJarolift; r.generator = GenJarolift; r.encodable = true; return r;
-    case 9: // undefined in enum; KIA_Hyundai_V5 (car), Beninca_ARC (GenBenincaARC), else orphan
+    case 9:  // undefined enum slot; KIA_Hyundai_V5 (car), Beninca_ARC (GenBenincaARC), else orphan
         if(name_is_kia(name)) { r.family = KlFamKiaCar; r.decode_only = true; return r; }
         if(name_has_beninca(name)) { r.family = KlFamBeninca; r.generator = GenBenincaARC; r.encodable = true; return r; }
         r.family = KlFamOrphan; r.decode_only = true; return r;
