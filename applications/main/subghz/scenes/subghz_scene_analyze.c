@@ -11,6 +11,11 @@
 #ifndef PUBLIC_BUILD
 #include "../helpers/subghz_chip_id.h"
 #include "../helpers/subbrute_protocols.h" // SubBruteAttacks enum for the guided-attack handoff
+#include "../helpers/subghz_keeloq_registry.h" // family/generator classification (Task 1)
+#include "../helpers/subghz_rollback.h" // subghz_rollback_hex_after/_manufacturer (MF: text parse)
+#include <lib/subghz/protocols/keeloq.h> // SUBGHZ_PROTOCOL_KEELOQ_NAME
+#include <lib/subghz/environment.h>
+#include <lib/subghz/subghz_keystore.h> // keystore iteration for the matched key's learning type
 #endif
 
 #define TAG "SubGhzSceneAnalyze"
@@ -49,6 +54,79 @@ static bool subghz_scene_analyze_can_emulate(SubGhz* subghz) {
     FlipperFormat* raw = subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen);
     return subghz_fob_can_emulate(raw, decoder->protocol->name);
 }
+
+// Registry family lookup for a matched KeeLoq manufacturer name (Task 1's
+// subghz_keeloq_registry_type_info needs the keystore's learning `type` to
+// disambiguate the shared type 9/10/11 slots -- see subghz_keeloq_registry.c).
+// Finds the matching keystore entry by name (mirrors subghz_scene_keeloq_
+// console.c's keystore access) and classifies it. Falls back to a generic
+// decode-only label when no exact keystore entry matches -- this is a display
+// label only, never used to route a generate/attack action, so an imprecise
+// fallback is safe.
+static KeeloqTypeInfo subghz_scene_analyze_keeloq_family(SubGhz* subghz, const char* mf_name) {
+    KeeloqTypeInfo info = {KlFamGeneric, GenKeeloq, false, true};
+    if(!mf_name || !mf_name[0]) return info;
+    SubGhzEnvironment* environment = subghz->txrx->environment;
+    SubGhzKeystore* keystore = subghz_environment_get_keystore(environment);
+    if(!keystore) return info;
+    SubGhzKeyArray_t* data = subghz_keystore_get_data(keystore);
+    if(!data) return info;
+    for M_EACH(key, *data, SubGhzKeyArray_t) {
+        if(strcmp(furi_string_get_cstr(key->name), mf_name) == 0) {
+            return subghz_keeloq_registry_type_info(key->type, mf_name);
+        }
+    }
+    return info;
+}
+
+static const char* subghz_scene_analyze_family_label(KeeloqFamily f) {
+    switch(f) {
+    case KlFamFaacSLH:
+        return "FAAC SLH";
+    case KlFamKingGates:
+        return "KingGates";
+    case KlFamJarolift:
+        return "Jarolift";
+    case KlFamBeninca:
+        return "Beninca ARC";
+    case KlFamKiaCar:
+        return "Kia/Hyundai";
+    case KlFamOrphan:
+        return "Orphan";
+    case KlFamGeneric:
+    default:
+        return "KeeLoq";
+    }
+}
+
+// Pull the manufacturer name off the decoder's own text (mirrors
+// subghz_scene_rolling_analyzer.c's parse -- the decoder's manufacture_name
+// field is private to keeloq.c, not exposed via keeloq.h, so the "MF:" marker
+// in get_string() is the accessor). Returns true when a real (non-"Unknown")
+// key match is present; on true, `mf_out` holds the bare keystore name (any
+// BFT/Erreka " Sd:..." suffix stripped).
+static bool subghz_scene_analyze_keeloq_mf(
+    SubGhzProtocolDecoderBase* decoder,
+    char* mf_out,
+    size_t mf_out_size) {
+    FuriString* text = furi_string_alloc();
+    subghz_protocol_decoder_base_get_string(decoder, text);
+    const char* t = furi_string_get_cstr(text);
+    bool has_mf = subghz_rollback_manufacturer(t, mf_out, mf_out_size);
+    bool mf_known = has_mf && (strstr(t, "MF:Unknown") == NULL);
+    furi_string_free(text);
+    if(mf_known) {
+        char* sp = strchr(mf_out, ' '); // "MF:BFT Sd:.." -> bare keystore name
+        if(sp) *sp = '\0';
+    }
+    return mf_known;
+}
+
+// Guided-attack handoff (PRIVATE). Resolved SubBrute attack for the current
+// fixed-code capture, or -1. Set in on_enter, consumed in on_event and in the
+// Right-button callback below (to pick Attack vs the KeeLoq dictionary-attack
+// spoke -- the two are mutually exclusive per capture, see on_enter).
+static int s_analyze_attack = -1;
 #endif
 
 static SignalMod subghz_scene_analyze_mod_of(const char* preset_name) {
@@ -83,8 +161,17 @@ static void subghz_scene_analyze_button_callback(
     }
 #ifndef PUBLIC_BUILD
     else if((result == GuiButtonTypeRight) && (type == InputTypeShort)) {
-        view_dispatcher_send_custom_event(
-            subghz->view_dispatcher, SubGhzCustomEventSceneAnalyzeAttack);
+        // Right is mutually exclusive between the two spokes that use it (only
+        // one is ever added for a given capture -- see on_enter): fixed-code
+        // guided Attack (s_analyze_attack >= 0) vs rolling-KeeLoq dictionary
+        // attack (the "KeyAtk" spoke).
+        if(s_analyze_attack >= 0) {
+            view_dispatcher_send_custom_event(
+                subghz->view_dispatcher, SubGhzCustomEventSceneAnalyzeAttack);
+        } else {
+            view_dispatcher_send_custom_event(
+                subghz->view_dispatcher, SubGhzCustomEventSceneAnalyzeDictAttack);
+        }
     } else if((result == GuiButtonTypeCenter) && (type == InputTypeShort)) {
         view_dispatcher_send_custom_event(
             subghz->view_dispatcher, SubGhzCustomEventSceneAnalyzeEmulate);
@@ -93,10 +180,6 @@ static void subghz_scene_analyze_button_callback(
 }
 
 #ifndef PUBLIC_BUILD
-// Guided-attack handoff (PRIVATE). Resolved SubBrute attack for the current
-// fixed-code capture, or -1. Set in on_enter, consumed in on_event.
-static int s_analyze_attack = -1;
-
 typedef struct {
     uint32_t hz;
     int attack;
@@ -278,6 +361,23 @@ void subghz_scene_analyze_on_enter(void* context) {
                     subghz_analyze_chip_to_attack(chip.family, chip.total_bits, freq);
                 chip_shown = true;
             }
+        } else if(proto_name && strcmp(proto_name, SUBGHZ_PROTOCOL_KEELOQ_NAME) == 0) {
+            // Rolling KeeLoq capture: label with the registry family + whatever
+            // manufacturer the decoder's own dictionary attack already matched
+            // (lib/subghz/protocols/keeloq.c tries every keystore key on
+            // deserialize, see keeloq.c:444) -- surfaced here, not re-run.
+            char mf[24] = {0};
+            if(subghz_scene_analyze_keeloq_mf(decoder, mf, sizeof(mf))) {
+                KeeloqTypeInfo info = subghz_scene_analyze_keeloq_family(subghz, mf);
+                furi_string_cat_printf(
+                    body,
+                    "KeeLoq: %s\nMaker: %s (candidate)",
+                    subghz_scene_analyze_family_label(info.family),
+                    mf);
+            } else {
+                furi_string_cat_str(body, "KeeLoq rolling code\nMaker key: unknown");
+            }
+            chip_shown = true;
         }
 #endif
         if(!chip_shown) {
@@ -325,6 +425,19 @@ void subghz_scene_analyze_on_enter(void* context) {
             subghz->widget,
             GuiButtonTypeRight,
             "Attack",
+            subghz_scene_analyze_button_callback,
+            subghz);
+    } else if(
+        subghz_scene_analyze_is_dynamic(subghz) && proto_name &&
+        strcmp(proto_name, SUBGHZ_PROTOCOL_KEELOQ_NAME) == 0) {
+        // Spoke: rolling KeeLoq capture -> surface the decoder's own dictionary-
+        // attack result (candidate maker, or the honest no-match message). Right
+        // is free here because the fixed-code Attack above only ever fires for a
+        // non-dynamic capture (mutually exclusive with this branch).
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeRight,
+            "KeyAtk",
             subghz_scene_analyze_button_callback,
             subghz);
     }
@@ -398,6 +511,71 @@ bool subghz_scene_analyze_on_event(void* context, SceneManagerEvent event) {
             subghz->keeloq_fob_from_garage = true;
             subghz->keeloq_fob_generic = true;
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
+            return true;
+        }
+#endif
+#ifndef PUBLIC_BUILD
+        if(event.event == SubGhzCustomEventSceneAnalyzeDictAttack) {
+            // Surface the decoder's own dictionary-attack result: it already
+            // tried every keystore key on deserialize (lib/subghz/protocols/
+            // keeloq.c:444) -- this never re-runs an attack, it only reports
+            // what the decoder found. Re-load + re-deserialize fresh (the RX
+            // hopper may have reassigned the shared decoder since on_enter drew
+            // this screen), same pattern as the other spokes above.
+            bool loaded = subghz_txrx_load_decoder_by_name_protocol(
+                subghz->txrx,
+                subghz_history_get_protocol_name(subghz->history, subghz->idx_menu_chosen));
+            FlipperFormat* fff =
+                subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen);
+            SubGhzProtocolDecoderBase* decoder = subghz_txrx_get_decoder(subghz->txrx);
+            if(loaded && fff && decoder) {
+                subghz_protocol_decoder_base_deserialize(decoder, fff);
+            }
+
+            widget_reset(subghz->widget);
+            widget_add_string_element(
+                subghz->widget, 64, 0, AlignCenter, AlignTop, FontPrimary, "Dictionary Attack");
+
+            if(!loaded || !fff || !decoder) {
+                widget_add_string_multiline_element(
+                    subghz->widget,
+                    0,
+                    16,
+                    AlignLeft,
+                    AlignTop,
+                    FontSecondary,
+                    "No capture to analyze.");
+                view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdWidget);
+                return true;
+            }
+
+            char mf[24] = {0};
+            FuriString* body = furi_string_alloc();
+            if(subghz_scene_analyze_keeloq_mf(decoder, mf, sizeof(mf))) {
+                // ~216 keystore keys against a ~12-bit KeeLoq discriminator ->
+                // the coverage matrix measured ~23/179 false-accepts brute-
+                // forcing every key. Report this as a candidate, not a verdict.
+                KeeloqTypeInfo info = subghz_scene_analyze_keeloq_family(subghz, mf);
+                furi_string_cat_printf(
+                    body,
+                    "Candidate maker: %s\nFamily: %s\n\n"
+                    "216-key match has a real\nfalse-accept rate (~12-bit\n"
+                    "discriminator) - confirm\nbefore relying on it.",
+                    mf,
+                    subghz_scene_analyze_family_label(info.family));
+            } else {
+                furi_string_cat_str(
+                    body,
+                    "No known key matches.\nExhaustive key recovery is\n"
+                    "2^64 - not feasible on-\ndevice. Capture more, or\n"
+                    "use the host correlation\ntool.");
+            }
+            widget_add_string_multiline_element(
+                subghz->widget, 0, 16, AlignLeft, AlignTop, FontSecondary,
+                furi_string_get_cstr(body));
+            furi_string_free(body);
+
+            view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdWidget);
             return true;
         }
 #endif

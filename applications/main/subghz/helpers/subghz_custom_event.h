@@ -91,6 +91,7 @@ typedef enum {
     SubGhzCustomEventSceneAnalyzeDetails, /* Signal-ID -> deeper tool (rolling/PSA) */
     SubGhzCustomEventSceneAnalyzeAttack, /* Signal-ID -> guided SubBrute (fixed-code, private) */
     SubGhzCustomEventSceneAnalyzeEmulate, /* Signal-ID -> multi-button rolling fob grid (supported car fob) */
+    SubGhzCustomEventSceneAnalyzeDictAttack, /* Signal-ID -> surface KeeLoq's own dictionary-attack result (rolling, private) */
 
     SubGhzCustomEventViewKeeloqFobSend,
     SubGhzCustomEventViewKeeloqFobBack,
