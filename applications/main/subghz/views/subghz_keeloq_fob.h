@@ -28,10 +28,15 @@ void subghz_keeloq_fob_set_callback(
 // subghz_fob_buttons()) — only the pointer + count are stored, no copy is made,
 // so nothing is bounded-heap-allocated on the no-PSRAM boards. `n` is clamped to
 // SUBGHZ_KEELOQ_FOB_MAX_TILES. real_btn = captured button code (marks the
-// confirmed-real tile; 0 = none). cnt is up to 24-bit so it is uint32_t. The
-// title defaults to "Fob Emulator" and the counter renders 16-bit (%04lX); use
+// confirmed-real tile); pass SUBGHZ_KEELOQ_FOB_NO_BTN when no button was
+// captured so a table whose first tile is code 0x0 (Subaru Lock, Honda Panic)
+// is not falsely flagged. cnt is up to 24-bit so it is uint32_t. The title
+// defaults to "Fob Emulator" and the counter renders 16-bit (%04lX); use
 // set_title to override the title.
 #define SUBGHZ_KEELOQ_FOB_MAX_TILES 8
+// Sentinel real_btn meaning "no captured button" — never a valid code in any
+// provider table (max is 0x60), so it marks no tile.
+#define SUBGHZ_KEELOQ_FOB_NO_BTN    0xFF
 void subghz_keeloq_fob_set_table(
     SubGhzKeeloqFob* instance,
     const SubGhzFobButton* buttons,

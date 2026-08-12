@@ -162,6 +162,15 @@ struct SubGhz {
     // the app lifetime so the view may hold the title pointer without copying.
     char keeloq_fob_field[16];
     char keeloq_fob_title[24];
+    // For the generic fob path: the counter field this protocol's encoder reads
+    // ("Cnt"/"Rolling"/"Counter"/"RollingCode", from subghz_fob_counter_field)
+    // and the counter value we last transmitted with. The press path advances
+    // THIS field; keeloq_fob_cnt_seed lets the post-TX advance tell a self-
+    // advancing encoder (e.g. Honda V5, which persists its own counter) from a
+    // scene-rolled one (Kia/Ford/Honda V7..) so it neither double-advances nor
+    // stalls. Set in the generic on-enter, used in the tick/advance path.
+    char keeloq_fob_cnt_field[16];
+    uint32_t keeloq_fob_cnt_seed;
     // TRUE when the receiver was entered via "TPMS Spoofer": tune 433.92 FSK +
     // only list TPMS-sensor decodes (private-only scanner). See subghz_scene_receiver.c.
     bool tpms_scan_mode;

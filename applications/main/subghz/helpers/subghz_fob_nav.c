@@ -36,7 +36,7 @@ uint8_t subghz_fob_nav_move_n(uint8_t idx, uint8_t key, uint8_t n) {
         return idx;
     }
     // Linear step for <4 tiles (VAG, 3 tiles): prev / next / cycle, modulo n.
-    if(idx >= n) idx %= n;
+    // idx is already < n here (normalized at the top), so no re-clamp is needed.
     switch(key) {
     case FOB_LEFT:
     case FOB_UP:    return (uint8_t)((idx + n - 1) % n);

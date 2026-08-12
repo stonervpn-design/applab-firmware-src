@@ -18,13 +18,24 @@ bool subghz_fob_can_emulate(FlipperFormat* fff, const char* proto) {
 
     // Honda V2&V3 shares one protocol name across two on-air variants. The V3
     // sub-variant bakes the button into the transmitted frame (replay), so only a
-    // V2 capture is safe to synthesize in the grid; a V3 capture (Variant field ==
-    // 3, or its 120-bit frame) falls back to plain replay. Table key: "HondaV2&V3".
+    // V2 capture is safe to synthesize in the grid; a V3 capture falls back to
+    // plain replay. Prefer the explicit Variant field, but a capture serialized
+    // without one is still identifiable by frame size: the decoder stores exactly
+    // 120 bits for V3 and 148 for V2, so any valid frame under ~140 bits is V3.
+    // Table key: "HondaV2&V3".
     if(strcmp(proto, "HondaV2&V3") == 0) {
         uint32_t variant = 0;
         flipper_format_rewind(fff);
-        if(flipper_format_read_uint32(fff, "Variant", &variant, 1) && variant == 3) {
+        bool has_variant = flipper_format_read_uint32(fff, "Variant", &variant, 1);
+        if(has_variant && variant == 3) {
             return false;
+        }
+        if(!has_variant || variant == 0) {
+            uint32_t bit = 0;
+            flipper_format_rewind(fff);
+            if(flipper_format_read_uint32(fff, "Bit", &bit, 1) && bit >= 100 && bit < 140) {
+                return false; // 120-bit V3 frame (V2 is 148-bit)
+            }
         }
     }
 

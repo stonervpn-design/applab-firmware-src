@@ -16,7 +16,6 @@ typedef enum {
     SubGhzCustomEventSceneReceiverInfoTxStop,
     SubGhzCustomEventSceneReceiverInfoSave,
     SubGhzCustomEventSceneReceiverInfoAnalyze,
-    SubGhzCustomEventSceneReceiverInfoEmulate, /* supported car fob -> multi-button rolling fob grid */
     SubGhzCustomEventSceneSaveName,
     SubGhzCustomEventSceneSignalSettings,
     SubGhzCustomEventSceneSaveSuccess,
@@ -91,6 +90,7 @@ typedef enum {
 
     SubGhzCustomEventSceneAnalyzeDetails, /* Signal-ID -> deeper tool (rolling/PSA) */
     SubGhzCustomEventSceneAnalyzeAttack, /* Signal-ID -> guided SubBrute (fixed-code, private) */
+    SubGhzCustomEventSceneAnalyzeEmulate, /* Signal-ID -> multi-button rolling fob grid (supported car fob) */
 
     SubGhzCustomEventViewKeeloqFobSend,
     SubGhzCustomEventViewKeeloqFobBack,

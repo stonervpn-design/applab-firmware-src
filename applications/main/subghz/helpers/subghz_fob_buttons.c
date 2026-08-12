@@ -300,3 +300,26 @@ const char* subghz_fob_button_field(const char* protocol_name) {
     }
     return "Btn";
 }
+
+// The counter field each protocol's ENCODER deserialize reads. Verified against
+// each encoder in lib/subghz/protocols: santa_fe/honda_v2_v3 read "Rolling",
+// honda_v7/honda_v9 read "Counter", honda_v8 reads "RollingCode", honda_v5 reads
+// "Counter". Every other supported protocol keeps the counter in FF_CNT ("Cnt")
+// via pp_encoder_read_fields. The generic fob press path advances the returned
+// field, not a hardcoded "Cnt", so the on-air rolling code actually changes.
+const char* subghz_fob_counter_field(const char* protocol_name) {
+    if(protocol_name) {
+        if(strcmp(protocol_name, "SantaFe 13-16") == 0 ||
+           strcmp(protocol_name, "HondaV2&V3") == 0) {
+            return "Rolling";
+        }
+        if(strcmp(protocol_name, "HondaV8") == 0) {
+            return "RollingCode";
+        }
+        if(strcmp(protocol_name, "HondaV5") == 0 || strcmp(protocol_name, "HondaV7") == 0 ||
+           strcmp(protocol_name, "HondaV9") == 0) {
+            return "Counter";
+        }
+    }
+    return "Cnt";
+}

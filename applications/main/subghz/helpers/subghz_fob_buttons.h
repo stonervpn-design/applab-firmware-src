@@ -45,6 +45,16 @@ bool subghz_fob_protocol_supported(const char* protocol_name);
 // for any other (never NULL) — see the audit block in subghz_fob_buttons.c.
 const char* subghz_fob_button_field(const char* protocol_name);
 
+// The FlipperFormat field each protocol's encoder reads for the rolling counter
+// (what the fob-emulate press path must advance+persist between presses). Most
+// protocols keep the counter in "Cnt" (pp_encoder_read_fields family); the
+// SantaFe / Honda rolling families read it from a different field: SantaFe and
+// Honda V2&V3 read "Rolling", Honda V7/V9 read "Counter", Honda V8 reads
+// "RollingCode", Honda V5 reads "Counter". Returns the matching field for a
+// known protocol, or the "Cnt" default for any other (never NULL) — see the
+// per-protocol encoder deserialize referenced in the audit block.
+const char* subghz_fob_counter_field(const char* protocol_name);
+
 #ifdef __cplusplus
 }
 #endif

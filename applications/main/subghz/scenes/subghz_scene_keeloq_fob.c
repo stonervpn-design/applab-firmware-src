@@ -24,21 +24,39 @@ static void subghz_scene_keeloq_fob_refresh_cnt(SubGhz* subghz) {
     subghz_keeloq_fob_set_sent(subghz->subghz_keeloq_fob, cnt);
 }
 
-// Generic-protocol counter advance+persist after a successful TX. Unlike VAG/KeeLoq
-// (whose encoder increments AND writes Cnt back into fff_data during subghz_tx_start),
-// the generic car encoders replay/rebuild the frame WITHOUT touching Cnt, so the scene
-// owns the roll here: read the counter just transmitted, +1, persist into fff_data (so
-// the next press is the next frame), and refresh the on-screen counter. fff_data is the
-// in-memory format the encoder reads each press; the on-disk .sub is unchanged until a
-// re-Save, exactly like the VAG/KeeLoq emulate. Only called on TX success.
+// Generic-protocol counter advance+persist after a successful TX. The car
+// encoders split into two families and this handles both WITHOUT a per-protocol
+// self-advance table:
+//   * pp_encoder_read_fields protocols (Kia/Ford/... and Honda V7/V8/V9) read
+//     their counter to rebuild the frame but do NOT persist an advance, so the
+//     scene owns the roll: +1 and write it back.
+//   * a few encoders self-advance AND persist their own counter during
+//     subghz_tx_start (Honda V5, exactly like VAG/KeeLoq) — advancing again here
+//     would double-step.
+// The counter lives in the protocol's own field (keeloq_fob_cnt_field — "Cnt"
+// for most, "Rolling"/"Counter"/"RollingCode" for the rolling families), NOT a
+// hardcoded "Cnt". We read that field: if the encoder already moved it past the
+// value we transmitted with (keeloq_fob_cnt_seed), adopt+display that; otherwise
+// +1 and persist so the next press is the next frame. fff_data is the in-memory
+// format the encoder reads each press; the on-disk .sub is unchanged until a
+// re-Save. Only called on TX success.
 static void subghz_scene_keeloq_fob_advance_cnt_generic(SubGhz* subghz) {
     FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
-    uint32_t cnt = 0;
+    const char* field = subghz->keeloq_fob_cnt_field;
+    uint32_t now = subghz->keeloq_fob_cnt_seed; // fallback if the field is absent
     flipper_format_rewind(fff);
-    flipper_format_read_uint32(fff, "Cnt", &cnt, 1);
-    cnt++;
-    flipper_format_insert_or_update_uint32(fff, "Cnt", &cnt, 1);
-    subghz_keeloq_fob_set_sent(subghz->subghz_keeloq_fob, cnt);
+    flipper_format_read_uint32(fff, field, &now, 1);
+    uint32_t next;
+    if(now != subghz->keeloq_fob_cnt_seed) {
+        // Encoder self-advanced + persisted its own counter — just adopt it.
+        next = now;
+    } else {
+        // Encoder read but did not persist — the scene owns the roll.
+        next = now + 1;
+        flipper_format_insert_or_update_uint32(fff, field, &next, 1);
+    }
+    subghz->keeloq_fob_cnt_seed = next;
+    subghz_keeloq_fob_set_sent(subghz->subghz_keeloq_fob, next);
 }
 
 // Generic supported-protocol path: any car fob with an enumerable button table
@@ -77,26 +95,41 @@ static bool subghz_scene_keeloq_fob_enter_generic(SubGhz* subghz) {
     const char* field = subghz_fob_button_field(proto_cstr);
     strncpy(subghz->keeloq_fob_field, field, sizeof(subghz->keeloq_fob_field) - 1);
     subghz->keeloq_fob_field[sizeof(subghz->keeloq_fob_field) - 1] = '\0';
+    // Counter field this protocol's encoder reads ("Cnt" for most; "Rolling"/
+    // "Counter"/"RollingCode" for the SantaFe / Honda rolling families). The
+    // press path advances THIS field so the on-air rolling code actually changes.
+    const char* cnt_field = subghz_fob_counter_field(proto_cstr);
+    strncpy(subghz->keeloq_fob_cnt_field, cnt_field, sizeof(subghz->keeloq_fob_cnt_field) - 1);
+    subghz->keeloq_fob_cnt_field[sizeof(subghz->keeloq_fob_cnt_field) - 1] = '\0';
     // Static-lifetime title for the view (protocol name).
     strncpy(subghz->keeloq_fob_title, proto_cstr, sizeof(subghz->keeloq_fob_title) - 1);
     subghz->keeloq_fob_title[sizeof(subghz->keeloq_fob_title) - 1] = '\0';
 
     uint32_t captured_btn = 0, cnt_file = 0;
     flipper_format_rewind(fff);
-    flipper_format_read_uint32(fff, field, &captured_btn, 1); // absent -> 0 (no marked tile)
+    // Distinguish "button field absent" (mark no tile) from a genuine 0x0 capture
+    // (Subaru Lock / Honda Panic) so a 0x0-code table isn't falsely flagged as
+    // the captured button.
+    bool have_btn = flipper_format_read_uint32(fff, field, &captured_btn, 1);
     flipper_format_rewind(fff);
-    flipper_format_read_uint32(fff, "Cnt", &cnt_file, 1); // absent -> 0 (graceful)
+    flipper_format_read_uint32(fff, cnt_field, &cnt_file, 1); // absent -> 0 (graceful)
 
-    // Reuse the no-desync jump: pre-seed Cnt so the first press is a future frame.
+    // Reuse the no-desync jump: pre-seed the protocol's counter so the first press
+    // is a future frame.
     uint16_t jump = subghz->keeloq_clone_jump; // 0 = desync-safe default
     uint32_t cnt_start = cnt_file + jump;
-    flipper_format_insert_or_update_uint32(fff, "Cnt", &cnt_start, 1);
+    flipper_format_insert_or_update_uint32(fff, cnt_field, &cnt_start, 1);
+    subghz->keeloq_fob_cnt_seed = cnt_start;
+
+    uint8_t real_btn = have_btn ? (uint8_t)captured_btn : SUBGHZ_KEELOQ_FOB_NO_BTN;
 
     subghz_keeloq_fob_set_callback(
         subghz->subghz_keeloq_fob, subghz_scene_keeloq_fob_callback, subghz);
-    subghz_keeloq_fob_set_title(subghz->subghz_keeloq_fob, subghz->keeloq_fob_title);
     subghz_keeloq_fob_set_table(
-        subghz->subghz_keeloq_fob, buttons, n, (uint8_t)captured_btn, cnt_start, jump);
+        subghz->subghz_keeloq_fob, buttons, n, real_btn, cnt_start, jump);
+    // Title AFTER set_table: set_table resets the title to the "Fob Emulator"
+    // default, so the protocol-name title must be applied last or it is lost.
+    subghz_keeloq_fob_set_title(subghz->subghz_keeloq_fob, subghz->keeloq_fob_title);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdKeeloqFob);
 
     furi_string_free(proto);
