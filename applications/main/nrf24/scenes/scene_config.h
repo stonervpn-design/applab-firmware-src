@@ -10,4 +10,6 @@ ADD_SCENE(nrf24_app, mj_auto, MjAuto)
 #ifndef PUBLIC_BUILD
 // Sniffer + Replay -- attack tooling (nrf24_capture store), private only.
 ADD_SCENE(nrf24_app, sniffer, Sniffer)
+// KeySniffer -- unencrypted-keyboard keystroke log, private only.
+ADD_SCENE(nrf24_app, keysniffer, KeySniffer)
 #endif
