@@ -37,7 +37,7 @@ void subghz_scene_keeloq_mfr_submenu_callback(void* context, uint32_t index) {
     const char* name = NULL;
     for
         M_EACH(key, *data, SubGhzKeyArray_t) {
-            if(!subghz_keeloq_registry_type_encodable(key->type)) {
+            if(!subghz_keeloq_registry_type_is_generic_encodable(key->type)) {
                 continue;
             }
             if(i == index) {
@@ -78,7 +78,7 @@ void subghz_scene_keeloq_mfr_on_enter(void* context) {
     if(data != NULL) {
         for
             M_EACH(key, *data, SubGhzKeyArray_t) {
-                if(subghz_keeloq_registry_type_encodable(key->type)) {
+                if(subghz_keeloq_registry_type_is_generic_encodable(key->type)) {
                     encodable_count++;
                 }
             }
@@ -103,7 +103,7 @@ void subghz_scene_keeloq_mfr_on_enter(void* context) {
     uint32_t index = 0;
     for
         M_EACH(key, *data, SubGhzKeyArray_t) {
-            if(!subghz_keeloq_registry_type_encodable(key->type)) {
+            if(!subghz_keeloq_registry_type_is_generic_encodable(key->type)) {
                 continue;
             }
             submenu_add_item(

@@ -64,3 +64,22 @@ KeeloqTypeInfo subghz_keeloq_registry_type_info(uint16_t type, const char* name)
 bool subghz_keeloq_registry_type_encodable(uint16_t type) {
     return subghz_keeloq_registry_type_info(type, NULL).encodable;
 }
+
+bool subghz_keeloq_registry_type_is_generic_encodable(uint16_t type) {
+    switch(type) {
+    case 1:  // SIMPLE
+    case 2:  // NORMAL
+    case 3:  // SECURE
+    case 4:  // MAGIC_XOR_TYPE_1
+    case 6:  // MAGIC_SERIAL_TYPE_1
+    case 7:  // MAGIC_SERIAL_TYPE_2
+    case 8:  // MAGIC_SERIAL_TYPE_3
+    case 12: // ERREKA
+    case 13: // PUJOL
+    case 14: // AERF
+    case 15: // SIMPLE_JCM
+        return true;
+    default: // 0, 5, 9, 10, 11, and unknown: not generic-KeeLoq-encodable
+        return false;
+    }
+}

@@ -28,3 +28,12 @@ KeeloqTypeInfo subghz_keeloq_registry_type_info(uint16_t type, const char* name)
 
 // Convenience gate used by the by-manufacturer picker (replaces its local list).
 bool subghz_keeloq_registry_type_encodable(uint16_t type);
+
+// Name-blind check: true ONLY for the generic-KeeLoq encodable learning types
+// (1,2,3,4,6,7,8,12,13,14,15). False for everything else, including the
+// shared types (5,9,10,11) that require a name to disambiguate a dedicated
+// family (FAAC/KingGates/Jarolift/Beninca/Kia) — those must never be routed
+// through the generic GenKeeloq encoder. Pure integer check: no strcmp, no
+// call into subghz_keeloq_registry_type_info. Used by the by-manufacturer
+// picker, which always generates via GenKeeloq regardless of listed type.
+bool subghz_keeloq_registry_type_is_generic_encodable(uint16_t type);

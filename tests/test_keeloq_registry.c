@@ -67,6 +67,21 @@ int main(void) {
     assert(orphan_null.decode_only);
     assert(!orphan_null.encodable);
 
+    // subghz_keeloq_registry_type_is_generic_encodable: name-blind, pure
+    // integer check used by the by-manufacturer picker. True ONLY for the
+    // generic-KeeLoq encodable learning types; false for the shared types
+    // (5,9,10,11) that need a name to disambiguate a dedicated family, and
+    // for 0/unknown.
+    uint16_t generic_encodable[] = {1, 2, 3, 4, 6, 7, 8, 12, 13, 14, 15};
+    for(unsigned i = 0; i < sizeof(generic_encodable) / sizeof(generic_encodable[0]); i++) {
+        assert(subghz_keeloq_registry_type_is_generic_encodable(generic_encodable[i]) == true);
+    }
+    uint16_t generic_not_encodable[] = {0, 5, 9, 10, 11};
+    for(unsigned i = 0; i < sizeof(generic_not_encodable) / sizeof(generic_not_encodable[0]);
+        i++) {
+        assert(subghz_keeloq_registry_type_is_generic_encodable(generic_not_encodable[i]) == false);
+    }
+
     printf("test_keeloq_registry: ALL PASS\n");
     return 0;
 }
