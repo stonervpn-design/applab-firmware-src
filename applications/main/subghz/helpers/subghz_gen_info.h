@@ -1,25 +1,7 @@
 #pragma once
 #include "subghz_types.h"
 #include "subghz_custom_event.h"
-
-typedef enum {
-    GenData,
-    GenFaacSLH,
-    GenKeeloq,
-    GenCameAtomo,
-    GenKeeloqBFT,
-    GenAlutechAt4n,
-    GenSomfyTelis,
-    GenSomfyKeytis,
-    GenKingGatesStylo4k,
-    GenBenincaARC,
-    GenJarolift,
-    GenDitecGOL4,
-    GenNiceFlorS,
-    GenSecPlus1,
-    GenSecPlus2,
-    GenPhoenixV2,
-} GenType;
+#include "subghz_gen_type.h"
 
 typedef struct {
     GenType type;
