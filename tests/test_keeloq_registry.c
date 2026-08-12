@@ -25,18 +25,44 @@ int main(void) {
     assert(subghz_keeloq_registry_type_info(5, "FAAC_SLH").family == KlFamFaacSLH);
     assert(subghz_keeloq_registry_type_info(5, "FAAC_SLH").generator == GenFaacSLH);
     assert(subghz_keeloq_registry_type_info(10, "Kingates_Stylo4k").family == KlFamKingGates);
+    assert(subghz_keeloq_registry_type_info(10, "Kingates_Stylo4k").generator == GenKingGatesStylo4k);
+    assert(subghz_keeloq_registry_type_info(10, "Kingates_Stylo4k").encodable);
     assert(subghz_keeloq_registry_type_info(11, "Jarolift").family == KlFamJarolift);
+    assert(subghz_keeloq_registry_type_info(11, "Jarolift").generator == GenJarolift);
+    assert(subghz_keeloq_registry_type_info(11, "Jarolift").encodable);
 
     // Name disambiguation for shared types
     assert(subghz_keeloq_registry_type_info(10, "KIA_Hyundai_V3&4").family == KlFamKiaCar);
     assert(subghz_keeloq_registry_type_info(9, "KIA_Hyundai_V5").family == KlFamKiaCar);
-    // Beninca appears under types 9/11 but has a real GenBenincaARC route
+    // type-11 KIA
+    assert(subghz_keeloq_registry_type_info(11, "KIAV6A").family == KlFamKiaCar);
+    assert(subghz_keeloq_registry_type_info(11, "KIAV6A").decode_only);
+    assert(!subghz_keeloq_registry_type_info(11, "KIAV6A").encodable);
+    // Beninca appears under types 9/10/11 but has a real GenBenincaARC route
     assert(subghz_keeloq_registry_type_info(9, "Beninca_ARC").family == KlFamBeninca);
     assert(subghz_keeloq_registry_type_info(9, "Beninca_ARC").encodable);
     assert(subghz_keeloq_registry_type_info(9, "Beninca_ARC").generator == GenBenincaARC);
+    // type-10 Beninca
+    assert(subghz_keeloq_registry_type_info(10, "Beninca_ARC").family == KlFamBeninca);
+    assert(subghz_keeloq_registry_type_info(10, "Beninca_ARC").generator == GenBenincaARC);
+    assert(subghz_keeloq_registry_type_info(10, "Beninca_ARC").encodable);
+    // type-11 Beninca
+    assert(subghz_keeloq_registry_type_info(11, "BenincaVA").family == KlFamBeninca);
+    assert(subghz_keeloq_registry_type_info(11, "BenincaVA").generator == GenBenincaARC);
+    assert(subghz_keeloq_registry_type_info(11, "BenincaVA").encodable);
     // Kia is decode-only (capture/car path), not catalog-encodable
     assert(!subghz_keeloq_registry_type_info(9, "KIA_Hyundai_V5").encodable);
     assert(subghz_keeloq_registry_type_info(9, "KIA_Hyundai_V5").decode_only);
+
+    // type-9 orphan: neither KIA nor Beninca by name (and NULL name)
+    KeeloqTypeInfo orphan_named = subghz_keeloq_registry_type_info(9, "SomeUnknownName");
+    assert(orphan_named.family == KlFamOrphan);
+    assert(orphan_named.decode_only);
+    assert(!orphan_named.encodable);
+    KeeloqTypeInfo orphan_null = subghz_keeloq_registry_type_info(9, NULL);
+    assert(orphan_null.family == KlFamOrphan);
+    assert(orphan_null.decode_only);
+    assert(!orphan_null.encodable);
 
     printf("test_keeloq_registry: ALL PASS\n");
     return 0;
