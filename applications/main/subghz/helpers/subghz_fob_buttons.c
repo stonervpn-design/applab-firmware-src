@@ -105,6 +105,7 @@ static const SubGhzFobButton FOB_KEELOQ[] = {
     {0x8, "PANIC"},
 };
 
+#ifndef PUBLIC_BUILD
 // --- Kia V0: kia_v0_button_name base (Kia) map ---
 static const SubGhzFobButton FOB_KIA_V0[] = {
     {0x1, "Lock"},
@@ -233,6 +234,7 @@ static const SubGhzFobButton FOB_LAND_ROVER_V0[] = {
     {0x2, "Lock"},
     {0x4, "Unlock"},
 };
+#endif // PUBLIC_BUILD
 
 typedef struct {
     const char* protocol_name;
@@ -246,6 +248,7 @@ typedef struct {
 static const SubGhzFobEntry subghz_fob_table[] = {
     FOB_ENTRY("VAG", FOB_VAG),
     FOB_ENTRY("KeeLoq", FOB_KEELOQ),
+#ifndef PUBLIC_BUILD
     FOB_ENTRY("Kia V0", FOB_KIA_V0),
     FOB_ENTRY("Kia V1", FOB_KIA_V1),
     FOB_ENTRY("Kia V7", FOB_KIA_V7),
@@ -265,6 +268,7 @@ static const SubGhzFobEntry subghz_fob_table[] = {
     FOB_ENTRY("Fiat V1", FOB_FIAT_V1),
     FOB_ENTRY("Chrysler V0", FOB_CHRYSLER_V0),
     FOB_ENTRY("Land Rover V0", FOB_LAND_ROVER_V0),
+#endif // PUBLIC_BUILD
 };
 
 const SubGhzFobButton* subghz_fob_buttons(const char* protocol_name, size_t* out_n) {
@@ -289,6 +293,7 @@ bool subghz_fob_protocol_supported(const char* protocol_name) {
 // Honda OOK/KeeLoq/FSK families (V5/V7/V8/V9) read "Button"; the combined
 // V2&V3 protocol reads "BtnLo". Everything else uses the "Btn" default.
 const char* subghz_fob_button_field(const char* protocol_name) {
+#ifndef PUBLIC_BUILD
     if(protocol_name) {
         if(strcmp(protocol_name, "HondaV5") == 0 || strcmp(protocol_name, "HondaV7") == 0 ||
            strcmp(protocol_name, "HondaV8") == 0 || strcmp(protocol_name, "HondaV9") == 0) {
@@ -298,6 +303,9 @@ const char* subghz_fob_button_field(const char* protocol_name) {
             return "BtnLo";
         }
     }
+#else
+    (void)protocol_name;
+#endif // PUBLIC_BUILD
     return "Btn";
 }
 
@@ -308,6 +316,7 @@ const char* subghz_fob_button_field(const char* protocol_name) {
 // via pp_encoder_read_fields. The generic fob press path advances the returned
 // field, not a hardcoded "Cnt", so the on-air rolling code actually changes.
 const char* subghz_fob_counter_field(const char* protocol_name) {
+#ifndef PUBLIC_BUILD
     if(protocol_name) {
         if(strcmp(protocol_name, "SantaFe 13-16") == 0 ||
            strcmp(protocol_name, "HondaV2&V3") == 0) {
@@ -321,5 +330,8 @@ const char* subghz_fob_counter_field(const char* protocol_name) {
             return "Counter";
         }
     }
+#else
+    (void)protocol_name;
+#endif // PUBLIC_BUILD
     return "Cnt";
 }
