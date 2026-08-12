@@ -284,3 +284,19 @@ bool subghz_fob_protocol_supported(const char* protocol_name) {
     size_t n = 0;
     return subghz_fob_buttons(protocol_name, &n) != NULL && n > 0;
 }
+
+// Protocols whose encoder reads the button from a field other than "Btn". The
+// Honda OOK/KeeLoq/FSK families (V5/V7/V8/V9) read "Button"; the combined
+// V2&V3 protocol reads "BtnLo". Everything else uses the "Btn" default.
+const char* subghz_fob_button_field(const char* protocol_name) {
+    if(protocol_name) {
+        if(strcmp(protocol_name, "HondaV5") == 0 || strcmp(protocol_name, "HondaV7") == 0 ||
+           strcmp(protocol_name, "HondaV8") == 0 || strcmp(protocol_name, "HondaV9") == 0) {
+            return "Button";
+        }
+        if(strcmp(protocol_name, "HondaV2&V3") == 0) {
+            return "BtnLo";
+        }
+    }
+    return "Btn";
+}

@@ -16,6 +16,7 @@ typedef enum {
     SubGhzCustomEventSceneReceiverInfoTxStop,
     SubGhzCustomEventSceneReceiverInfoSave,
     SubGhzCustomEventSceneReceiverInfoAnalyze,
+    SubGhzCustomEventSceneReceiverInfoEmulate, /* supported car fob -> multi-button rolling fob grid */
     SubGhzCustomEventSceneSaveName,
     SubGhzCustomEventSceneSignalSettings,
     SubGhzCustomEventSceneSaveSuccess,

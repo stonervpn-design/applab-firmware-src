@@ -92,22 +92,28 @@ bool subghz_scene_garage_on_event(void* context, SceneManagerEvent event) {
             furi_string_free(path);
 #ifndef PUBLIC_BUILD
             // Clone entries (KeeLoq CloneMode=1 / VAG) resume in the Fob Emulator;
-            // plain replay-saves (any other serializable fob) go to the Transmitter.
+            // a saved fob of any other SUPPORTED car protocol (Kia/Ford/Honda/...)
+            // resumes in the same multi-button grid via the generic path; everything
+            // else (plain replay-saves) goes to the Transmitter.
             FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
             uint32_t clone_mode = 0;
             flipper_format_rewind(fff);
             flipper_format_read_uint32(fff, "CloneMode", &clone_mode, 1);
             FuriString* proto = furi_string_alloc();
             flipper_format_rewind(fff);
-            bool is_vag = flipper_format_read_string(fff, "Protocol", proto) &&
-                          furi_string_equal_str(proto, VAG_PROTOCOL_NAME);
-            furi_string_free(proto);
+            bool have_proto = flipper_format_read_string(fff, "Protocol", proto);
+            bool is_vag = have_proto && furi_string_equal_str(proto, VAG_PROTOCOL_NAME);
             if(clone_mode == 1 || is_vag) {
                 subghz->keeloq_fob_from_garage = true;
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
+            } else if(have_proto && subghz_fob_can_emulate(fff, furi_string_get_cstr(proto))) {
+                subghz->keeloq_fob_from_garage = true;
+                subghz->keeloq_fob_generic = true;
                 scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
             } else {
                 scene_manager_next_scene(subghz->scene_manager, SubGhzSceneTransmitter);
             }
+            furi_string_free(proto);
 #else
             subghz->keeloq_fob_from_garage = true;
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);

@@ -61,6 +61,20 @@ int main(void) {
     assert(n == 0);
     assert(!subghz_fob_protocol_supported("Scher-Khan"));
 
+    // Per-protocol button field name (Task 3 write path): most read "Btn", the
+    // Honda OOK/KeeLoq/FSK families read "Button", Honda V2&V3 reads "BtnLo".
+    assert(strcmp(subghz_fob_button_field("Kia V0"), "Btn") == 0);
+    assert(strcmp(subghz_fob_button_field("Ford V0"), "Btn") == 0);
+    assert(strcmp(subghz_fob_button_field("VAG"), "Btn") == 0);
+    assert(strcmp(subghz_fob_button_field("HondaV5"), "Button") == 0);
+    assert(strcmp(subghz_fob_button_field("HondaV7"), "Button") == 0);
+    assert(strcmp(subghz_fob_button_field("HondaV8"), "Button") == 0);
+    assert(strcmp(subghz_fob_button_field("HondaV9"), "Button") == 0);
+    assert(strcmp(subghz_fob_button_field("HondaV2&V3"), "BtnLo") == 0);
+    // Unknown / NULL -> safe "Btn" default (never NULL).
+    assert(strcmp(subghz_fob_button_field("NotARealProtocol"), "Btn") == 0);
+    assert(strcmp(subghz_fob_button_field(NULL), "Btn") == 0);
+
     printf("test_subghz_fob_buttons OK\n");
     return 0;
 }

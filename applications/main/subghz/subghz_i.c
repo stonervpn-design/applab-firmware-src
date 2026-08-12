@@ -2,13 +2,45 @@
 
 #include "assets_icons.h"
 #include "subghz/types.h"
+#include "helpers/subghz_fob_buttons.h"
 #include <furi.h>
 #include <notification/notification.h>
 #include <notification/notification_messages.h>
 #include <flipper_format/flipper_format.h>
 #include <flipper_format/flipper_format_i.h>
+#include <string.h>
 
 #define TAG "SubGhz"
+
+bool subghz_fob_can_emulate(FlipperFormat* fff, const char* proto) {
+    if(!fff || !proto) return false;
+    if(!subghz_fob_protocol_supported(proto)) return false;
+
+    // Honda V2&V3 shares one protocol name across two on-air variants. The V3
+    // sub-variant bakes the button into the transmitted frame (replay), so only a
+    // V2 capture is safe to synthesize in the grid; a V3 capture (Variant field ==
+    // 3, or its 120-bit frame) falls back to plain replay. Table key: "HondaV2&V3".
+    if(strcmp(proto, "HondaV2&V3") == 0) {
+        uint32_t variant = 0;
+        flipper_format_rewind(fff);
+        if(flipper_format_read_uint32(fff, "Variant", &variant, 1) && variant == 3) {
+            return false;
+        }
+    }
+
+    // Fiat V1 only rebuilds the authenticator when the .sub carries the transponder
+    // secret; its encoder deserialize aborts without a "Hitag2 Key" field. Absent =>
+    // fall back to captured-button replay instead of a broken synth.
+    if(strcmp(proto, "Fiat V1") == 0) {
+        uint8_t hitag2_key[6];
+        flipper_format_rewind(fff);
+        if(!flipper_format_read_hex(fff, "Hitag2 Key", hitag2_key, sizeof(hitag2_key))) {
+            return false;
+        }
+    }
+
+    return true;
+}
 
 void subghz_blink_start(SubGhz* subghz) {
     furi_assert(subghz);

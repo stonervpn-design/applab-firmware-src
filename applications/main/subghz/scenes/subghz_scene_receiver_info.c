@@ -6,8 +6,11 @@
 #include <lib/subghz/blocks/custom_btn.h>
 
 #include "applications/main/subghz/helpers/subghz_txrx_i.h"
+#include "../helpers/subghz_fob_buttons.h"
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/protocols/psa.h>
+#include <flipper_format/flipper_format_i.h>
+#include <toolbox/stream/stream.h>
 #include <string.h>
 
 #define TAG "SubGhzSceneReceiverInfo"
@@ -30,6 +33,32 @@ void subghz_scene_receiver_info_callback(GuiButtonType result, InputType type, v
             subghz->view_dispatcher, SubGhzCustomEventSceneReceiverInfoAnalyze);
     }
 }
+
+#ifndef PUBLIC_BUILD
+// Button callback for the "Emul" slot: a supported car fob opens the multi-button
+// rolling fob grid. Kept separate from the generic widget callback so the Left slot
+// means Emulate (not the ID/Analyze hub) for these captures.
+static void
+    subghz_scene_receiver_info_emulate_callback(GuiButtonType result, InputType type, void* context) {
+    furi_assert(context);
+    SubGhz* subghz = context;
+    if((result == GuiButtonTypeLeft) && (type == InputTypeShort)) {
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventSceneReceiverInfoEmulate);
+    }
+}
+
+// True if the currently-selected capture is a supported car fob that can open the
+// multi-button grid (transmittable + subghz_fob_can_emulate incl. the Honda-V3 /
+// Fiat-V1 guards). The guards read the captured .sub (history raw data) directly.
+static bool subghz_scene_receiver_info_can_emulate(SubGhz* subghz) {
+    if(!subghz_txrx_protocol_is_transmittable(subghz->txrx, false)) return false;
+    SubGhzProtocolDecoderBase* decoder = subghz_txrx_get_decoder(subghz->txrx);
+    if(!decoder || !decoder->protocol || !decoder->protocol->name) return false;
+    FlipperFormat* raw = subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen);
+    return subghz_fob_can_emulate(raw, decoder->protocol->name);
+}
+#endif
 
 // Returns true if the currently-loaded decoder is a rolling-code (dynamic)
 // protocol — the only case that offers the read-only Rolling-Code Analyzer.
@@ -252,10 +281,22 @@ void subghz_scene_receiver_info_draw_widget(SubGhz* subghz) {
                 subghz_scene_receiver_info_callback,
                 subghz);
         }
-        // Rolling-code captures get the Signal-ID hub on the free Left slot
-        // (Center=Send, Right=Save stay intact). The hub identifies the fob and
-        // offers the rolling analyzer / PSA brute as a "Details" spoke.
-        if(subghz_scene_receiver_info_is_dynamic(subghz)) {
+        // Left slot (Center=Send, Right=Save stay intact):
+        //  - a supported car fob (Kia/Ford/Honda/...) gets "Emul" -> the multi-button
+        //    rolling fob grid (the same emulator VAG/KeeLoq use), PRIVATE-only;
+        //  - otherwise a rolling-code capture gets the Signal-ID hub ("ID"), which
+        //    identifies the fob and offers the rolling analyzer / PSA brute.
+#ifndef PUBLIC_BUILD
+        if(subghz_scene_receiver_info_can_emulate(subghz)) {
+            widget_add_button_element(
+                subghz->widget,
+                GuiButtonTypeLeft,
+                "Emul",
+                subghz_scene_receiver_info_emulate_callback,
+                subghz);
+        } else
+#endif
+            if(subghz_scene_receiver_info_is_dynamic(subghz)) {
             widget_add_button_element(
                 subghz->widget,
                 GuiButtonTypeLeft,
@@ -342,6 +383,29 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
             // and offers the deeper rolling / PSA tool as a "Details" spoke.
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneAnalyze);
             return true;
+#ifndef PUBLIC_BUILD
+        } else if(event.event == SubGhzCustomEventSceneReceiverInfoEmulate) {
+            // Captured supported car fob -> open the multi-button rolling fob grid.
+            // Stop RX, re-parse (sets the txrx preset + decoder), copy the captured
+            // .sub-format frame into txrx fff_data (what the fob scene + TX path read),
+            // then hand off via the generic path.
+            subghz->state_notifications = SubGhzNotificationStateIDLE;
+            subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
+            subghz_txrx_stop(subghz->txrx);
+            if(!subghz_scene_receiver_info_update_parser(subghz)) {
+                return false;
+            }
+            Stream* dst = flipper_format_get_raw_stream(subghz_txrx_get_fff_data(subghz->txrx));
+            Stream* src = flipper_format_get_raw_stream(
+                subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen));
+            stream_clean(dst);
+            stream_rewind(src);
+            stream_copy_full(src, dst);
+            subghz->keeloq_fob_from_garage = true;
+            subghz->keeloq_fob_generic = true;
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
+            return true;
+#endif
         } else if(
             event.event == SubGhzCustomEventTpmsEditPressure ||
             event.event == SubGhzCustomEventTpmsEditTemperature ||

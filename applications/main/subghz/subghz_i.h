@@ -152,6 +152,16 @@ struct SubGhz {
     uint8_t car_keys_prev_car_mode;
     // TRUE when the fob scene is opened from a saved Garage clone (skip rebuild).
     bool keeloq_fob_from_garage;
+    // TRUE when the fob scene runs the GENERIC multi-button path (any supported car
+    // protocol other than the VAG/KeeLoq special cases) — its buttons come from
+    // subghz_fob_buttons() and the scene owns the counter advance/persist. Stays set
+    // for the scene's lifetime (press path reads it) and is cleared on scene exit.
+    bool keeloq_fob_generic;
+    // For the generic fob path: the FlipperFormat button field this protocol reads
+    // ("Btn"/"Button"/"BtnLo") and the on-screen title (protocol name). Persist for
+    // the app lifetime so the view may hold the title pointer without copying.
+    char keeloq_fob_field[16];
+    char keeloq_fob_title[24];
     // TRUE when the receiver was entered via "TPMS Spoofer": tune 433.92 FSK +
     // only list TPMS-sensor decodes (private-only scanner). See subghz_scene_receiver.c.
     bool tpms_scan_mode;
@@ -195,6 +205,15 @@ bool subghz_tx_start(SubGhz* subghz, FlipperFormat* flipper_format);
 void subghz_dialog_message_freq_error(SubGhz* subghz, bool only_rx);
 
 bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog);
+
+// True if a captured/saved fob of `proto` (already loaded into `fff`) should open
+// the multi-button rolling fob GRID rather than the plain transmitter: the
+// protocol must be subghz_fob_protocol_supported AND pass the per-family guards
+// (Honda V2&V3 whose decoded sub-variant is V3 bakes the button into the frame =
+// replay; Fiat V1 whose encoder aborts without a "Hitag2 Key" field). Callers that
+// take the grid must set keeloq_fob_generic + keeloq_fob_from_garage before
+// switching to SubGhzSceneKeeloqFob.
+bool subghz_fob_can_emulate(FlipperFormat* fff, const char* proto);
 bool subghz_get_next_name_file(SubGhz* subghz, uint8_t max_len);
 bool subghz_save_protocol_to_file(
     SubGhz* subghz,

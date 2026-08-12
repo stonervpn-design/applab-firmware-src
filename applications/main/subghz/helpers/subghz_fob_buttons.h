@@ -38,6 +38,13 @@ const SubGhzFobButton* subghz_fob_buttons(const char* protocol_name, size_t* out
 // table). False for replay-only / unsupported protocols.
 bool subghz_fob_protocol_supported(const char* protocol_name);
 
+// The FlipperFormat field name each protocol's encoder deserialize reads for the
+// button code (what the fob-emulate press path must write). Most protocols read
+// "Btn"; the Honda families differ: V5/V7/V8/V9 read "Button", V2&V3 reads
+// "BtnLo". Returns the matching field for a known protocol, or the "Btn" default
+// for any other (never NULL) — see the audit block in subghz_fob_buttons.c.
+const char* subghz_fob_button_field(const char* protocol_name);
+
 #ifdef __cplusplus
 }
 #endif
