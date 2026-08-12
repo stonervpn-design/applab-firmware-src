@@ -1,34 +1,11 @@
 #include "../subghz_i.h" // IWYU pragma: keep
 #include "../helpers/subghz_txrx_i.h"
+#include "../helpers/subghz_keeloq_registry.h"
 #include <lib/subghz/environment.h>
 #include <lib/subghz/subghz_keystore.h>
 #include <lib/subghz/protocols/keeloq_common.h>
 
 #define TAG "SubGhzKeeloqMfr"
-
-// Only these learning types have a real encode branch in the KeeLoq TX encoder
-// (subghz_protocol_keeloq_gen_data in lib/subghz/protocols/keeloq.c). For any
-// other type the encoder leaves hop=0 and silently transmits an invalid frame,
-// so those manufacturers must NOT be listed in the picker.
-//
-// Type 0 (KEELOQ_LEARNING_UNKNOWN) is deliberately excluded: in the encoder it
-// only produces a hop when the global keystore->kl_type flag is 1..4, which is
-// not a per-manufacturer property, so a plain name-based type-0 entry generates
-// a zero hop.
-static bool subghz_scene_keeloq_mfr_type_encodable(uint16_t type) {
-    switch(type) {
-    case KEELOQ_LEARNING_SIMPLE:
-    case KEELOQ_LEARNING_NORMAL:
-    case KEELOQ_LEARNING_SECURE:
-    case KEELOQ_LEARNING_MAGIC_XOR_TYPE_1:
-    case KEELOQ_LEARNING_MAGIC_SERIAL_TYPE_1:
-    case KEELOQ_LEARNING_MAGIC_SERIAL_TYPE_2:
-    case KEELOQ_LEARNING_MAGIC_SERIAL_TYPE_3:
-        return true;
-    default:
-        return false;
-    }
-}
 
 // Stable storage for the picked manufacturer name. GenInfo.keeloq.manuf is a
 // `const char*`, so it must point at memory that outlives this scene. The
@@ -60,7 +37,7 @@ void subghz_scene_keeloq_mfr_submenu_callback(void* context, uint32_t index) {
     const char* name = NULL;
     for
         M_EACH(key, *data, SubGhzKeyArray_t) {
-            if(!subghz_scene_keeloq_mfr_type_encodable(key->type)) {
+            if(!subghz_keeloq_registry_type_encodable(key->type)) {
                 continue;
             }
             if(i == index) {
@@ -101,7 +78,7 @@ void subghz_scene_keeloq_mfr_on_enter(void* context) {
     if(data != NULL) {
         for
             M_EACH(key, *data, SubGhzKeyArray_t) {
-                if(subghz_scene_keeloq_mfr_type_encodable(key->type)) {
+                if(subghz_keeloq_registry_type_encodable(key->type)) {
                     encodable_count++;
                 }
             }
@@ -126,7 +103,7 @@ void subghz_scene_keeloq_mfr_on_enter(void* context) {
     uint32_t index = 0;
     for
         M_EACH(key, *data, SubGhzKeyArray_t) {
-            if(!subghz_scene_keeloq_mfr_type_encodable(key->type)) {
+            if(!subghz_keeloq_registry_type_encodable(key->type)) {
                 continue;
             }
             submenu_add_item(
