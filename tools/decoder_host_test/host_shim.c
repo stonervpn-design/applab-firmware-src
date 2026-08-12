@@ -4,6 +4,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
+
+// Rolling-counter multiplier: real firmware default is 1 (feature disabled uses
+// the sentinel -0x7FFFFFFF). Return 1 so keeloq/honda encoders advance the
+// counter by the plain step, matching a stock device.
+int32_t furi_hal_subghz_get_rolling_counter_mult(void) {
+    return 1;
+}
 
 void __furi_crash_implementation(const char* message) {
     fprintf(stderr, "FURI CRASH: %s\n", message ? message : "(null)");
