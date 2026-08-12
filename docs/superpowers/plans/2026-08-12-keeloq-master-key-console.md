@@ -10,8 +10,24 @@
 
 ## Global Constraints
 
-- **PRIVATE build only.** All new UI is guarded `#ifndef PUBLIC_BUILD`. Public build and its no-car verify must stay green.
-- Build via the **PowerShell tool** running the `.bat` scripts (not Bash): `build_m5stick_s3.bat` (private), `build_adv_only_private.bat` (cardputer), `build_m5stick_s3_public.bat` (public). Success = `SENTINEL_OK` in the matching `.log`; a PowerShell exit-1 with `SENTINEL_OK` present is the known native-stderr artifact, not a failure. **Clean-reconfigure is automatic** in these scripts; when adding a new `.c`, the `reconfigure` step picks it up (CMake globs `applications/main/subghz`).
+- **PRIVATE build only — hard rule.** Every KeeLoq master key, car decoder, clone,
+  keystore asset, and all new console/attack UI in this plan is PRIVATE and stays
+  OFF the public build and the public webflasher. Public inclusion requires the
+  owner's explicit password authorization, which is **NOT granted** for this work.
+  Nothing here is authorized for public. All new UI is guarded `#ifndef PUBLIC_BUILD`.
+- **The public build is only ever compiled here to PROVE exclusion — never to ship
+  this content.** `build_m5stick_s3_public.bat` runs the automated no-car guard
+  (`SENTINEL_VERIFY_NOCAR` → `PASS: no car material ...`). A public build in this
+  plan means "confirm the public bin still EXCLUDES all of this," full stop. If the
+  no-car guard ever reports anything other than PASS, treat it as a leak and STOP.
+- Build via the **PowerShell tool** running the `.bat` scripts (not Bash):
+  `build_m5stick_s3.bat` (private — where this feature lives),
+  `build_adv_only_private.bat` (private cardputer),
+  `build_m5stick_s3_public.bat` (public — **exclusion check only**). Success =
+  `SENTINEL_OK` in the matching `.log`; a PowerShell exit-1 with `SENTINEL_OK`
+  present is the known native-stderr artifact, not a failure. **Clean-reconfigure is
+  automatic** in these scripts; when adding a new `.c`, the `reconfigure` step picks
+  it up (CMake globs `applications/main/subghz`).
 - Host tests run the ELF **inside WSL**: `wsl.exe -e bash -lc '...'`.
 - No new radio/TX stack. Generate/emulate reuse the existing `Gen*` byte-input flow and the standard txrx encoder path.
 - Keystore entry type is `SubGhzKey { FuriString* name; uint64_t key; uint16_t type; }`, iterated with `M_EACH(k, *subghz_keystore_get_data(keystore), SubGhzKeyArray_t)`.
@@ -336,7 +352,7 @@ git commit  # subject: "keeloq-console Task 4: unified catalog console (browse->
 
 - [ ] **Step 2: Add the Dictionary-attack spoke + no-match popup** — a new `#ifndef PUBLIC_BUILD` widget button (reuse a free slot; Center is taken by the car-fob Emul spoke, so use Right if free or a submenu row) that runs the key loop and shows the result or the honest no-match text.
 
-- [ ] **Step 3: Build private m5stick + public, verify both SENTINEL_OK** (public must still compile — the additions are `#ifndef PUBLIC_BUILD`).
+- [ ] **Step 3: Build private m5stick (feature target) + run the public exclusion check.** Private: `build_m5stick_s3.bat` → `SENTINEL_OK`. Public: `build_m5stick_s3_public.bat` is run ONLY to confirm this content stays OUT — verify `SENTINEL_OK` **and** `SENTINEL_VERIFY_NOCAR` → `PASS: no car material`. The public build must contain none of this (the additions are `#ifndef PUBLIC_BUILD`); a non-PASS no-car result = leak, STOP.
 
 - [ ] **Step 4: Commit**
 
@@ -352,9 +368,12 @@ git commit  # subject: "keeloq-console Task 5: Signal-ID naming + known-key dict
 **Files:**
 - Create: `docs/superpowers/plans/keeloq-console-report.md`
 
-- [ ] **Step 1: Build all three targets green**
+- [ ] **Step 1: Build the two PRIVATE feature targets green + run the public exclusion check**
 
-PowerShell, in order: `build_m5stick_s3.bat`, `build_adv_only_private.bat`, `build_m5stick_s3_public.bat`. Confirm `SENTINEL_OK` in each `.log` and `VERIFY_NOCAR` PASS in the public log.
+PowerShell, in order:
+- `build_m5stick_s3.bat` (private, feature target) → `SENTINEL_OK`.
+- `build_adv_only_private.bat` (private cardputer, feature target) → `SENTINEL_OK`.
+- `build_m5stick_s3_public.bat` — **exclusion check only, not a ship target**: confirm `SENTINEL_OK` **and** `SENTINEL_VERIFY_NOCAR` → `PASS: no car material in ...public-merged.bin`. This proves the KeeLoq/car content stays OUT of public. A non-PASS no-car result = leak → STOP and remove the leak before continuing.
 
 - [ ] **Step 2: Run the host tests**
 
