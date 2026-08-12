@@ -12,6 +12,7 @@ typedef enum {
     SubGhzSceneCarKeysVulns,
     SubGhzSceneCarKeysRollBack,
     SubGhzSceneCarKeysToolkit,
+    SubGhzSceneCarKeysKeeloqConsole,
 } SubGhzSceneCarKeysIndex;
 
 static void subghz_scene_car_keys_submenu_callback(void* context, uint32_t index) {
@@ -57,6 +58,12 @@ void subghz_scene_car_keys_on_enter(void* context) {
         SubGhzSceneCarKeysToolkit,
         subghz_scene_car_keys_submenu_callback,
         subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "KeeLoq Console (all keys)",
+        SubGhzSceneCarKeysKeeloqConsole,
+        subghz_scene_car_keys_submenu_callback,
+        subghz);
 
     submenu_set_selected_item(
         subghz->submenu,
@@ -86,6 +93,9 @@ bool subghz_scene_car_keys_on_event(void* context, SceneManagerEvent event) {
             return true;
         case SubGhzSceneCarKeysToolkit:
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneToolkit);
+            return true;
+        case SubGhzSceneCarKeysKeeloqConsole:
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqConsole);
             return true;
         default:
             break;

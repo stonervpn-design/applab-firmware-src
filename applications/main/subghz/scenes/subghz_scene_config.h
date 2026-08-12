@@ -35,6 +35,7 @@ ADD_SCENE(subghz, keeloq_fob, KeeloqFob)
 #ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, car_keys, CarKeys)
 ADD_SCENE(subghz, garage, Garage)
+ADD_SCENE(subghz, keeloq_console, KeeloqConsole)
 #endif
 ADD_SCENE(subghz, set_seed, SetSeed)
 ADD_SCENE(subghz, frequency_analyzer, FrequencyAnalyzer)
