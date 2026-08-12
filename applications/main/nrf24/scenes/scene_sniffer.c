@@ -65,6 +65,14 @@ typedef struct {
 
 static SnifferCtx* g_ctx = NULL;
 
+/* Abort-aware TX burst, defined in nrf24_capture_tx.c but deliberately not
+ * part of nrf24_capture.h's public surface (see that file's comment) --
+ * forward-declared here, its only caller. */
+extern void nrf24_capture_replay_abortable(
+    const Nrf24Capture* c,
+    uint8_t repeats,
+    volatile bool* abort);
+
 /* ---- CRC16-CCITT ESB frame decode (validate+extract half of nrf24_mj_core.c's
  * mj_fingerprint(); see file header comment for why this is duplicated here). */
 static uint16_t sniff_crc_update(uint16_t crc, uint8_t byte, uint8_t bits) {
@@ -198,13 +206,14 @@ static int32_t sniffer_scan_worker(void* context) {
     return 0;
 }
 
-/* ---- Replay worker: single blocking TX burst ---- */
+/* ---- Replay worker: TX burst, abortable via ctx->stop (the same flag the
+ * scan worker honors -- reused here rather than adding a second field) ---- */
 static int32_t sniffer_replay_worker(void* context) {
     SnifferCtx* ctx = context;
     const Nrf24Capture* c = nrf24_capture_get(ctx->replay_index);
     if(c) {
         Nrf24Capture snap = *c; /* stable copy: the store could keep evolving in theory */
-        nrf24_capture_replay(&snap, ctx->replay_repeats);
+        nrf24_capture_replay_abortable(&snap, ctx->replay_repeats, &ctx->stop);
     }
     ctx->replay_done = true;
     return 0;
@@ -387,6 +396,9 @@ bool nrf24_app_scene_sniffer_on_event(void* context, SceneManagerEvent event) {
            (event.event == SNIFF_EVT_REPLAY_1 || event.event == SNIFF_EVT_REPLAY_N)) {
             g_ctx->replay_repeats = (event.event == SNIFF_EVT_REPLAY_1) ? 1 : SNIFF_BURST_N;
             g_ctx->replay_done = false;
+            /* Clear a stale stop from an earlier scan/replay -- this worker's
+             * abort flag is the same field, and it must start unset. */
+            g_ctx->stop = false;
             scene_manager_set_scene_state(
                 app->scene_manager, Nrf24AppSceneSniffer, SniffStateReplaying);
             sniffer_build_replaying(app);
@@ -407,8 +419,13 @@ bool nrf24_app_scene_sniffer_on_event(void* context, SceneManagerEvent event) {
             return true;
         }
         if(state == SniffStateReplaying) {
-            /* Swallow: the burst is short (<=SNIFF_BURST_N frames) and finishes
-             * almost immediately; the Tick handler above returns to List. */
+            /* Abort the in-flight burst: reuse the scan worker's stop flag so
+             * sniffer_replay_worker's loop (via nrf24_capture_replay_abortable)
+             * breaks between sends instead of running to completion. Swallow
+             * the event -- the Tick handler above returns to List once
+             * replay_done flips (on_exit()'s join is the safety net either
+             * way). */
+            g_ctx->stop = true;
             return true;
         }
         /* Scanning or List: let scene_manager pop to the app menu. on_exit()
