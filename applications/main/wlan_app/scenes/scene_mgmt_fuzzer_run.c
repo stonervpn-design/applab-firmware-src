@@ -30,6 +30,12 @@
 // range (100-202) used by that header so it can never collide.
 #define MGMT_FUZZER_EVENT_TOGGLE 900
 
+// wlan_hal_send_raw() enforces a 128-byte TX ceiling (esp_wifi_80211_tx). The
+// mutator can emit up to WLAN_FUZZ_MAX (256); we truncate to this before TX so
+// every mutated frame actually reaches the air (a truncated malformed frame is
+// still a valid fuzz input) instead of being silently dropped.
+#define MGMT_FUZZER_TX_MAX 128
+
 // Frame-type index selected in scene_mgmt_fuzzer_config.c. Kept in sync by
 // hand with that file's MgmtFuzzerFrameType enum (no shared header exists
 // for this pair of files -- see that file's top-of-file comment).
@@ -48,6 +54,7 @@ static volatile uint32_t s_frames_sent = 0;
 static volatile uint32_t s_step = 0;
 static uint8_t s_frame_type_snap = 0;
 static uint8_t s_mode_snap = 0;
+static const char* s_err = NULL; // non-NULL => last start attempt failed (shown in UI)
 
 static void mgmt_fuzz_task_fn(void* arg) {
     WlanApp* app = arg;
@@ -108,12 +115,10 @@ static void mgmt_fuzz_task_fn(void* arg) {
         if(base_len >= 24 &&
            wlan_mgmt_fuzz_next(
                base, base_len, (WlanFuzzMode)s_mode_snap, seed, s_step, out, &out_len)) {
-            // wlan_hal_send_raw() enforces its own 128-byte TX ceiling
-            // (esp_wifi_80211_tx) and silently drops longer frames --
-            // s_frames_sent only counts what actually got queued for TX, so
-            // the counter stays honest about real airtime, not just mutator
-            // output. LenSweep/Random can produce out_len up to
-            // WLAN_FUZZ_MAX (256); those steps are silently skipped on air.
+            // Truncate to the 128-byte TX ceiling so LenSweep/Random steps that
+            // mutate up to WLAN_FUZZ_MAX (256) still transmit (see the TX_MAX
+            // comment above); s_frames_sent counts only frames actually queued.
+            if(out_len > MGMT_FUZZER_TX_MAX) out_len = MGMT_FUZZER_TX_MAX;
             if(wlan_hal_send_raw(out, out_len)) s_frames_sent++;
         }
         s_step++;
@@ -187,8 +192,11 @@ static void mgmt_fuzzer_run_rebuild(WlanApp* app) {
     widget_add_string_element(
         app->widget, 64, 30, AlignCenter, AlignTop, FontSecondary, counters_buf);
 
-    // On-air indicator, doubles as the OK-button hint.
-    const char* status = s_task_run ? "* ON AIR *  (OK: Stop)" : "Stopped  (OK: Start)";
+    // On-air indicator, doubles as the OK-button hint. If the last start
+    // attempt failed (HAL/OOM), surface that instead of "Stopped".
+    const char* status = s_task_run  ? "* ON AIR *  (OK: Stop)" :
+                         s_err        ? s_err :
+                                        "Stopped  (OK: Start)";
     widget_add_string_element(app->widget, 64, 41, AlignCenter, AlignTop, FontSecondary, status);
 
     // Honest-UI disclaimer, verbatim per spec.
@@ -217,6 +225,7 @@ void wlan_app_scene_mgmt_fuzzer_run_on_enter(void* context) {
     s_mode_snap = wlan_mgmt_fuzzer_mode;
     s_frames_sent = 0;
     s_step = 0;
+    s_err = NULL;
 
     mgmt_fuzzer_run_rebuild(app);
     widget_add_button_element(app->widget, GuiButtonTypeCenter, "Start", mgmt_fuzzer_ok_cb, app);
@@ -233,8 +242,11 @@ bool wlan_app_scene_mgmt_fuzzer_run_on_event(void* context, SceneManagerEvent ev
             // OK is a toggle: press once to start, press again to stop.
             if(s_task_run || s_task) {
                 mgmt_fuzzer_worker_stop();
+                s_err = NULL;
             } else {
-                mgmt_fuzzer_worker_start(app);
+                // Surface a start failure (radio won't come up / OOM) instead of
+                // silently re-rendering "Start" -- mirrors deauth's status msg.
+                s_err = mgmt_fuzzer_worker_start(app) ? NULL : "Radio start failed";
             }
             mgmt_fuzzer_run_rebuild(app);
             widget_add_button_element(
