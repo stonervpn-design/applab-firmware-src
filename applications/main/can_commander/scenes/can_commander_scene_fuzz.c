@@ -20,10 +20,23 @@ static const char* const can_fuzz_mode_txt[CFZ_MODE_COUNT] = {
     "FullRnd",
 };
 
+// TX rate, same set as can_commander_scene_periodic.c. The worker reads
+// app->tx_interval_ms (shared with Periodic); this row lets the operator pick
+// fast-flood vs slow-probe from within the fuzzer.
+static const uint32_t can_fuzz_intervals[] = {10, 20, 50, 100, 500};
+static const char* const can_fuzz_interval_txt[] = {"10ms", "20ms", "50ms", "100ms", "500ms"};
+
+static uint8_t can_fuzz_interval_index(uint32_t ms) {
+    for(uint8_t i = 0; i < 5; i++)
+        if(can_fuzz_intervals[i] == ms) return i;
+    return 3; // default 100ms
+}
+
 #define ROW_MODE 0
-#define ROW_ACTION 1
-#define ROW_STATS 2
-#define ROW_INFO 3
+#define ROW_INTERVAL 1
+#define ROW_ACTION 2
+#define ROW_STATS 3
+#define ROW_INFO 4
 
 // Single-instance app -> file-static handles/state are fine (same convention
 // as can_commander_scene_periodic.c's s_action_item).
@@ -70,6 +83,13 @@ static void can_fuzz_mode_changed(VariableItem* item) {
     uint8_t idx = variable_item_get_current_value_index(item);
     app->fuzz_mode = idx;
     variable_item_set_current_value_text(item, can_fuzz_mode_txt[idx]);
+}
+
+static void can_fuzz_interval_changed(VariableItem* item) {
+    CanCommanderApp* app = variable_item_get_context(item);
+    uint8_t idx = variable_item_get_current_value_index(item);
+    app->tx_interval_ms = can_fuzz_intervals[idx];
+    variable_item_set_current_value_text(item, can_fuzz_interval_txt[idx]);
 }
 
 static void can_fuzz_stop(CanCommanderApp* app) {
@@ -126,6 +146,11 @@ void can_commander_scene_fuzz_on_enter(void* context) {
     it = variable_item_list_add(vil, "Mode", CFZ_MODE_COUNT, can_fuzz_mode_changed, app);
     variable_item_set_current_value_index(it, app->fuzz_mode);
     variable_item_set_current_value_text(it, can_fuzz_mode_txt[app->fuzz_mode]);
+
+    uint8_t ii = can_fuzz_interval_index(app->tx_interval_ms);
+    it = variable_item_list_add(vil, "Interval", 5, can_fuzz_interval_changed, app);
+    variable_item_set_current_value_index(it, ii);
+    variable_item_set_current_value_text(it, can_fuzz_interval_txt[ii]);
 
     s_fuzz_action_item = variable_item_list_add(vil, "OK: Start/Stop", 1, NULL, app);
     variable_item_set_current_value_text(s_fuzz_action_item, app->fuzz_run ? "Running" : "Stopped");
