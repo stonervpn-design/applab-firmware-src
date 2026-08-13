@@ -41,4 +41,7 @@ ADD_SCENE(wlan_app, recon_menu, ReconMenu)
 // Protocol Fuzzer gating precedent (subghz_scene_config.h).
 ADD_SCENE(wlan_app, mgmt_fuzzer_config, MgmtFuzzerConfig)
 ADD_SCENE(wlan_app, mgmt_fuzzer_run, MgmtFuzzerRun)
+// Passive WPS recon (WF2) -- PRIVATE only. Same gating as the mgmt fuzzer
+// above.
+ADD_SCENE(wlan_app, wps_scan, WpsScan)
 #endif

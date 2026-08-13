@@ -15,6 +15,7 @@ enum MainIndex {
     MainIndexReconPlus = 16,
 #ifndef PUBLIC_BUILD
     MainIndexMgmtFuzzer = 17,
+    MainIndexWpsScan = 18,
 #endif
 };
 
@@ -80,6 +81,9 @@ void wlan_app_scene_main_on_enter(void* context) {
 #ifndef PUBLIC_BUILD
     submenu_add_item(
         app->submenu, "Mgmt Fuzzer", MainIndexMgmtFuzzer,
+        wlan_app_scene_main_submenu_cb, app);
+    submenu_add_item(
+        app->submenu, "WPS Scan", MainIndexWpsScan,
         wlan_app_scene_main_submenu_cb, app);
 #endif
 
@@ -166,6 +170,10 @@ bool wlan_app_scene_main_on_event(void* context, SceneManagerEvent event) {
 #ifndef PUBLIC_BUILD
         case MainIndexMgmtFuzzer:
             scene_manager_next_scene(app->scene_manager, WlanAppSceneMgmtFuzzerConfig);
+            consumed = true;
+            break;
+        case MainIndexWpsScan:
+            scene_manager_next_scene(app->scene_manager, WlanAppSceneWpsScan);
             consumed = true;
             break;
 #endif
