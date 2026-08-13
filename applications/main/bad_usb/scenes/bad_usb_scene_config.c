@@ -3,10 +3,19 @@
 enum ConfigIndex {
     ConfigIndexKeyboardLayout,
     ConfigIndexConnection,
+#ifndef PUBLIC_BUILD
+    ConfigIndexTargetOs, // USB1: operator-selected OS for IF_OS/SET_OS blocks
+#endif
 };
 
+#ifndef PUBLIC_BUILD
+#define CONFIG_INDEX_LAST_COMMON ConfigIndexTargetOs
+#else
+#define CONFIG_INDEX_LAST_COMMON ConfigIndexConnection
+#endif
+
 enum ConfigIndexBle {
-    ConfigIndexBlePersistPairing = ConfigIndexConnection + 1,
+    ConfigIndexBlePersistPairing = CONFIG_INDEX_LAST_COMMON + 1,
     ConfigIndexBlePairingMode,
     ConfigIndexBleSetDeviceName,
     ConfigIndexBleSetMacAddress,
@@ -16,12 +25,25 @@ enum ConfigIndexBle {
 };
 
 enum ConfigIndexUsb {
-    ConfigIndexUsbSetManufacturerName = ConfigIndexConnection + 1,
+    ConfigIndexUsbSetManufacturerName = CONFIG_INDEX_LAST_COMMON + 1,
     ConfigIndexUsbSetProductName,
     ConfigIndexUsbSetVidPid,
     ConfigIndexUsbRandomizeVidPid,
     ConfigIndexUsbRestoreDefaults,
 };
+
+#undef CONFIG_INDEX_LAST_COMMON
+
+#ifndef PUBLIC_BUILD
+static const char* const bad_usb_target_os_names[] = {"Windows", "Mac", "Linux"};
+
+void bad_usb_scene_config_target_os_callback(VariableItem* item) {
+    BadUsbApp* bad_usb = variable_item_get_context(item);
+    uint8_t index = variable_item_get_current_value_index(item);
+    bad_usb->target_os = (DuckyOs)index;
+    variable_item_set_current_value_text(item, bad_usb_target_os_names[index]);
+}
+#endif
 
 void bad_usb_scene_config_connection_callback(VariableItem* item) {
     BadUsbApp* bad_usb = variable_item_get_context(item);
@@ -87,6 +109,13 @@ static void draw_menu(BadUsbApp* bad_usb) {
     }
     variable_item_set_current_value_text(
         item, bad_usb->interface == BadUsbHidInterfaceBle ? "BLE" : "USB");
+
+#ifndef PUBLIC_BUILD
+    item = variable_item_list_add(
+        var_item_list, "Target OS", 3, bad_usb_scene_config_target_os_callback, bad_usb);
+    variable_item_set_current_value_index(item, bad_usb->target_os);
+    variable_item_set_current_value_text(item, bad_usb_target_os_names[bad_usb->target_os]);
+#endif
 
     if(bad_usb->interface == BadUsbHidInterfaceBle) {
         BleProfileHidExtParams* ble_hid_cfg = &bad_usb->script_hid_cfg.ble;

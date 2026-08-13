@@ -41,6 +41,9 @@ bool bad_usb_scene_work_on_event(void* context, SceneManagerEvent event) {
                 app->bad_usb_script = bad_usb_script_open(
                     app->file_path, &app->interface, &app->script_hid_cfg, false);
                 bad_usb_script_set_keyboard_layout(app->bad_usb_script, app->keyboard_layout);
+#ifndef PUBLIC_BUILD
+                bad_usb_script_set_target_os(app->bad_usb_script, app->target_os);
+#endif
             } else {
                 bad_usb_script_pause_resume(app->bad_usb_script);
             }
@@ -71,6 +74,9 @@ void bad_usb_scene_work_on_enter(void* context) {
     app->bad_usb_script = bad_usb_script_open(
         app->file_path, &app->interface, &app->script_hid_cfg, first_script_load);
     bad_usb_script_set_keyboard_layout(app->bad_usb_script, app->keyboard_layout);
+#ifndef PUBLIC_BUILD
+    bad_usb_script_set_target_os(app->bad_usb_script, app->target_os);
+#endif
     bad_usb_view_set_interface(app->bad_usb_view, app->interface);
 
     FuriString* file_name;

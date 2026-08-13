@@ -191,6 +191,24 @@ static int32_t ducky_parse_line(BadUsbScript* bad_usb, FuriString* line) {
     }
     FURI_LOG_D(WORKER_TAG, "line:%s", line_cstr);
 
+#ifndef PUBLIC_BUILD
+    // OS-conditional block hook (USB1, PRIVATE-only). `line_cstr` here is the
+    // raw trimmed line straight from the script (furi_string_trim only strips
+    // surrounding whitespace) — REM/etc. are not stripped anywhere upstream,
+    // they're just ordinary no-op entries in ducky_commands[]. So this is the
+    // first and only place a directive keyword (IF_OS/ELSE_OS/END_IF/SET_OS)
+    // is still guaranteed intact, and it runs strictly before ducky_execute_cmd.
+    DuckyCondResult cond_result = ducky_os_cond_eval(&bad_usb->os_cond, line_cstr);
+    if(cond_result == DUCKY_COND_DIRECTIVE || cond_result == DUCKY_COND_SKIP) {
+        return SCRIPT_STATE_NEXT_LINE; // Directive consumed, or line skipped by inactive branch
+    } else if(cond_result == DUCKY_COND_ERROR) {
+        // Malformed/unbalanced directive: safe no-op, never abort/crash the script.
+        FURI_LOG_W(WORKER_TAG, "OS-cond directive error at line: %s", line_cstr);
+        return SCRIPT_STATE_NEXT_LINE;
+    }
+    // DUCKY_COND_EXECUTE -> fall through to normal dispatch below
+#endif
+
     // Ducky Lang Functions
     int32_t cmd_result = ducky_execute_cmd(bad_usb, line_cstr);
     if(cmd_result != SCRIPT_STATE_CMD_UNKNOWN) {
@@ -511,6 +529,9 @@ static int32_t bad_usb_worker(void* context) {
                 bad_usb->key_hold_nb = 0;
                 bad_usb->file_end = false;
                 storage_file_seek(script_file, 0, true);
+#ifndef PUBLIC_BUILD
+                ducky_os_cond_reset(&bad_usb->os_cond, bad_usb->target_os);
+#endif
                 worker_state = BadUsbStateRunning;
                 bad_usb->st.elapsed = 0;
             } else if(flags & WorkerEvtDisconnect) {
@@ -535,6 +556,9 @@ static int32_t bad_usb_worker(void* context) {
                 bad_usb->repeat_cnt = 0;
                 bad_usb->file_end = false;
                 storage_file_seek(script_file, 0, true);
+#ifndef PUBLIC_BUILD
+                ducky_os_cond_reset(&bad_usb->os_cond, bad_usb->target_os);
+#endif
                 // extra time for PC to recognize Flipper as keyboard
                 flags = furi_thread_flags_wait(
                     WorkerEvtEnd | WorkerEvtDisconnect | WorkerEvtStartStop,
@@ -753,6 +777,11 @@ BadUsbScript* bad_usb_script_open(
     bad_usb->load_id_cfg = load_id_cfg;
     bad_usb->hid = bad_usb_hid_get_interface(*bad_usb->interface);
 
+#ifndef PUBLIC_BUILD
+    bad_usb->target_os = DUCKY_OS_WINDOWS;
+    ducky_os_cond_reset(&bad_usb->os_cond, bad_usb->target_os);
+#endif
+
     bad_usb->thread = furi_thread_alloc_ex("BadUsbWorker", 4096, bad_usb_worker, bad_usb);
     furi_thread_start(bad_usb->thread);
     return bad_usb;
@@ -790,6 +819,17 @@ void bad_usb_script_set_keyboard_layout(BadUsbScript* bad_usb, FuriString* layou
     }
     storage_file_free(layout_file);
 }
+
+#ifndef PUBLIC_BUILD
+void bad_usb_script_set_target_os(BadUsbScript* bad_usb, DuckyOs target_os) {
+    furi_assert(bad_usb);
+    bad_usb->target_os = target_os;
+    // Also re-arm the state machine immediately so it reflects the new
+    // selection even before the script (re)starts (e.g. set right after open,
+    // before the operator presses OK).
+    ducky_os_cond_reset(&bad_usb->os_cond, bad_usb->target_os);
+}
+#endif
 
 void bad_usb_script_start_stop(BadUsbScript* bad_usb) {
     furi_assert(bad_usb);

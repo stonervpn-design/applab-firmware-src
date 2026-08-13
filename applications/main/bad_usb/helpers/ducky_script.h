@@ -8,6 +8,10 @@ extern "C" {
 #include <furi_hal.h>
 #include "bad_usb_hid.h"
 
+#ifndef PUBLIC_BUILD
+#include "ducky_os_cond.h" // DuckyOs (PRIVATE-only, USB1)
+#endif
+
 typedef enum {
     BadUsbStateInit,
     BadUsbStateNotConnected,
@@ -44,6 +48,12 @@ BadUsbScript* bad_usb_script_open(
 void bad_usb_script_close(BadUsbScript* bad_usb);
 
 void bad_usb_script_set_keyboard_layout(BadUsbScript* bad_usb, FuriString* layout_path);
+
+#ifndef PUBLIC_BUILD
+// Operator-selected default target OS for IF_OS/ELSE_OS/END_IF/SET_OS blocks.
+// Applied on the next script (re)start. PRIVATE-only (USB1).
+void bad_usb_script_set_target_os(BadUsbScript* bad_usb, DuckyOs target_os);
+#endif
 
 void bad_usb_script_start(BadUsbScript* bad_usb);
 

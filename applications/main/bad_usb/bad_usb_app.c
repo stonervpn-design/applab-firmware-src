@@ -37,6 +37,10 @@ static void bad_usb_load_settings(BadUsbApp* app) {
     hid_cfg->usb.pid = 0;
     hid_cfg->usb.manuf[0] = '\0';
     hid_cfg->usb.product[0] = '\0';
+
+#ifndef PUBLIC_BUILD
+    app->target_os = DUCKY_OS_WINDOWS;
+#endif
 }
 
 static void bad_usb_save_settings(BadUsbApp* app) {

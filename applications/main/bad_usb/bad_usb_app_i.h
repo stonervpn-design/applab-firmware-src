@@ -19,6 +19,10 @@
 #include <furi_hal_usb.h>
 #include <storage/storage.h>
 
+#ifndef PUBLIC_BUILD
+#include "helpers/ducky_os_cond.h" // DuckyOs (PRIVATE-only, USB1)
+#endif
+
 #define BAD_USB_APP_BASE_FOLDER        EXT_PATH("badusb")
 #define BAD_USB_APP_PATH_LAYOUT_FOLDER BAD_USB_APP_BASE_FOLDER "/assets/layouts"
 #define BAD_USB_APP_SCRIPT_EXTENSION   ".txt"
@@ -55,6 +59,10 @@ struct BadUsbApp {
     BadUsbHidConfig user_hid_cfg;
     BadUsbHidConfig script_hid_cfg;
     FuriHalUsbInterface* usb_if_prev;
+
+#ifndef PUBLIC_BUILD
+    DuckyOs target_os; // operator-selected Target OS for IF_OS/SET_OS blocks (USB1)
+#endif
 };
 
 typedef enum {

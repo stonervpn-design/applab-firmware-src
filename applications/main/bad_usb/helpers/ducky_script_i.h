@@ -9,6 +9,10 @@ extern "C" {
 #include "ducky_script.h"
 #include "bad_usb_hid.h"
 
+#ifndef PUBLIC_BUILD
+#include "ducky_os_cond.h" // OS-conditional block state machine (PRIVATE-only, USB1)
+#endif
+
 #define SCRIPT_STATE_ERROR        (-1)
 #define SCRIPT_STATE_END          (-2)
 #define SCRIPT_STATE_NEXT_LINE    (-3)
@@ -48,6 +52,11 @@ struct BadUsbScript {
 
     FuriString* string_print;
     size_t string_print_pos;
+
+#ifndef PUBLIC_BUILD
+    DuckyOs target_os; // operator-selected default OS, applied on each script (re)start
+    DuckyOsCondState os_cond; // IF_OS/ELSE_OS/END_IF/SET_OS block skip state (USB1)
+#endif
 };
 
 uint16_t ducky_get_keycode(BadUsbScript* bad_usb, const char* param, bool accept_modifiers);
