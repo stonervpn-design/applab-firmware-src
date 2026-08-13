@@ -60,14 +60,16 @@ DuckyCondResult ducky_os_cond_eval(DuckyOsCondState* st, const char* line) {
         const char* arg = skip_spaces(p + toklen);
         size_t arglen = strcspn(arg, " ");
         DuckyOs os;
-        if(!parse_os(arg, arglen, &os)) return DUCKY_COND_ERROR;
-
+        bool ok = parse_os(arg, arglen, &os);
+        // FAIL-CLOSED on a malformed/unknown OS name: still push a frame, but one
+        // that never matches, so the guarded body is SKIPPED (not run on every OS)
+        // and its END_IF stays balanced. Return ERROR so the typo is still logged.
         bool parent_execute = (st->depth == 0) ? true : st->execute[st->depth - 1];
-        st->matched[st->depth] = (os == st->target_os);
+        st->matched[st->depth] = ok && (os == st->target_os);
         st->in_else[st->depth] = false;
         st->execute[st->depth] = parent_execute && st->matched[st->depth];
         st->depth++;
-        return DUCKY_COND_DIRECTIVE;
+        return ok ? DUCKY_COND_DIRECTIVE : DUCKY_COND_ERROR;
     }
 
     if(token_eq(p, toklen, "ELSE_OS")) {

@@ -51,10 +51,26 @@ static void test_malformed_and_unbalanced(void) {
     DuckyOsCondState st; ducky_os_cond_reset(&st, DUCKY_OS_WINDOWS);
     assert(ducky_os_cond_eval(&st, "END_IF") == DUCKY_COND_ERROR);   /* unbalanced */
     assert(ducky_os_cond_eval(&st, "ELSE_OS") == DUCKY_COND_ERROR);  /* unbalanced */
-    assert(ducky_os_cond_eval(&st, "IF_OS BSD") == DUCKY_COND_ERROR);/* bad os */
-    assert(ducky_os_cond_eval(&st, "SET_OS ZZZ") == DUCKY_COND_ERROR);
-    assert(ducky_os_cond_eval(&st, "IF_OSX WINDOWS") == DUCKY_COND_EXECUTE); /* not a directive */
+    assert(ducky_os_cond_eval(&st, "SET_OS ZZZ") == DUCKY_COND_ERROR); /* bad os */
+    /* near-miss token is NOT a directive (fresh state, depth 0 -> EXECUTE) */
+    ducky_os_cond_reset(&st, DUCKY_OS_WINDOWS);
+    assert(ducky_os_cond_eval(&st, "IF_OSX WINDOWS") == DUCKY_COND_EXECUTE);
     printf("test_malformed_and_unbalanced OK\n");
+}
+
+/* A malformed IF_OS must FAIL CLOSED: it still pushes a never-matching frame so
+ * the guarded body is SKIPPED (not run on every OS) and END_IF stays balanced. */
+static void test_bad_if_os_fails_closed(void) {
+    const char* s[] = {"IF_OS MACOSX", "danger", "END_IF", "after", 0};
+    char out[32]; run(s, DUCKY_OS_LINUX, out);
+    assert(strcmp(out, "a") == 0); /* only "after" runs; "danger" skipped (run() = first chars) */
+    /* the IF_OS returns ERROR (typo logged) but the stack still balances */
+    DuckyOsCondState st; ducky_os_cond_reset(&st, DUCKY_OS_LINUX);
+    assert(ducky_os_cond_eval(&st, "IF_OS BSD") == DUCKY_COND_ERROR);
+    assert(ducky_os_cond_eval(&st, "x") == DUCKY_COND_SKIP);        /* body skipped */
+    assert(ducky_os_cond_eval(&st, "END_IF") == DUCKY_COND_DIRECTIVE); /* balanced pop */
+    assert(ducky_os_cond_eval(&st, "y") == DUCKY_COND_EXECUTE);     /* back to active */
+    printf("test_bad_if_os_fails_closed OK\n");
 }
 
 static void test_overnest(void) {
@@ -68,6 +84,7 @@ static void test_overnest(void) {
 int main(void) {
     test_basic_if(); test_no_else(); test_nested(); test_set_os();
     test_malformed_and_unbalanced(); test_overnest();
+    test_bad_if_os_fails_closed();
     printf("test_ducky_os_cond: ALL PASS\n");
     return 0;
 }
