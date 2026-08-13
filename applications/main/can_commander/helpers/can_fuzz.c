@@ -1,5 +1,4 @@
 #include "can_fuzz.h"
-#include <string.h>
 
 /* splitmix32 -- small, fast, deterministic PRNG step. Same constants as
  * components/fuzz_core/fuzzer_mutate.c's fuzz_rng() / nrf24_fuzz.c's
@@ -17,6 +16,12 @@ void can_fuzz_next(const CanFrame* base, CanFuzzMode mode, uint32_t seed, uint32
     if(!base || !out) return; /* NULL base/out: safe no-op */
 
     *out = *base; /* carries id/extended/rtr/dlc/data */
+
+    /* Clamp dlc BEFORE any data[] indexing below: a malformed base (dlc>8,
+     * which the uint8_t field permits) would otherwise index out->data[]
+     * (CAN_MAX_DATA==8) out of bounds in the BITFLIP/DATA_RANDOM paths. The
+     * trailing clamp guards the sweep/random paths that reassign dlc. */
+    if(out->dlc > 8) out->dlc = 8;
 
     uint32_t st = seed ^ (step * 0x9E3779B9u);
 

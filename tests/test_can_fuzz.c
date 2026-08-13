@@ -68,12 +68,26 @@ static void test_null_guards(void) {
     printf("test_null_guards OK\n");
 }
 
+/* A malformed base with dlc>8 (the uint8_t field permits it) must never cause
+ * out-of-bounds data[] indexing; dlc is clamped to <=8 before any use. */
+static void test_malformed_base_dlc_clamped(void) {
+    CanFrame b = mk_base();
+    b.dlc = 200; /* invalid, but representable */
+    for(int m = 0; m < CFZ_MODE_COUNT; m++) {
+        CanFrame x;
+        can_fuzz_next(&b, (CanFuzzMode)m, 0x1, 5, &x); /* must not corrupt memory */
+        assert(x.dlc <= 8);
+    }
+    printf("test_malformed_base_dlc_clamped OK\n");
+}
+
 int main(void) {
     test_valid_and_deterministic();
     test_bitflip_one_data_bit();
     test_id_sweep_bounds();
     test_dlc_sweep_cycle();
     test_null_guards();
+    test_malformed_base_dlc_clamped();
     printf("test_can_fuzz: ALL PASS\n");
     return 0;
 }
