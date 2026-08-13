@@ -13,6 +13,9 @@ enum MainIndex {
     MainIndexChannelEvilPortal = 14,
     MainIndexUpdateSd = 15,
     MainIndexReconPlus = 16,
+#ifndef PUBLIC_BUILD
+    MainIndexMgmtFuzzer = 17,
+#endif
 };
 
 static void wlan_app_scene_main_submenu_cb(void* context, uint32_t index) {
@@ -74,6 +77,11 @@ void wlan_app_scene_main_on_enter(void* context) {
     submenu_add_item(
         app->submenu, "Recon+", MainIndexReconPlus,
         wlan_app_scene_main_submenu_cb, app);
+#ifndef PUBLIC_BUILD
+    submenu_add_item(
+        app->submenu, "Mgmt Fuzzer", MainIndexMgmtFuzzer,
+        wlan_app_scene_main_submenu_cb, app);
+#endif
 
     view_dispatcher_switch_to_view(app->view_dispatcher, WlanAppViewSubmenu);
 }
@@ -155,6 +163,12 @@ bool wlan_app_scene_main_on_event(void* context, SceneManagerEvent event) {
             scene_manager_next_scene(app->scene_manager, WlanAppSceneReconMenu);
             consumed = true;
             break;
+#ifndef PUBLIC_BUILD
+        case MainIndexMgmtFuzzer:
+            scene_manager_next_scene(app->scene_manager, WlanAppSceneMgmtFuzzerConfig);
+            consumed = true;
+            break;
+#endif
         }
     }
 
