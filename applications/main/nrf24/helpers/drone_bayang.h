@@ -78,11 +78,12 @@ uint8_t drone_bayang_checksum(const uint8_t* pkt, uint8_t len);
 void drone_bayang_build_bind(const uint8_t txid[3], uint8_t out[BAYANG_PKT_LEN]);
 
 /* Build a 15-byte Bayang control packet for `txid` + the 4 axes + `flags`
- * into `out`. Each axis is clamped to [0, BAYANG_AXIS_MAX] BEFORE packing
- * (so out-of-range/absurd inputs, e.g. 0xFFFF, can never overflow the
- * packed field or the output buffer). NULL out is a safe no-op; NULL txid
- * packs 0x00 for all 3 txid bytes. `out` is always exactly BAYANG_PKT_LEN
- * bytes; never written past. */
+ * into `out`. Each axis is clamped to the documented [0, BAYANG_AXIS_MAX]
+ * protocol range before packing (so absurd inputs like 0xFFFF stay in the
+ * field's documented 10-bit range). Buffer safety is independent of the
+ * clamp: fixed byte indices + per-byte masks mean no input writes outside
+ * `out`. NULL out is a safe no-op; NULL txid packs 0x00 for all 3 txid
+ * bytes. `out` is always exactly BAYANG_PKT_LEN bytes; never written past. */
 void drone_bayang_build_control(
     const uint8_t txid[3],
     uint16_t throttle,

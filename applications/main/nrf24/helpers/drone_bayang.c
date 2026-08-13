@@ -11,10 +11,13 @@
 
 #include <string.h>
 
-/* Clamp one axis value into the documented [0, BAYANG_AXIS_MAX] range
- * BEFORE packing, so absurd inputs (e.g. 0xFFFF) can never make the packed
- * 10-bit-in-16-bit field exceed its documented range or otherwise corrupt
- * neighboring bytes. */
+/* Clamp one axis value into the documented [0, BAYANG_AXIS_MAX] protocol
+ * range before packing, so absurd inputs (e.g. 0xFFFF) stay within the
+ * field's documented 10-bit range. NOTE: buffer/neighbor-byte safety does
+ * NOT depend on this clamp -- the packers write each field with fixed byte
+ * indices and per-byte masks (out[k]=(v>>8)&0xFF; out[k+1]=v&0xFF), so no
+ * input can write outside its own two byte slots regardless of value. This
+ * clamp only enforces the protocol range, not memory safety. */
 static uint16_t bayang_clamp_axis(uint16_t v) {
     return (v > BAYANG_AXIS_MAX) ? (uint16_t)BAYANG_AXIS_MAX : v;
 }
