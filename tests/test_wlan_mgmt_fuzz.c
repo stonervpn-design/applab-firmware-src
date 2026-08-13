@@ -53,8 +53,23 @@ static void test_guards(void) {
     printf("test_guards OK\n");
 }
 
+/* IE_MANGLE at base_len==24 (no IE region): must be a safe same-length
+ * passthrough (no div-by-zero, no mutation past the 24-byte header). */
+static void test_ie_mangle_minlen_passthrough(void) {
+    uint8_t base[24]; uint16_t bn = 24;
+    memset(base, 0, sizeof(base));
+    base[0] = 0xB0;
+    for(int i = 4; i < 22; i++) base[i] = (uint8_t)i;
+    uint8_t out[WLAN_FUZZ_MAX]; uint16_t lo;
+    assert(wlan_mgmt_fuzz_next(base, bn, WMF_IE_MANGLE, 0x55, 9, out, &lo));
+    assert(lo == 24);
+    assert(memcmp(out, base, 24) == 0); /* unchanged -- no IE bytes to mangle */
+    printf("test_ie_mangle_minlen_passthrough OK\n");
+}
+
 int main(void) {
     test_determinism(); test_bitflip_one_bit(); test_lensweep_bounds(); test_guards();
+    test_ie_mangle_minlen_passthrough();
     printf("test_wlan_mgmt_fuzz: ALL PASS\n");
     return 0;
 }

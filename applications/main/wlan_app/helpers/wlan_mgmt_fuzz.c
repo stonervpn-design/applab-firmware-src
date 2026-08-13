@@ -47,8 +47,11 @@ bool wlan_mgmt_fuzz_next(
         uint32_t field = sm32(&st) % 4u;
         uint32_t v = sm32(&st);
         switch(field) {
-        case 0: /* frame-control: OR a random subtype into the upper nibble; stays mgmt-type */
-            out[0] = (uint8_t)(out[0] | (v & 0xF0u));
+        case 0: /* frame-control: replace the upper nibble (subtype) with a random
+                 * one; clear-then-set so it can reach ALL subtypes, not just
+                 * bit-supersets of the base. Low nibble (type+version) untouched
+                 * so the frame stays a management frame. */
+            out[0] = (uint8_t)((out[0] & 0x0Fu) | (v & 0xF0u));
             break;
         case 1: /* duration */
             out[2] = (uint8_t)v;
@@ -80,7 +83,9 @@ bool wlan_mgmt_fuzz_next(
     }
     case WMF_RANDOM:
     default: {
-        /* header (out[0..23]) already carried over by the memcpy above. */
+        /* default is a deliberate fallback: any out-of-range WlanFuzzMode is
+         * treated as WMF_RANDOM rather than left unmutated / uninitialized.
+         * header (out[0..23]) already carried over by the memcpy above. */
         uint16_t L = (uint16_t)(24u + (sm32(&st) % (uint32_t)(WLAN_FUZZ_MAX - 24 + 1)));
         for(uint16_t i = 24; i < L; i++) out[i] = (uint8_t)sm32(&st);
         *out_len = L;
