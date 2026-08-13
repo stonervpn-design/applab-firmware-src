@@ -76,3 +76,14 @@ checksum, bind≠control, channel-hop ≤125 across all 256 txid seeds, absurd-i
 Host-consistency + build-gate + symbol-exclusion verified. **Not tested against a real Bayang
 receiver.** Next step is YOURS: bind to an actual Bayang quad. Fly → I extend to Syma/ESB/V2x2;
 no fly → capture + debug the flagged transcription points.
+
+### On-air debug checklist (if it doesn't bind), highest-likelihood first
+1. **Control-phase address (most likely culprit — flagged by final review):** the worker sets
+   the radio address once to the all-zero `bind_addr` and in CONTROL only changes channel, never
+   switching to a **txid-derived data-phase address**. Real Bayang re-addresses after bind. If bind
+   half-works but control doesn't, this is almost certainly why — add a `tx_setup_ex` with the
+   data-phase address at the bind→control transition.
+2. **RF channel-hop derivation** — the `%126` placeholder is not the real Bayang hop rule.
+3. **Bind channel `0x4B` + all-zero bind address** — verify against `bayang.c`.
+4. **Checksum `+0x55` seed** and **axis byte offsets** — verify against the source.
+5. **PHY** (1 Mbps / CRC16) — confirm the clone chip actually locked 1 Mbps (no RF_SETUP read-back).
