@@ -12,8 +12,8 @@ Tree is ALREADY ~95% complete across every surface (full Sub-GHz car/rolling/Kee
 ## Genuine feasible gaps + status
 | # | Surface | Feature | Status |
 |---|---------|---------|--------|
-| WF1 | WiFi | 802.11 management-frame fuzzer (malformed beacon/probe/assoc/auth) | IN PROGRESS (mapping plumbing) |
-| CAN1 | CAN | CAN fuzzer engine (extend can_commander: mutate ID/DLC/payload, abort+rate) | TODO |
+| WF1 | WiFi | 802.11 management-frame fuzzer (malformed beacon/probe/assoc/auth) | ✅ DONE (branch feat/redteam-gapfill; 10 commits; private m5stick+cardputer green, public 0 syms, host tests pass, final review APPROVED; HW-deferred) |
+| CAN1 | CAN | CAN fuzzer engine (extend can_commander: mutate ID/DLC/payload, abort+rate) | IN PROGRESS (map done; spec drafting). NOTE: can_commander already private via fam_config.py APPS-exclusion (no in-source gate). can_hal_stats() gives REAL TWAI bus-off/error state for honest indicator. |
 | USB1 | BadUSB | OS-fingerprint conditional autorun (payload branches on host OS) | TODO |
 | WF2 | WiFi | WPS PIN / Pixie-Dust attack | TODO (ESP32-injection-limited; scope carefully) |
 | ND1 | nRF24 | Drone/RC hijack Bayang/Syma/ESB/V2x2 from PUBLIC formats, labeled untested-vs-vectors | TODO (user opted into no-reference build) |
