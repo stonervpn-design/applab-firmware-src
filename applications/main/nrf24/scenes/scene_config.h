@@ -14,4 +14,6 @@ ADD_SCENE(nrf24_app, sniffer, Sniffer)
 ADD_SCENE(nrf24_app, keysniffer, KeySniffer)
 // Fuzzer -- mutated-frame TX blaster (nrf24_fuzz + nrf24_capture), private only.
 ADD_SCENE(nrf24_app, fuzz, Fuzz)
+// Drone (Bayang) -- toy-quadcopter bind/control (drone_bayang), private only.
+ADD_SCENE(nrf24_app, drone_bayang, DroneBayang)
 #endif
