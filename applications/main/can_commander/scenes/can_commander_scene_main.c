@@ -32,6 +32,8 @@ void can_commander_scene_main_on_enter(void* context) {
         CanCommanderEvtSettings,
         can_commander_scene_main_submenu_cb,
         app);
+    submenu_add_item(
+        app->submenu, "Fuzzer", CanCommanderEvtFuzz, can_commander_scene_main_submenu_cb, app);
     view_dispatcher_switch_to_view(app->view_dispatcher, CanViewSubmenu);
 }
 
@@ -59,6 +61,10 @@ bool can_commander_scene_main_on_event(void* context, SceneManagerEvent event) {
             break;
         case CanCommanderEvtSettings:
             scene_manager_next_scene(app->scene_manager, CanCommanderSceneSettings);
+            consumed = true;
+            break;
+        case CanCommanderEvtFuzz:
+            scene_manager_next_scene(app->scene_manager, CanCommanderSceneFuzz);
             consumed = true;
             break;
         default:

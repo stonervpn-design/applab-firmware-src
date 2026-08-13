@@ -66,6 +66,13 @@ struct CanCommanderApp {
     volatile uint32_t tx_count;
     CanFrame tx_frame;
 
+    // Fuzz worker (mirrors the periodic TX worker above)
+    FuriThread* fuzz_thread;
+    volatile bool fuzz_run;
+    volatile uint32_t fuzz_count;
+    uint8_t fuzz_mode; // CanFuzzMode (see helpers/can_fuzz.h); stored as a
+        // plain uint8_t so this header doesn't need to include can_fuzz.h
+
     // Presets (loaded from SD)
     CanFrame presets[CAN_PRESET_MAX];
     char preset_names[CAN_PRESET_MAX][CAN_PRESET_NAME_LEN];

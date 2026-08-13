@@ -6,6 +6,7 @@ typedef enum {
     CanCommanderEvtMonitor,
     CanCommanderEvtPresets,
     CanCommanderEvtSettings,
+    CanCommanderEvtFuzz,
     CanCommanderEvtFrameEntered, // text input committed a frame string
     CanCommanderEvtPresetNameEntered, // text input committed a preset name
     CanCommanderEvtMonitorTick, // refresh monitor view
