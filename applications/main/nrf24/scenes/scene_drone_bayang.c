@@ -106,15 +106,25 @@ static int32_t drone_bayang_worker(void* context) {
     const uint8_t bind_ch = 0x4B; /* UNVERIFIED: canonical Bayang bind channel */
 
     nrf24_hw_init();
-    nrf24_hw_acquire();
+
+    /* Bus-hold discipline: acquire the SPI mutex only around each register op
+     * (setup / set_channel / tx_send), NOT for the whole flight session -- the
+     * chip keeps its PHY config in-register across a bus release, so the mutex
+     * is free during every inter-frame delay. Matches nrf24_tx_raw / mj_scan's
+     * per-op granularity; important on shared-SPI boards (e.g. T-Embed CC1101,
+     * where nRF24 shares SPI2 with the LCD) so live Tick redraw isn't starved. */
 
     /* ---- BIND phase ---- */
     ctx->phase = DroneBayangPhaseBind;
+    nrf24_hw_acquire();
     nrf24_hw_tx_setup_ex(bind_addr, 5, bind_ch, BAYANG_PKT_LEN, 0 /*1Mbps*/, true /*crc16*/);
+    nrf24_hw_release();
     uint32_t bind_start = furi_get_tick();
     while(!ctx->stop && (furi_get_tick() - bind_start) < DRONE_BIND_MS) {
         drone_bayang_build_bind(ctx->txid, pkt);
+        nrf24_hw_acquire();
         nrf24_hw_tx_send(pkt, BAYANG_PKT_LEN);
+        nrf24_hw_release();
         ctx->bind_frames++;
         furi_delay_ms(DRONE_TX_DELAY_MS);
     }
@@ -124,9 +134,6 @@ static int32_t drone_bayang_worker(void* context) {
         ctx->phase = DroneBayangPhaseControl;
         uint8_t ch_idx = 0;
         while(!ctx->stop) {
-            nrf24_hw_set_channel(ctx->rf_ch[ch_idx]);
-            ch_idx = (uint8_t)((ch_idx + 1) % BAYANG_RF_NUM_CH);
-
             drone_bayang_build_control(
                 ctx->txid,
                 ctx->axis[DroneAxisThr],
@@ -135,13 +142,16 @@ static int32_t drone_bayang_worker(void* context) {
                 ctx->axis[DroneAxisRoll],
                 ctx->flags,
                 pkt);
+            nrf24_hw_acquire();
+            nrf24_hw_set_channel(ctx->rf_ch[ch_idx]);
             nrf24_hw_tx_send(pkt, BAYANG_PKT_LEN);
+            nrf24_hw_release();
+            ch_idx = (uint8_t)((ch_idx + 1) % BAYANG_RF_NUM_CH);
             ctx->ctrl_frames++;
             furi_delay_ms(DRONE_TX_DELAY_MS);
         }
     }
 
-    nrf24_hw_release();
     nrf24_hw_deinit();
 
     ctx->done = true;
