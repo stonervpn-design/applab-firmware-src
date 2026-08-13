@@ -16,6 +16,15 @@ int main(void) {
     n = wlan_build_beacon(out, sizeof(out), bssid, "AP", 6);
     assert(n > 36); assert(out[0] == 0x80);
     uint8_t bc[6]={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF}; assert(memcmp(out+4, bc, 6)==0);
+    /* header 24 + timestamp 8 (24-31) + interval 2 (32-33) + capability 2 (34-35) */
+    assert(out[34]==0x11 && out[35]==0x00); /* capability info: ESS+Privacy (LE) */
+    /* cap-too-small returns 0 for probe + beacon too (not just deauth) */
+    assert(wlan_build_probe_req(out, 10, src, "Test") == 0);
+    assert(wlan_build_beacon(out, 10, bssid, "AP", 6) == 0);
+    /* oversized SSID (>32) is clamped, never overflows */
+    char big[64]; memset(big, 'X', sizeof(big)); big[63] = 0;
+    n = wlan_build_beacon(out, sizeof(out), bssid, big, 1);
+    assert(n == 47 + 32); /* SSID clamped to 32 */
     printf("test_wlan_mgmt_frames: ALL PASS\n");
     return 0;
 }

@@ -60,8 +60,8 @@ uint16_t
     memset(&out[i], 0, 8); i += 8; /* timestamp */
     out[i++] = 0x64; /* beacon interval: 100 TU */
     out[i++] = 0x00;
-    out[i++] = 0x01; /* capability info: ESS + Privacy */
-    out[i++] = 0x04;
+    out[i++] = 0x11; /* capability info (LE): ESS (bit0) + Privacy (bit4) */
+    out[i++] = 0x00;
     /* SSID tag */
     out[i++] = 0x00;
     out[i++] = (uint8_t)ssid_len;
