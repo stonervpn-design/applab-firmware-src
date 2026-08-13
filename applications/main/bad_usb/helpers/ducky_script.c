@@ -199,6 +199,11 @@ static int32_t ducky_parse_line(BadUsbScript* bad_usb, FuriString* line) {
     // first and only place a directive keyword (IF_OS/ELSE_OS/END_IF/SET_OS)
     // is still guaranteed intact, and it runs strictly before ducky_execute_cmd.
     DuckyCondResult cond_result = ducky_os_cond_eval(&bad_usb->os_cond, line_cstr);
+    // Record whether this line was an OS-cond directive so REPEAT never replays
+    // one (replaying IF_OS/END_IF/etc. would double-push/pop and desync the block
+    // stack -> silent wrong-branch). A directive is not a repeatable keystroke.
+    bad_usb->os_cond_cur_directive =
+        (cond_result == DUCKY_COND_DIRECTIVE || cond_result == DUCKY_COND_ERROR);
     if(cond_result == DUCKY_COND_DIRECTIVE || cond_result == DUCKY_COND_SKIP) {
         return SCRIPT_STATE_NEXT_LINE; // Directive consumed, or line skipped by inactive branch
     } else if(cond_result == DUCKY_COND_ERROR) {
@@ -381,6 +386,14 @@ static int32_t ducky_script_execute_next(BadUsbScript* bad_usb, File* script_fil
 
     if(bad_usb->repeat_cnt > 0) {
         bad_usb->repeat_cnt--;
+#ifndef PUBLIC_BUILD
+        if(bad_usb->os_cond_prev_directive) {
+            // The line being repeated is an OS-cond directive -- replaying it would
+            // corrupt the block-skip stack. Directives aren't repeatable keystrokes,
+            // so burn the repeat as a no-op instead (USB1).
+            return 0;
+        }
+#endif
         delay_val = ducky_parse_line(bad_usb, bad_usb->line_prev);
         if(delay_val == SCRIPT_STATE_NEXT_LINE) { // Empty line
             return 0;
@@ -398,6 +411,11 @@ static int32_t ducky_script_execute_next(BadUsbScript* bad_usb, File* script_fil
     }
 
     furi_string_set(bad_usb->line_prev, bad_usb->line);
+#ifndef PUBLIC_BUILD
+    // line_prev now holds the just-parsed line; carry its directive-ness forward
+    // so a following REPEAT can tell it must not replay a directive.
+    bad_usb->os_cond_prev_directive = bad_usb->os_cond_cur_directive;
+#endif
     furi_string_reset(bad_usb->line);
 
     while(1) {
@@ -780,6 +798,8 @@ BadUsbScript* bad_usb_script_open(
 #ifndef PUBLIC_BUILD
     bad_usb->target_os = DUCKY_OS_WINDOWS;
     ducky_os_cond_reset(&bad_usb->os_cond, bad_usb->target_os);
+    bad_usb->os_cond_cur_directive = false;
+    bad_usb->os_cond_prev_directive = false;
 #endif
 
     bad_usb->thread = furi_thread_alloc_ex("BadUsbWorker", 4096, bad_usb_worker, bad_usb);

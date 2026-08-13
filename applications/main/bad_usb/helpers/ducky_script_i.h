@@ -56,6 +56,8 @@ struct BadUsbScript {
 #ifndef PUBLIC_BUILD
     DuckyOs target_os; // operator-selected default OS, applied on each script (re)start
     DuckyOsCondState os_cond; // IF_OS/ELSE_OS/END_IF/SET_OS block skip state (USB1)
+    bool os_cond_cur_directive; // did the last parsed line resolve to an OS-cond directive?
+    bool os_cond_prev_directive; // ...and the line before it (line_prev) — REPEAT guard
 #endif
 };
 
