@@ -67,6 +67,3 @@ void nrf24_tx_raw(
     const uint8_t* payload,
     uint8_t len,
     uint8_t repeats);
-
-/* Thin wrapper: replay a stored capture as-is. No-op if `c` is NULL. */
-void nrf24_capture_replay(const Nrf24Capture* c, uint8_t repeats);

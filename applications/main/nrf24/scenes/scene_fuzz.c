@@ -31,7 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define FUZZ_TX_DELAY_MS 20 /* bounded TX rate: ~50 frames/sec */
+#define FUZZ_TX_DELAY_MS 20 /* per-iteration loop-delay ceiling; real on-air rate
+                             * is lower -- nrf24_tx_raw re-inits the radio each call */
 #define FUZZ_MODE_COUNT  4 /* N24F_BITFLIP..N24F_RANDOM */
 
 typedef enum {

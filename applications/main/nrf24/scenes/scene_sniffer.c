@@ -6,9 +6,9 @@
  * ce(false)+set_channel()+ce(true) hop dance) but captures EVERY CRC-valid
  * ESB frame (Task 1's nrf24_capture store), not just MouseJack vendor hits.
  * mj_fingerprint() bundles CRC-validate + vendor-match in one call with no
- * way to get just the validate+extract half, so sniffer_decode_frame() below
- * duplicates that half of nrf24_mj_core.c's mj_fingerprint() decode math
- * on purpose, to avoid touching the shared mj_core files from this task.
+ * way to get just the validate+extract half, so the validate+extract math
+ * lives in the shared helpers/nrf24_esb.c (nrf24_esb_decode_frame()), used by
+ * both this scene and scene_keysniffer.c.
  *
  * One scene, four internal UI states (scene_manager_set_scene_state), same
  * technique as camera_hunter_scene_results.c:
@@ -22,6 +22,7 @@
 #include "../nrf24_app.h"
 #include "../nrf24_hw.h"
 #include "../helpers/nrf24_capture.h"
+#include "../helpers/nrf24_esb.h"
 
 #include <furi.h>
 #include <esp_rom_sys.h>
@@ -73,71 +74,6 @@ extern void nrf24_capture_replay_abortable(
     uint8_t repeats,
     volatile bool* abort);
 
-/* ---- CRC16-CCITT ESB frame decode (validate+extract half of nrf24_mj_core.c's
- * mj_fingerprint(); see file header comment for why this is duplicated here). */
-static uint16_t sniff_crc_update(uint16_t crc, uint8_t byte, uint8_t bits) {
-    crc = crc ^ ((uint16_t)byte << 8);
-    while(bits--) {
-        if((crc & 0x8000) == 0x8000) {
-            crc = (uint16_t)((crc << 1) ^ 0x1021);
-        } else {
-            crc = (uint16_t)(crc << 1);
-        }
-    }
-    return crc & 0xFFFF;
-}
-
-static bool sniffer_decode_frame(
-    const uint8_t* raw_buf,
-    uint8_t size,
-    uint8_t* out_addr, /* 5 bytes */
-    uint8_t* out_payload, /* 32 bytes */
-    uint8_t* out_len) {
-    if(size < 10) return false;
-    if(size > 37) size = 37;
-
-    uint8_t buf[37];
-    /* Try both 0xAA and 0x55 preamble alignments, same as mj_fingerprint(). */
-    for(int offset = 0; offset < 2; offset++) {
-        memcpy(buf, raw_buf, size);
-        if(offset == 1) {
-            for(int x = size - 1; x >= 0; x--) {
-                if(x > 0) {
-                    buf[x] = (uint8_t)((buf[x - 1] << 7) | (buf[x] >> 1));
-                } else {
-                    buf[x] = (uint8_t)(buf[x] >> 1);
-                }
-            }
-        }
-
-        uint8_t payload_length = buf[5] >> 2;
-        if(payload_length == 0 || payload_length > 32) continue;
-        if(payload_length > (uint8_t)(size - 9)) continue;
-
-        uint16_t crc_given = ((uint16_t)buf[6 + payload_length] << 9) |
-                             ((uint16_t)buf[7 + payload_length] << 1);
-        crc_given = (uint16_t)((crc_given << 8) | (crc_given >> 8));
-        if(buf[8 + payload_length] & 0x80) crc_given |= 0x0100;
-
-        uint16_t crc_calc = 0xFFFF;
-        for(int x = 0; x < 6 + payload_length; x++) {
-            crc_calc = sniff_crc_update(crc_calc, buf[x], 8);
-        }
-        crc_calc = sniff_crc_update(crc_calc, buf[6 + payload_length] & 0x80, 1);
-        crc_calc = (uint16_t)((crc_calc << 8) | (crc_calc >> 8));
-
-        if(crc_calc != crc_given) continue;
-
-        memcpy(out_addr, buf, 5);
-        for(int x = 0; x < payload_length; x++) {
-            out_payload[x] = (uint8_t)(((buf[6 + x] << 1) & 0xFF) | (buf[7 + x] >> 7));
-        }
-        *out_len = payload_length;
-        return true;
-    }
-    return false;
-}
-
 /* ---- Scan worker: hop + capture (mirrors scene_mj_scan.c's mj_scan_worker) ---- */
 static int32_t sniffer_scan_worker(void* context) {
     SnifferCtx* ctx = context;
@@ -178,7 +114,7 @@ static int32_t sniffer_scan_worker(void* context) {
                     uint8_t addr[5];
                     uint8_t payload[32];
                     uint8_t len = 0;
-                    if(sniffer_decode_frame(buf, sizeof(buf), addr, payload, &len)) {
+                    if(nrf24_esb_decode_frame(buf, sizeof(buf), addr, payload, &len)) {
                         Nrf24Capture cap;
                         memset(&cap, 0, sizeof(cap));
                         memcpy(cap.addr, addr, sizeof(cap.addr));

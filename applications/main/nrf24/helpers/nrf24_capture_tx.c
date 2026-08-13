@@ -50,11 +50,6 @@ void nrf24_tx_raw(
     nrf24_tx_raw_ex(addr, chan, payload, len, repeats, NULL);
 }
 
-void nrf24_capture_replay(const Nrf24Capture* c, uint8_t repeats) {
-    if(c == NULL) return;
-    nrf24_tx_raw(c->addr, c->channel, c->payload, c->len, repeats);
-}
-
 /* Abort-aware variant used by scene_sniffer.c's Replaying state so Back can
  * cut a burst short mid-flight. Not part of nrf24_capture.h's public surface
  * (forward-declared directly in scene_sniffer.c, the only caller) since it's
