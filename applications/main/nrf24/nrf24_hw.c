@@ -45,6 +45,7 @@
 #define NRF_CONFIG_PWR_UP  0x02
 #define NRF_CONFIG_PRIM_RX 0x01
 #define NRF_CONFIG_EN_CRC  0x08
+#define NRF_CONFIG_CRCO    0x04 /* 1 = 16-bit CRC, 0 = 8-bit (only meaningful with EN_CRC) */
 
 #define NRF_STATUS_RX_DR    0x40
 #define NRF_STATUS_TX_DS    0x20
@@ -624,6 +625,50 @@ void nrf24_hw_tx_setup(
     nrf24_hw_cmd(NRF_CMD_FLUSH_TX);
     nrf24_hw_cmd(NRF_CMD_FLUSH_RX);
 }
+
+#ifndef PUBLIC_BUILD
+/* Superset of nrf24_hw_tx_setup with a selectable data rate + CRC mode (see
+ * header). PRIVATE-only -- does not affect nrf24_hw_tx_setup, which stays
+ * fixed at 2 Mbps/CRC-off for the public MouseJack path. */
+void nrf24_hw_tx_setup_ex(
+    const uint8_t* addr,
+    uint8_t addr_len,
+    uint8_t channel,
+    uint8_t payload_len,
+    uint8_t data_rate,
+    bool crc16) {
+    if(addr_len < 3) addr_len = 3;
+    if(addr_len > 5) addr_len = 5;
+    if(payload_len > 32) payload_len = 32;
+
+    furi_hal_gpio_write(&nrf24_ce, false);
+
+    /* PWR_UP, TX (PRIM_RX=0); CRC per crc16 (EN_CRC + CRCO=1 for 16-bit, or
+     * off entirely to match nrf24_hw_tx_setup's default). */
+    uint8_t config = NRF_CONFIG_PWR_UP;
+    if(crc16) config |= NRF_CONFIG_EN_CRC | NRF_CONFIG_CRCO;
+    nrf24_hw_write_reg(NRF_REG_CONFIG, config);
+    nrf24_hw_write_reg(NRF_REG_EN_AA, 0x00);
+    nrf24_hw_write_reg(NRF_REG_EN_RXADDR, 0x01);
+    /* SETUP_AW: 1=3byte, 2=4byte, 3=5byte */
+    nrf24_hw_write_reg(NRF_REG_SETUP_AW, addr_len - 2);
+    nrf24_hw_write_reg(NRF_REG_SETUP_RETR, 0x00);
+    nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
+    /* RF_SETUP: requested data rate, PA max, LNA enable -- same byte-builder
+     * used by the jammer/flood paths (data_rate 0=1M/1=2M/2=250k). */
+    nrf24_hw_write_reg(NRF_REG_RF_SETUP, nrf24_rf_setup_byte(data_rate, 3 /* PA max */, false));
+    nrf24_hw_write_reg(NRF_REG_DYNPD, 0x00);
+    nrf24_hw_write_reg(NRF_REG_FEATURE, 0x00);
+
+    nrf24_hw_write_buf(NRF_REG_TX_ADDR, addr, addr_len);
+    nrf24_hw_write_buf(NRF_REG_RX_ADDR_P0, addr, addr_len);
+    nrf24_hw_write_reg(NRF_REG_RX_PW_P0, payload_len);
+
+    nrf24_hw_write_reg(NRF_REG_STATUS, NRF_STATUS_RX_DR | NRF_STATUS_TX_DS | NRF_STATUS_MAX_RT);
+    nrf24_hw_cmd(NRF_CMD_FLUSH_TX);
+    nrf24_hw_cmd(NRF_CMD_FLUSH_RX);
+}
+#endif /* !PUBLIC_BUILD */
 
 bool nrf24_hw_tx_send(const uint8_t* data, uint8_t len) {
     if(len > 32) len = 32;

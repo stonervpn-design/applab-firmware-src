@@ -159,6 +159,28 @@ void nrf24_hw_tx_setup(
     uint8_t channel,
     uint8_t payload_len);
 
+#ifndef PUBLIC_BUILD
+/* As nrf24_hw_tx_setup, but with an explicit data rate and CRC mode instead of
+ * the fixed 2 Mbps/CRC-off used by the public MouseJack path. For protocols
+ * that require a specific PHY (e.g. Bayang-protocol toy drones: 1 Mbps,
+ * 16-bit CRC on):
+ *   - data_rate: 0=1 Mbps, 1=2 Mbps, 2=250 kbps (same encoding as elsewhere
+ *     in this module).
+ *   - crc16: true enables CRC (EN_CRC) in 16-bit mode (CRCO=1); false leaves
+ *     CRC off entirely, matching nrf24_hw_tx_setup's default.
+ * PA is left at max, same as nrf24_hw_tx_setup. Everything else (address,
+ * RX_PW_P0, PWR_UP, PRIM_RX=0 for TX, CE handling) is identical.
+ * Must be wrapped in acquire/release. PRIVATE-only: not present in public
+ * builds. */
+void nrf24_hw_tx_setup_ex(
+    const uint8_t* addr,
+    uint8_t addr_len,
+    uint8_t channel,
+    uint8_t payload_len,
+    uint8_t data_rate,
+    bool crc16);
+#endif /* !PUBLIC_BUILD */
+
 /* Send a single payload (no ACK, no retransmit). Caller is responsible for
  * vendor-specific retransmit looping. Returns true if the TX FIFO accepted
  * the write and the PLL settled.
