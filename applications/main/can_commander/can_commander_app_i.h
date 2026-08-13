@@ -70,8 +70,10 @@ struct CanCommanderApp {
     FuriThread* fuzz_thread;
     volatile bool fuzz_run;
     volatile uint32_t fuzz_count;
-    uint8_t fuzz_mode; // CanFuzzMode (see helpers/can_fuzz.h); stored as a
-        // plain uint8_t so this header doesn't need to include can_fuzz.h
+    volatile uint8_t fuzz_mode; // CanFuzzMode (see helpers/can_fuzz.h); stored as
+        // a plain uint8_t so this header doesn't need to include can_fuzz.h.
+        // volatile: the worker reads it each loop while the UI thread can change
+        // the Mode row live (matches fuzz_run/fuzz_count).
 
     // Presets (loaded from SD)
     CanFrame presets[CAN_PRESET_MAX];
