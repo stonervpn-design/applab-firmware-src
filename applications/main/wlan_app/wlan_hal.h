@@ -74,8 +74,9 @@ void wlan_hal_set_channel(uint8_t channel);
  *  und kann NULL sein (z.B. zum bloßen Channel-Setzen). */
 void wlan_hal_set_promiscuous(bool enable, wifi_promiscuous_cb_t cb);
 
-/** Sende einen rohen 802.11-Frame (für Deauth/Disassoc) via
- *  esp_wifi_80211_tx(). Frame-Länge bis 64 Bytes. */
+/** Sende einen rohen 802.11-Frame (für Deauth/Disassoc/Mgmt-Fuzzer) via
+ *  esp_wifi_80211_tx(). Frame-Länge bis 128 Bytes (len > 128 wird verworfen,
+ *  siehe send_raw.buf[128] in wlan_hal.c). Rückgabe false, wenn nicht gesendet. */
 bool wlan_hal_send_raw(const uint8_t* data, uint16_t len);
 
 /** Generischer Worker-Hook: ruft fn(arg) im wlan-Worker-Task auf und blockt
