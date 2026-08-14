@@ -90,6 +90,7 @@ static const SubGhzProtocol* const subghz_protocol_registry_items_automotive[] =
     &subghz_protocol_peugot_v0,      &subghz_protocol_renault_v1,
     &subghz_protocol_renault_v2,     &subghz_protocol_renault_v3,
     &subghz_protocol_renault_v4,     &subghz_protocol_toyota_v0,
+    &toyota_keeloq_protocol,
 #else
     &subghz_protocol_raw,
     &subghz_protocol_bin_raw,

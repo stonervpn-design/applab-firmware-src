@@ -136,3 +136,4 @@
 #include "renault_v3.h"
 #include "renault_v4.h"
 #include "toyota_v0.h"
+#include "toyota_keeloq.h"
