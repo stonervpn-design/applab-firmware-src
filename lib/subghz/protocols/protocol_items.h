@@ -94,6 +94,7 @@
 #include "kia_v6.h"
 #include "kia_v7.h"
 #include "land_rover_v0.h"
+#include "land_rover_rke.h"
 #include "mazda_v0.h"
 #include "mitsubishi_v0.h"
 #include "porsche_touareg.h"
