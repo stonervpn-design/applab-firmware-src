@@ -4,7 +4,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define NRF24_JAM_MODE_COUNT 10
+#ifndef PUBLIC_BUILD
+#define NRF24_JAM_MODE_COUNT 10 /* + BLE Reactive (private) */
+#else
+#define NRF24_JAM_MODE_COUNT 9 /* public: no reactive */
+#endif
 
 /* Simple mode-list jammer model (Bruce-base + concentration/noise improvements). */
 typedef struct {

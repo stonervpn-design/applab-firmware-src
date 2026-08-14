@@ -16,7 +16,10 @@ static const char* const MODE_NAMES[NRF24_JAM_MODE_COUNT] = {
     "USB",
     "Video",
     "Full Band",
-    "BLE Reactive"};
+#ifndef PUBLIC_BUILD
+    "BLE Reactive",
+#endif
+};
 
 const char* nrf24_jam_mode_name(int mode) {
     return MODE_NAMES[(mode >= 0 && mode < NRF24_JAM_MODE_COUNT) ? mode : 0];
@@ -27,7 +30,12 @@ bool nrf24_jam_mode_is_flood(int mode) {
 }
 
 bool nrf24_jam_mode_is_reactive(int mode) {
+#ifndef PUBLIC_BUILD
     return mode == 9; /* BLE Reactive: RPD-triggered CW, not flood/plain-CW */
+#else
+    (void)mode;
+    return false;
+#endif
 }
 
 /* Scrolling list nav — selected row shows ">" (or "*" when jamming) + strategy;

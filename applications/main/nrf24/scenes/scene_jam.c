@@ -51,6 +51,7 @@ static JamCtx* g_ctx = NULL;
 /* One reactive pass over the 3 BLE advertising channels: listen on RPD, and the
  * instant a carrier appears fire a short CW pulse, then retune to the next adv
  * channel. Runs inside the acquired bus. */
+#ifndef PUBLIC_BUILD
 static void jam_reactive_pass(JamCtx* ctx) {
     static const uint8_t BLE_ADV[3] = {2, 26, 80};
     for(int k = 0; k < 3 && !ctx->stop && ctx->desired_running &&
@@ -75,6 +76,7 @@ static void jam_reactive_pass(JamCtx* ctx) {
         nrf24_hw_ce(false);
     }
 }
+#endif
 
 static int32_t jam_worker(void* context) {
     JamCtx* ctx = context;
@@ -92,7 +94,9 @@ static int32_t jam_worker(void* context) {
         {CH_USB, sizeof(CH_USB)},         /* 6 USB         */
         {CH_VIDEO, sizeof(CH_VIDEO)},     /* 7 Video       */
         {NULL, 0},                        /* 8 Full Band   */
+#ifndef PUBLIC_BUILD
         {CH_BLE_ADV, sizeof(CH_BLE_ADV)}, /* 9 BLE Reactive (jam_reactive_pass drives its own hop) */
+#endif
     };
 
     nrf24_hw_init();
@@ -164,9 +168,12 @@ static int32_t jam_worker(void* context) {
 
         if(active) {
             nrf24_hw_acquire();
+#ifndef PUBLIC_BUILD
             if(reactive) {
                 jam_reactive_pass(ctx);
-            } else {
+            } else
+#endif
+            {
                 uint32_t end = furi_get_tick() + (BATCH_MS * hz) / 1000;
                 while(!ctx->stop && ctx->desired_running && ctx->mode == mi &&
                       furi_get_tick() < end) {
