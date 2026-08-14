@@ -223,6 +223,26 @@ static const char* roundtrip(const SubGhzProtocol* proto, void* dec, const char*
                                       (int)level_duration_get_duration(ld) :
                                       -(int)level_duration_get_duration(ld);
             }
+            // Physical-RF fidelity: a real TX/RX only sees level TRANSITIONS, so
+            // two consecutive same-level LevelDuration entries physically MERGE
+            // into a single pulse. Coalesce same-sign runs before re-decoding so
+            // the round-trip catches encoders that emit adjacent same-level pulses
+            // (which the decoder tolerates when fed the raw list, but which corrupt
+            // the on-air waveform). A correct clone must survive this merge.
+            {
+                size_t mn = 0;
+                for(size_t k = 0; k < en; k++) {
+                    if(mn > 0 && ((edurs[k] < 0) == (edurs[mn - 1] < 0))) {
+                        int sign = edurs[mn - 1] < 0 ? -1 : 1;
+                        long mag = (long)abs(edurs[mn - 1]) + (long)abs(edurs[k]);
+                        if(mag > 2000000000L) mag = 2000000000L;
+                        edurs[mn - 1] = sign * (int)mag;
+                    } else {
+                        edurs[mn++] = edurs[k];
+                    }
+                }
+                en = mn;
+            }
             if(en > 0) {
                 FuriString* rs = furi_string_alloc();
                 if(feed_decode(proto, edurs, en, rs)) {
