@@ -39,7 +39,10 @@
 
 #define JEEP_V0_DATA_BITS     96
 #define JEEP_V0_MIN_PREAMBLE  16
+#define JEEP_V0_PREAMBLE_BITS 20
 #define JEEP_V0_TOTAL_BURSTS  4
+// Preamble(20) + sync(1) + data(96) bits, up to 2 pulses/bit + finish + gap.
+#define JEEP_V0_UPLOAD_CAP    400
 
 #define JEEP_V0_BTN_UNLOCK    0x8104
 #define JEEP_V0_BTN_LOCK      0x8044
@@ -375,10 +378,7 @@ void* subghz_protocol_encoder_jeep_v0_alloc(SubGhzEnvironment* environment) {
     instance->base.protocol = &subghz_protocol_jeep_v0;
     instance->generic.protocol_name = instance->base.protocol->name;
     instance->encoder.repeat = JEEP_V0_TOTAL_BURSTS;
-    // Preamble(20*2) + sync(8*2) + data(96*2) + gap = ~250
-    // 23 bytes (10 preamble + 1 sync + 8 data + 4 hop) * 16 Manchester entries + end
-    // gap = 369 entries; the byte encoder has no bounds check, so allocate above that.
-    instance->encoder.size_upload = 400;
+    instance->encoder.size_upload = JEEP_V0_UPLOAD_CAP;
     instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
     instance->encoder.is_running = false;
     return instance;
@@ -391,60 +391,70 @@ void subghz_protocol_encoder_jeep_v0_free(void* context) {
     free(instance);
 }
 
-static size_t jeep_v0_manchester_encode_byte(
-    LevelDuration* upload, size_t index, uint8_t byte_val, uint32_t te,
-    bool* last_level, size_t cap) {
-    for(int bit = 7; bit >= 0; bit--) {
-        bool b = (byte_val >> bit) & 1;
-        if(b) {
-            // Manchester 1: LOW→HIGH
-            if(index < cap) upload[index++] = level_duration_make(false, te);
-            if(index < cap) upload[index++] = level_duration_make(true, te);
-            *last_level = true;
-        } else {
-            // Manchester 0: HIGH→LOW
-            if(index < cap) upload[index++] = level_duration_make(true, te);
-            if(index < cap) upload[index++] = level_duration_make(false, te);
-            *last_level = false;
-        }
+static LevelDuration
+    jeep_v0_res_to_ld(ManchesterEncoderResult result, uint32_t te_s, uint32_t te_l) {
+    switch(result) {
+    case ManchesterEncoderResultShortLow:
+        return level_duration_make(false, te_s);
+    case ManchesterEncoderResultLongLow:
+        return level_duration_make(false, te_l);
+    case ManchesterEncoderResultLongHigh:
+        return level_duration_make(true, te_l);
+    case ManchesterEncoderResultShortHigh:
+    default:
+        return level_duration_make(true, te_s);
     }
-    return index;
 }
 
+/*
+ * Rebuild the on-air waveform the decoder consumes. The decoder counts short
+ * preamble pulses, then keys off the FIRST long pulse to enter Manchester data
+ * decode; that long only appears where the toolbox Manchester encoder MERGES two
+ * same-level half-bits (a 1->0 transition), so we must drive that encoder rather
+ * than emit raw half-bit pairs. The decoder also stores ~bits (generic.data =
+ * ~decode_data), so the air bits are the bitwise inverse of the stored frame.
+ * Layout: [PREAMBLE ones][one sync 0-bit -> long][96 data bits, inverted].
+ */
 static void jeep_v0_build_upload(SubGhzProtocolEncoderJeepV0* instance) {
     furi_assert(instance);
+    LevelDuration* up = instance->encoder.upload;
+    const size_t cap = JEEP_V0_UPLOAD_CAP;
     size_t index = 0;
-    const size_t enc_cap = 400;
-    uint32_t te = subghz_protocol_jeep_v0_const.te_short;
-    bool last_level = false;
+    uint32_t te_s = subghz_protocol_jeep_v0_const.te_short;
+    uint32_t te_l = subghz_protocol_jeep_v0_const.te_long;
 
-    // Preamble: 10 bytes of 0xFF
-    for(int i = 0; i < 10; i++) {
-        index = jeep_v0_manchester_encode_byte(
-            instance->encoder.upload, index, 0xFF, te, &last_level, enc_cap);
-    }
+    ManchesterEncoderState enc;
+    manchester_encoder_reset(&enc);
+    ManchesterEncoderResult result;
 
-    // Sync: 0xFE
-    index = jeep_v0_manchester_encode_byte(
-        instance->encoder.upload, index, 0xFE, te, &last_level, enc_cap);
+#define JEEP_V0_PUSH_BIT(bitv)                                             \
+    do {                                                                   \
+        bool _b = (bitv);                                                  \
+        if(!manchester_encoder_advance(&enc, _b, &result)) {               \
+            if(index < cap) up[index++] = jeep_v0_res_to_ld(result, te_s, te_l); \
+            manchester_encoder_advance(&enc, _b, &result);                 \
+        }                                                                  \
+        if(index < cap) up[index++] = jeep_v0_res_to_ld(result, te_s, te_l); \
+    } while(0)
 
-    // Data: 8 bytes from generic.data (B0-B7)
-    for(int i = 7; i >= 0; i--) {
-        uint8_t byte_val = (instance->generic.data >> (i * 8)) & 0xFF;
-        index = jeep_v0_manchester_encode_byte(
-            instance->encoder.upload, index, byte_val, te, &last_level, enc_cap);
-    }
+    // Preamble: one-bits (all short pulses); >= JEEP_V0_MIN_PREAMBLE required.
+    for(int i = 0; i < JEEP_V0_PREAMBLE_BITS; i++) JEEP_V0_PUSH_BIT(true);
+    // Sync: a single 0-bit yields the long pulse the decoder transitions on.
+    JEEP_V0_PUSH_BIT(false);
 
-    // Data: 4 bytes from data_32 (B8-B11)
-    for(int i = 3; i >= 0; i--) {
-        uint8_t byte_val = (instance->data_32 >> (i * 8)) & 0xFF;
-        index = jeep_v0_manchester_encode_byte(
-            instance->encoder.upload, index, byte_val, te, &last_level, enc_cap);
-    }
+    // Data: 96 inverted bits, MSB-first. B0-B7 from generic.data, B8-B11 from hop.
+    uint64_t inv_data = ~instance->generic.data;
+    uint32_t inv_hop = ~instance->data_32;
+    for(int i = 63; i >= 0; i--) JEEP_V0_PUSH_BIT((inv_data >> i) & 1);
+    for(int i = 31; i >= 0; i--) JEEP_V0_PUSH_BIT((inv_hop >> i) & 1);
+
+    // Flush the final Manchester half-bit.
+    if(index < cap) up[index++] = jeep_v0_res_to_ld(manchester_encoder_finish(&enc), te_s, te_l);
+
+#undef JEEP_V0_PUSH_BIT
 
     // End gap
-    if(index < enc_cap)
-        instance->encoder.upload[index++] = level_duration_make(false, 78000);
+    if(index < cap) up[index++] = level_duration_make(false, 78000);
 
     instance->encoder.size_upload = index;
 }

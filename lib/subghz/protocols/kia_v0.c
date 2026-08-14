@@ -27,6 +27,7 @@ static const SubGhzBlockConst kia_protocol_v0_const = {
 
 #define KIA_V0_SUZUKI_GAP      2000U
 #define KIA_V0_SUZUKI_GAP_SPAN 500U
+#define KIA_V0_SUZUKI_END_GAP_US 12000U
 
 #define KIA_V0_TYPE1_SYNC           750U
 #define KIA_V0_TYPE1_PREAMBLE_PAIRS 0x13FU
@@ -531,19 +532,36 @@ static void kia_v0_build_kia_upload(SubGhzProtocolEncoderKIA* instance, uint64_t
 #ifdef ENABLE_EMULATE_FEATURE
 
 static void kia_v0_build_suzuki_upload(SubGhzProtocolEncoderKIA* instance, uint64_t shifted) {
+    LevelDuration* upload = instance->encoder.upload;
+    const uint32_t te_short = (uint32_t)kia_protocol_v0_const.te_short;
+    const uint32_t te_long = (uint32_t)kia_protocol_v0_const.te_long;
     size_t index = 0;
 
-    index =
-        kia_v0_append_short_pairs(instance->encoder.upload, index, KIA_V0_TYPE2_PREAMBLE_PAIRS);
+    // Preamble: te_short HIGH/LOW pairs (decoder requires preamble_pairs > 14).
+    index = kia_v0_append_short_pairs(upload, index, KIA_V0_TYPE2_PREAMBLE_PAIRS);
+
+    // Preamble terminator: a te_long HIGH/LOW pair. In the Preamble step the
+    // decoder treats a long/long pair as the sync, resets its accumulator, injects
+    // the two leading '1' bits, and switches to the data step. So only the low
+    // 62 bits of the 64-bit shifted key are carried on the wire (the top two bits
+    // 0b11 come from the injected pair -- the Suzuki key always has 0xF... on top).
+    upload[index++] = level_duration_make(true, te_long);
+    upload[index++] = level_duration_make(false, te_long);
+
     index = kia_v0_append_data_pairs(
-        instance->encoder.upload, index, shifted, KIA_V0_BIT_COUNT_SUZUKI);
-    instance->encoder.upload[index++] = level_duration_make(false, KIA_V0_SUZUKI_GAP);
-    instance->encoder.upload[index++] = level_duration_make(true, KIA_V0_SUZUKI_GAP);
-    instance->encoder.upload[index++] =
-        level_duration_make(false, (uint32_t)kia_protocol_v0_const.te_short);
-    index = kia_v0_append_short_pairs(instance->encoder.upload, index, KIA_V0_TAIL_PREAMBLE_PAIRS);
-    index = kia_v0_append_data_pairs(
-        instance->encoder.upload, index, shifted, KIA_V0_BIT_COUNT_SUZUKI);
+        upload, index, shifted, (uint8_t)(KIA_V0_BIT_COUNT_SUZUKI - 2U));
+
+    // Frame terminator that fires the Suzuki commit: the decoder needs a suzuki-gap
+    // (2000-2500us) seen first in the CheckDuration (low) step and then again in the
+    // SaveDuration (high) step, with decode_count_bit == 64. A trailing te_short HIGH
+    // moves it from SaveDuration into CheckDuration WITHOUT adding a bit, then the
+    // low+high gap pair commits.
+    upload[index++] = level_duration_make(true, te_short);
+    upload[index++] = level_duration_make(false, KIA_V0_SUZUKI_GAP);
+    upload[index++] = level_duration_make(true, KIA_V0_SUZUKI_GAP);
+
+    // Idle gap so back-to-back yield repeats re-enter Reset cleanly.
+    upload[index++] = level_duration_make(false, KIA_V0_SUZUKI_END_GAP_US);
 
     instance->encoder.front = 0;
     instance->encoder.size_upload = index;

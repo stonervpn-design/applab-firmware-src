@@ -414,74 +414,74 @@ void subghz_protocol_encoder_peugot_v0_free(void* context) {
     free(instance);
 }
 
+#define PEUGOT_V0_ENC_PREAMBLE_BITS 40 // >= PEUGOT_V0_MIN_PREAMBLE_BITS, with margin
+#define PEUGOT_V0_END_GAP_US        6000
+
+/**
+ * Emit one on-air bit. The decoder (subghz_protocol_decoder_peugot_v0_feed)
+ * does NOT run a Manchester FSM: it reads a bit as the LEVEL of the pulse that
+ * completes it — either a single LONG pulse, or the SECOND of two SHORT pulses.
+ * So the encoder simply reproduces that pulse level directly while keeping a
+ * transition on every bit boundary (no adjacent same-level pulses):
+ *   - bit differs from the current line level -> one LONG pulse at the new level
+ *   - bit equals the current line level        -> SHORT pair (!bit)(bit)
+ */
+static void peugot_v0_emit_bit(
+    SubGhzProtocolEncoderPeugotV0* instance,
+    size_t* index,
+    bool* cur_level,
+    bool* have_level,
+    bool bit) {
+    const uint32_t te_short = (uint32_t)subghz_protocol_peugot_v0_const.te_short;
+    const uint32_t te_long = (uint32_t)subghz_protocol_peugot_v0_const.te_long;
+
+    if(!*have_level || *cur_level == bit) {
+        // First bit, or repeat of current level: a short pair whose 2nd short
+        // carries the bit; the leading !bit short guarantees a transition.
+        instance->encoder.upload[(*index)++] = level_duration_make(!bit, te_short);
+        instance->encoder.upload[(*index)++] = level_duration_make(bit, te_short);
+    } else {
+        // Level change: a single long pulse at the new level.
+        instance->encoder.upload[(*index)++] = level_duration_make(bit, te_long);
+    }
+    *cur_level = bit;
+    *have_level = true;
+}
+
 /**
  * Build one complete frame into the upload buffer.
- * Signal: [80x SHORT pairs (preamble)][Manchester FE sync + 80 data bits][END GAP]
+ * Signal (as the decoder reads it): [>=30 preamble 1-bits][FE sync byte]
+ * [80 data bits: Key(64) + Key2(16)][END GAP]. FEFFAD acts as the robust sync;
+ * FFAD is the constant header carried in the top of Key.
  */
 static void subghz_protocol_encoder_peugot_v0_get_upload(SubGhzProtocolEncoderPeugotV0* instance) {
     furi_assert(instance);
     size_t index = 0;
+    bool cur_level = false;
+    bool have_level = false;
 
-    const uint32_t te_short = (uint32_t)subghz_protocol_peugot_v0_const.te_short;
-    const uint32_t te_long = (uint32_t)subghz_protocol_peugot_v0_const.te_long;
-
-    // PREAMBLE: 80 SHORT pairs (= 80 Manchester 1-bits)
-    for(int p = 0; p < 80; p++) {
-        instance->encoder.upload[index++] = level_duration_make(true, te_short);
-        instance->encoder.upload[index++] = level_duration_make(false, te_short);
+    // PREAMBLE: run of 1-bits.
+    for(int p = 0; p < PEUGOT_V0_ENC_PREAMBLE_BITS; p++) {
+        peugot_v0_emit_bit(instance, &index, &cur_level, &have_level, true);
     }
 
-    // FE sync (8 bits) + 80 data bits = 88 bits Manchester encoded
-    // After preamble of 1s, Manchester state is Mid1
-    uint8_t manchester_state = ManchesterStateMid1;
-
-    // FE = 11111110 (8 bits sync)
-    uint8_t sync_byte = 0xFE;
-
-    // Total: 8 (sync) + 80 (data) = 88 bits
-    for(int i = 87; i >= 0; i--) {
-        bool bit;
-        if(i >= 80) {
-            // Sync bits: FE byte, bits 7..0 (from MSB to LSB)
-            bit = (sync_byte >> (i - 80)) & 1;
-        } else if(i >= 16) {
-            // Data bits 63..0 from generic.data
-            bit = (instance->generic.data >> (i - 16)) & 1;
-        } else {
-            // Data bits 79-64 from data_16 (bits 15..0)
-            bit = (instance->data_16 >> i) & 1;
-        }
-
-        switch(manchester_state) {
-        case ManchesterStateMid1:
-            if(bit == 0) {
-                instance->encoder.upload[index++] = level_duration_make(true, te_long);
-                manchester_state = ManchesterStateMid0;
-            } else {
-                instance->encoder.upload[index++] = level_duration_make(true, te_short);
-                instance->encoder.upload[index++] = level_duration_make(false, te_short);
-                manchester_state = ManchesterStateMid1;
-            }
-            break;
-        case ManchesterStateMid0:
-            if(bit == 0) {
-                instance->encoder.upload[index++] = level_duration_make(false, te_short);
-                instance->encoder.upload[index++] = level_duration_make(true, te_short);
-                manchester_state = ManchesterStateMid0;
-            } else {
-                instance->encoder.upload[index++] = level_duration_make(false, te_long);
-                manchester_state = ManchesterStateMid1;
-            }
-            break;
-        default:
-            manchester_state = ManchesterStateMid1;
-            break;
-        }
+    // FE sync byte (11111110), MSB first.
+    for(int i = 7; i >= 0; i--) {
+        peugot_v0_emit_bit(instance, &index, &cur_level, &have_level, (0xFE >> i) & 1);
     }
 
-    // END GAP
-    bool end_level = (manchester_state == ManchesterStateMid1);
-    instance->encoder.upload[index++] = level_duration_make(end_level, (uint32_t)6000);
+    // 80 data bits: Key (bits 63..0) then Key2 (bits 15..0), MSB first.
+    for(int i = 63; i >= 0; i--) {
+        peugot_v0_emit_bit(
+            instance, &index, &cur_level, &have_level, (instance->generic.data >> i) & 1);
+    }
+    for(int i = 15; i >= 0; i--) {
+        peugot_v0_emit_bit(
+            instance, &index, &cur_level, &have_level, (instance->data_16 >> i) & 1);
+    }
+
+    // END GAP: long low so the decoder finalizes and searches the frame.
+    instance->encoder.upload[index++] = level_duration_make(false, (uint32_t)PEUGOT_V0_END_GAP_US);
 
     instance->encoder.size_upload = index;
 }

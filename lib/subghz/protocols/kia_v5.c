@@ -79,71 +79,6 @@ static uint16_t mixer_decode(uint32_t encrypted) {
     return (s0 + (s1 << 8)) & 0xFFFF;
 }
 
-#ifdef ENABLE_EMULATE_FEATURE
-static uint32_t mixer_encode(uint32_t serial, uint16_t counter, uint8_t button) {
-    build_keystore_from_mfkey(keystore_bytes);
-
-    uint8_t state_a = (uint8_t)(((serial >> 8) & 0x0FU) | ((button & 0x0FU) << 4));
-    uint8_t state_b = (uint8_t)((counter >> 8) & 0xFFU);
-    uint8_t state_c = (uint8_t)(serial & 0xFFU);
-    uint8_t state_d = (uint8_t)(counter & 0xFFU);
-
-    int ks_idx = 0;
-    for(int round_i = 0; round_i < 18; round_i++) {
-        uint8_t r = keystore_bytes[ks_idx] & 0xFFU;
-        ks_idx = (ks_idx + 1) & 0x07;
-
-        uint8_t running_d = state_d;
-        for(int step = 0; step < 8; step++) {
-            uint8_t base;
-            if((state_a & 0x80U) == 0) {
-                base = (state_a & 0x04U) == 0 ? 0x74U : 0x2EU;
-            } else {
-                base = (state_a & 0x04U) == 0 ? 0x3AU : 0x5CU;
-            }
-
-            if(state_c & 0x10U) {
-                base = (uint8_t)(((base >> 4) & 0x0FU) | ((base & 0x0FU) << 4));
-            }
-            if(state_b & 0x02U) {
-                base = (uint8_t)((base & 0x3FU) << 2);
-            }
-
-            uint8_t base_final = base;
-            if(running_d & 0x02U) {
-                base_final = (uint8_t)((base & 0x7FU) << 1);
-            }
-
-            const bool carry_b = (state_b & 0x01U) != 0;
-            const bool carry_c = (state_c & 0x01U) != 0;
-            const bool carry_a = (state_a & 0x01U) != 0;
-
-            uint8_t new_d = (uint8_t)(running_d >> 1);
-            if(carry_b) new_d |= 0x80U;
-
-            running_d ^= state_c;
-
-            state_b = (uint8_t)(state_b >> 1);
-            if(carry_c) state_b |= 0x80U;
-
-            state_c = (uint8_t)(state_c >> 1);
-            if(carry_a) state_c |= 0x80U;
-
-            const uint8_t feedback = (uint8_t)(((running_d ^ r) << 7) ^ base_final);
-            state_a = (uint8_t)(state_a >> 1);
-            if(feedback & 0x80U) state_a |= 0x80U;
-
-            r = (uint8_t)(r >> 1);
-            running_d = new_d;
-        }
-        state_d = running_d;
-    }
-
-    return ((uint32_t)state_a << 24) | ((uint32_t)state_c << 16) | ((uint32_t)state_b << 8) |
-           (uint32_t)state_d;
-}
-#endif
-
 struct SubGhzProtocolDecoderKiaV5 {
     SubGhzProtocolDecoderBase base;
     SubGhzBlockDecoder decoder;
@@ -172,6 +107,7 @@ struct SubGhzProtocolEncoderKiaV5 {
 #define KIA_V5_DATA_BITS      64U
 #define KIA_V5_CRC_BITS       3U
 #define KIA_V5_END_ENTRIES    2U
+#define KIA_V5_END_GAP_US     10000U
 #define KIA_V5_UPLOAD_CAPACITY                          \
     (KIA_V5_PREAMBLE_PAIRS * 2U + KIA_V5_SYNC_ENTRIES + \
      (KIA_V5_DATA_BITS + KIA_V5_CRC_BITS) * 2U + KIA_V5_END_ENTRIES)
@@ -258,14 +194,39 @@ void* kia_protocol_encoder_v5_alloc(SubGhzEnvironment* environment) {
     return instance;
 }
 
-static size_t kia_v5_emit_manchester_bit(LevelDuration* up, size_t i, size_t cap, bool bit_value) {
-    const uint32_t te = kia_protocol_v5_const.te_short;
-    if(bit_value) {
-        i = pp_emit(up, i, cap, false, te);
-        i = pp_emit(up, i, cap, true, te);
+// Emit ONE data bit as decoder-EXACT differential Manchester. The V5 decoder
+// feeds every data pulse through manchester_advance() with the NON-inverted event
+// mapping (HIGH pulse -> *High event, LOW pulse -> *Low event -- see the Data
+// step in kia_protocol_decoder_v5_feed). A bit is only recovered on a transition
+// INTO a Mid state, so the wire symbol depends on the current Manchester state:
+//   Mid1: bit1 = HIGH short, LOW short (stay Mid1); bit0 = HIGH long (-> Mid0)
+//   Mid0: bit1 = LOW long (-> Mid1);               bit0 = LOW short, HIGH short (stay Mid0)
+// This is the precise inverse of the decoder's transition table, so re-decoding
+// the emitted waveform reproduces the same bitstream.
+static size_t kia_v5_emit_manchester_bit(
+    LevelDuration* up,
+    size_t i,
+    size_t cap,
+    bool bit_value,
+    ManchesterState* state) {
+    const uint32_t te_short = kia_protocol_v5_const.te_short;
+    const uint32_t te_long = kia_protocol_v5_const.te_long;
+    if(*state == ManchesterStateMid1) {
+        if(bit_value) {
+            i = pp_emit(up, i, cap, true, te_short);
+            i = pp_emit(up, i, cap, false, te_short);
+        } else {
+            i = pp_emit(up, i, cap, true, te_long);
+            *state = ManchesterStateMid0;
+        }
     } else {
-        i = pp_emit(up, i, cap, true, te);
-        i = pp_emit(up, i, cap, false, te);
+        if(bit_value) {
+            i = pp_emit(up, i, cap, false, te_long);
+            *state = ManchesterStateMid1;
+        } else {
+            i = pp_emit(up, i, cap, false, te_short);
+            i = pp_emit(up, i, cap, true, te_short);
+        }
     }
     return i;
 }
@@ -277,27 +238,34 @@ static void kia_protocol_encoder_v5_get_upload(SubGhzProtocolEncoderKiaV5* insta
     const uint32_t te_long = kia_protocol_v5_const.te_long;
     size_t i = 0;
 
+    // Preamble: te_short HIGH/LOW pairs. The decoder counts these to satisfy
+    // header_count > 40 before it will accept the sync.
     for(size_t p = 0; p < KIA_V5_PREAMBLE_PAIRS; p++) {
         i = pp_emit(upload, i, cap, true, te_short);
         i = pp_emit(upload, i, cap, false, te_short);
     }
 
-    i = pp_emit(upload, i, cap, false, te_short);
+    // Sync: a single HIGH te_long pulse. In CheckPreamble (header_count > 40) this
+    // te_long HIGH switches the decoder into the Data step WITHOUT being consumed
+    // by the Manchester machine, whose state is the reset state Mid1. So the first
+    // data bit below is decoded starting from Mid1.
     i = pp_emit(upload, i, cap, true, te_long);
-    i = pp_emit(upload, i, cap, false, te_short);
-    i = pp_emit(upload, i, cap, true, te_short);
 
+    ManchesterState state = ManchesterStateMid1;
     for(int b = (int)KIA_V5_DATA_BITS - 1; b >= 0; b--) {
         const bool bit_value = ((instance->replay_data >> b) & 1ULL) != 0ULL;
-        i = kia_v5_emit_manchester_bit(upload, i, cap, bit_value);
+        i = kia_v5_emit_manchester_bit(upload, i, cap, bit_value, &state);
     }
 
-    i = kia_v5_emit_manchester_bit(upload, i, cap, false);
-    i = kia_v5_emit_manchester_bit(upload, i, cap, ((instance->replay_crc >> 1U) & 1U) != 0U);
-    i = kia_v5_emit_manchester_bit(upload, i, cap, (instance->replay_crc & 1U) != 0U);
+    i = kia_v5_emit_manchester_bit(upload, i, cap, ((instance->replay_crc >> 2U) & 1U) != 0U, &state);
+    i = kia_v5_emit_manchester_bit(upload, i, cap, ((instance->replay_crc >> 1U) & 1U) != 0U, &state);
+    i = kia_v5_emit_manchester_bit(upload, i, cap, (instance->replay_crc & 1U) != 0U, &state);
 
-    i = pp_emit(upload, i, cap, false, te_short);
-    i = pp_emit(upload, i, cap, true, te_short);
+    // Terminating idle gap: the V5 decoder only commits its accumulated bits when
+    // it sees an out-of-range duration in the Data step. pp_encoder_yield replays
+    // the upload back-to-back with no inter-frame gap, so without an explicit
+    // out-of-range gap here the decoder never fires on the emitted waveform.
+    i = pp_emit(upload, i, cap, false, KIA_V5_END_GAP_US);
 
     instance->encoder.size_upload = i;
     instance->encoder.front = 0;
@@ -329,54 +297,21 @@ SubGhzProtocolStatus
         return SubGhzProtocolStatusErrorValueBitCount;
     }
 
-    uint32_t serial_v = UINT32_MAX;
-    uint32_t btn_v = UINT32_MAX;
-    uint32_t cnt_v = UINT32_MAX;
-    pp_encoder_read_fields(flipper_format, &serial_v, &btn_v, &cnt_v, NULL);
+    // Rolling code: re-emit the stored (already-encrypted) 64-bit key verbatim.
+    // Cloning does NOT regenerate the hop; replaying the captured bits reproduces
+    // the exact on-air frame, so re-decoding recovers the same serial/btn/cnt.
+    instance->replay_data = instance->generic.data;
 
-    uint64_t yek_captured = 0;
-    for(int i = 0; i < 8; i++) {
-        const uint8_t b = (uint8_t)((instance->generic.data >> (i * 8)) & 0xFFU);
-        yek_captured |= ((uint64_t)pp_reverse_bits8(b) << ((7 - i) * 8));
+    // CRC: prefer the value saved by the decoder's serialize; fall back to the
+    // computed 3-bit CRC over the key so an externally-authored file still emits
+    // a self-consistent frame.
+    uint32_t crc_saved = 0;
+    flipper_format_rewind(flipper_format);
+    if(flipper_format_read_uint32(flipper_format, "CRC", &crc_saved, 1)) {
+        instance->replay_crc = (uint8_t)(crc_saved & 0x07U);
+    } else {
+        instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
     }
-    if(serial_v == UINT32_MAX) {
-        serial_v = (uint32_t)((yek_captured >> 32) & 0x0FFFFFFFU);
-    }
-    if(btn_v == UINT32_MAX) {
-        btn_v = (uint32_t)((yek_captured >> 60) & 0x0FU);
-    }
-    if(cnt_v == UINT32_MAX) {
-        cnt_v = mixer_decode((uint32_t)(yek_captured & 0xFFFFFFFFU));
-    }
-
-    serial_v &= 0x0FFFFFFFU;
-    btn_v &= 0x0FU;
-    cnt_v &= 0xFFFFU;
-
-    const uint32_t mixer = mixer_encode(serial_v, (uint16_t)cnt_v, (uint8_t)btn_v);
-    const uint64_t yek_new =
-        ((uint64_t)btn_v << 60) | ((uint64_t)serial_v << 32) | (uint64_t)mixer;
-
-    uint64_t data_new = 0;
-    for(int i = 0; i < 8; i++) {
-        const uint8_t b = (uint8_t)((yek_new >> (i * 8)) & 0xFFU);
-        data_new |= ((uint64_t)pp_reverse_bits8(b) << ((7 - i) * 8));
-    }
-
-    instance->replay_data = data_new;
-    instance->generic.data = data_new;
-    instance->generic.serial = serial_v;
-    instance->generic.btn = (uint8_t)btn_v;
-    instance->generic.cnt = (uint16_t)cnt_v;
-    instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
-
-    FURI_LOG_I(
-        TAG,
-        "V5 enc reencrypt: sn=%07lX btn=%X cnt=%04lX mixer=%08lX",
-        (unsigned long)serial_v,
-        (unsigned)btn_v,
-        (unsigned long)cnt_v,
-        (unsigned long)mixer);
 
     instance->encoder.repeat = (int32_t)pp_encoder_read_repeat(flipper_format, 6);
 
@@ -393,28 +328,6 @@ SubGhzProtocolStatus
         instance->replay_crc,
         (unsigned)instance->encoder.repeat,
         instance->encoder.size_upload);
-    FURI_LOG_I(
-        TAG,
-        "V5 enc preamble[0..3]: %s%lu %s%lu %s%lu %s%lu",
-        level_duration_get_level(instance->encoder.upload[0]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[0]),
-        level_duration_get_level(instance->encoder.upload[1]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[1]),
-        level_duration_get_level(instance->encoder.upload[2]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[2]),
-        level_duration_get_level(instance->encoder.upload[3]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[3]));
-    FURI_LOG_I(
-        TAG,
-        "V5 enc sync[400..403]: %s%lu %s%lu %s%lu %s%lu",
-        level_duration_get_level(instance->encoder.upload[400]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[400]),
-        level_duration_get_level(instance->encoder.upload[401]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[401]),
-        level_duration_get_level(instance->encoder.upload[402]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[402]),
-        level_duration_get_level(instance->encoder.upload[403]) ? "H" : "L",
-        (unsigned long)level_duration_get_duration(instance->encoder.upload[403]));
 
     return SubGhzProtocolStatusOk;
 }

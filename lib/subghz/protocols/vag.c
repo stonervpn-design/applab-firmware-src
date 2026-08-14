@@ -13,12 +13,44 @@ _Static_assert(
     VAG_ENCODER_UPLOAD_MAX_SIZE <= PP_SHARED_UPLOAD_CAPACITY,
     "VAG_ENCODER_UPLOAD_MAX_SIZE exceeds shared upload slab");
 
-static inline size_t
-    vag_emit_manchester_inv(LevelDuration* up, size_t i, size_t cap, bool bit_value, uint32_t te) {
-    i = pp_emit(up, i, cap, bit_value, te);
-    i = pp_emit(up, i, cap, !bit_value, te);
+#ifdef ENABLE_EMULATE_FEATURE
+// Emit ONE data bit as decoder-EXACT differential Manchester. The VAG decoder
+// feeds each data pulse through manchester_advance() with the INVERTED event
+// mapping (HIGH pulse -> *Low event, LOW pulse -> *High event -- see the Data1 /
+// Data2 steps). A bit is only recovered on a transition INTO a Mid state, so the
+// wire symbol depends on the current Manchester state:
+//   Mid1: bit1 = LOW short, HIGH short (stay Mid1); bit0 = LOW long (-> Mid0)
+//   Mid0: bit1 = HIGH long (-> Mid1);               bit0 = HIGH short, LOW short (stay Mid0)
+// This is the precise inverse of the decoder's transition table, so re-decoding
+// the emitted waveform reproduces the same bitstream.
+static size_t vag_emit_manch_bit(
+    LevelDuration* up,
+    size_t i,
+    size_t cap,
+    bool bit_value,
+    uint32_t te_short,
+    uint32_t te_long,
+    ManchesterState* state) {
+    if(*state == ManchesterStateMid1) {
+        if(bit_value) {
+            i = pp_emit(up, i, cap, false, te_short);
+            i = pp_emit(up, i, cap, true, te_short);
+        } else {
+            i = pp_emit(up, i, cap, false, te_long);
+            *state = ManchesterStateMid0;
+        }
+    } else {
+        if(bit_value) {
+            i = pp_emit(up, i, cap, true, te_long);
+            *state = ManchesterStateMid1;
+        } else {
+            i = pp_emit(up, i, cap, true, te_short);
+            i = pp_emit(up, i, cap, false, te_short);
+        }
+    }
     return i;
 }
+#endif
 
 static const SubGhzBlockConst subghz_protocol_vag_const = {
     .te_short = 500,
@@ -178,16 +210,6 @@ static void vag_tea_decrypt(uint32_t* v0, uint32_t* v1, const uint32_t* key_sche
         *v0 -= (((*v1 << 4) ^ (*v1 >> 5)) + *v1) ^ (sum + key_schedule[sum & 3]);
     }
 }
-#ifdef ENABLE_EMULATE_FEATURE
-static void vag_tea_encrypt(uint32_t* v0, uint32_t* v1, const uint32_t* key_schedule) {
-    uint32_t sum = 0;
-    for(int i = 0; i < VAG_TEA_ROUNDS; i++) {
-        *v0 += (((*v1 << 4) ^ (*v1 >> 5)) + *v1) ^ (sum + key_schedule[sum & 3]);
-        sum += VAG_TEA_DELTA;
-        *v1 += (((*v0 << 4) ^ (*v0 >> 5)) + *v0) ^ (sum + key_schedule[(sum >> 11) & 3]);
-    }
-}
-#endif
 static bool vag_dispatch_type_1_2(uint8_t dispatch) {
     return (dispatch == 0x2A || dispatch == 0x1C || dispatch == 0x46);
 }
@@ -991,486 +1013,122 @@ typedef struct SubGhzProtocolEncoderVAG {
     bool is_running;
 } SubGhzProtocolEncoderVAG;
 
-static bool vag_aut64_encrypt(uint8_t* block, int key_index) {
-    struct aut64_key* key = protocol_vag_get_key(key_index + 1);
-    if(!key) {
-        FURI_LOG_E(TAG, "Key not found for encryption: %d", key_index + 1);
-        return false;
-    }
-    int rc = aut64_encrypt(key, block);
-#ifdef AUT64_ENABLE_VALIDATIONS
-    if(rc == AUT64_ERR_INVALID_KEY) {
-        FURI_LOG_E(TAG, "Invalid key: %d", key_index + 1);
-    } else if(rc == AUT64_ERR_NULL_POINTER) {
-        FURI_LOG_E(TAG, "key is NULL");
-    }
-#endif
-
-    return (rc == AUT64_OK) ? true : false;
-}
-
-static uint8_t vag_get_dispatch_byte(uint8_t btn, uint8_t vag_type) {
-    if(vag_type == 1 || vag_type == 2) {
-        switch(btn) {
-        case 0x20:
-        case 2:
-            return 0x2A;
-        case 0x40:
-        case 4:
-            return 0x46;
-        case 0x10:
-        case 1:
-            return 0x1C;
-        default:
-            return 0x2A;
-        }
-    } else {
-        switch(btn) {
-        case 0x20:
-        case 2:
-            return 0x2B;
-        case 0x40:
-        case 4:
-            return 0x47;
-        case 0x10:
-        case 1:
-            return 0x1D;
-        default:
-            return 0x2B;
-        }
-    }
-}
-
-static uint8_t vag_btn_to_byte(uint8_t btn, uint8_t vag_type) {
-    if(vag_type == 1) {
-        return btn;
-    } else {
-        switch(btn) {
-        case 0x1:
-            return 0x10;
-        case 0x2:
-            return 0x20;
-        case 0x4:
-            return 0x40;
-        default:
-            return btn;
-        }
-    }
-}
-
-static void vag_encoder_build_type1(SubGhzProtocolEncoderVAG* instance) {
-    FURI_LOG_I(TAG, "=== Building Type 1 upload (300us, AUT64) ===");
-
-    size_t index = 0;
+static void vag_encoder_build_type_1_2(SubGhzProtocolEncoderVAG* instance) {
+    // Verbatim clone: re-emit the stored (already-encrypted) Key1/Key2 exactly as
+    // the decoder framed them, so re-decoding recovers the same key -> the same
+    // decrypted serial/counter/button. No crypto is regenerated (rolling-code
+    // cloning replays the captured hop bits).
     LevelDuration* upload = instance->upload;
     const size_t cap = VAG_ENCODER_UPLOAD_MAX_SIZE;
+    size_t index = 0;
 
-    uint8_t btn_byte = vag_btn_to_byte(instance->btn, 1);
-    uint8_t dispatch = vag_get_dispatch_byte(btn_byte, 1);
-    instance->dispatch_byte = dispatch;
+    // Preamble: >= VAG_T12_PREAMBLE_MIN te_short HIGH/LOW pairs (Preamble1 counts
+    // the LOW pulses).
+    index = pp_emit_short_pairs(upload, index, cap, VAG_T12_TE_SHORT, 200);
+    // Sync: an (ignored) te_short HIGH keeps the level alternating, then a te_long
+    // LOW pulse is the Preamble1 -> Data1 trigger.
+    index = pp_emit(upload, index, cap, true, VAG_T12_TE_SHORT);
+    index = pp_emit(upload, index, cap, false, VAG_T12_TE_LONG);
 
-    FURI_LOG_D(TAG, "btn=%02X -> btn_byte=%02X, dispatch=%02X", instance->btn, btn_byte, dispatch);
-
-    uint8_t block[8];
-    uint8_t type_byte = (uint8_t)(instance->key1_high >> 24);
-
-    block[0] = (uint8_t)(instance->serial >> 24);
-    block[1] = (uint8_t)(instance->serial >> 16);
-    block[2] = (uint8_t)(instance->serial >> 8);
-    block[3] = (uint8_t)(instance->serial);
-
-    block[4] = (uint8_t)(instance->cnt);
-    block[5] = (uint8_t)(instance->cnt >> 8);
-    block[6] = (uint8_t)(instance->cnt >> 16);
-
-    block[7] = btn_byte;
-
-    FURI_LOG_I(
-        TAG,
-        "Plaintext: %02X %02X %02X %02X %02X %02X %02X %02X (ser=%08lX cnt=%06lX btn=%02X)",
-        block[0],
-        block[1],
-        block[2],
-        block[3],
-        block[4],
-        block[5],
-        block[6],
-        block[7],
-        (unsigned long)instance->serial,
-        (unsigned long)instance->cnt,
-        btn_byte);
-
-    int key_idx = (instance->key_idx != 0xFF) ? instance->key_idx : 0;
-    FURI_LOG_D(TAG, "Encrypting with AUT64 key index %d (saved=%d)", key_idx, instance->key_idx);
-
-    if(!vag_aut64_encrypt(block, key_idx)) {
-        FURI_LOG_E(TAG, "Type1 AUT64 encryption failed! Key not loaded?");
-        instance->size_upload = 0;
-        return;
+    // Data1 stream, differential Manchester starting from the reset state Mid1:
+    //   15-bit frame prefix (verbatim on the wire), then 64-bit ~Key1, then
+    //   16-bit ~Key2 -- the decoder stores key = ~wire, so invert here.
+    ManchesterState state = ManchesterStateMid1;
+    const uint16_t prefix =
+        (instance->vag_type == 2) ? VAG_FRAME_PREFIX_T2 : VAG_FRAME_PREFIX_T1;
+    for(int b = (int)VAG_PREFIX_BITS - 1; b >= 0; b--) {
+        index = vag_emit_manch_bit(
+            upload,
+            index,
+            cap,
+            ((prefix >> b) & 1U) != 0U,
+            VAG_T12_TE_SHORT,
+            VAG_T12_TE_LONG,
+            &state);
     }
 
-    FURI_LOG_I(
-        TAG,
-        "Encrypted: %02X %02X %02X %02X %02X %02X %02X %02X",
-        block[0],
-        block[1],
-        block[2],
-        block[3],
-        block[4],
-        block[5],
-        block[6],
-        block[7]);
-
-    instance->key1_high = ((uint32_t)type_byte << 24) | ((uint32_t)block[0] << 16) |
-                          ((uint32_t)block[1] << 8) | (uint32_t)block[2];
-    instance->key1_low = ((uint32_t)block[3] << 24) | ((uint32_t)block[4] << 16) |
-                         ((uint32_t)block[5] << 8) | (uint32_t)block[6];
-    uint32_t key2_upper = ((uint32_t)(block[7] & 0xFF) << 8);
-    uint32_t key2_lower = (uint32_t)(dispatch & 0xFF);
-    instance->key2_low = (key2_upper | key2_lower) & 0xFFFF;
-    instance->key2_high = 0;
-
-    index = pp_emit_short_pairs(upload, index, cap, 300, 220);
-    index = pp_emit(upload, index, cap, false, 300);
-    index = pp_emit(upload, index, cap, true, 300);
-
-    FURI_LOG_D(TAG, "Preamble: %zu pulses (220 cycles + 2 sync)", index);
-
-    uint16_t prefix = 0xAF3F;
-#ifndef REMOVE_LOGS
-    size_t prefix_start = index;
-#endif
-    for(int i = 15; i >= 0; i--) {
-        bool bit = (prefix >> i) & 1;
-        index = vag_emit_manchester_inv(upload, index, cap, bit, 300);
+    const uint64_t key1 = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
+    const uint64_t key1_wire = ~key1;
+    for(int b = (int)VAG_KEY1_BITS - 1; b >= 0; b--) {
+        index = vag_emit_manch_bit(
+            upload,
+            index,
+            cap,
+            ((key1_wire >> b) & 1ULL) != 0ULL,
+            VAG_T12_TE_SHORT,
+            VAG_T12_TE_LONG,
+            &state);
     }
-    FURI_LOG_D(TAG, "Prefix 0x%04X: %zu pulses", prefix, index - prefix_start);
 
-    uint64_t key1 = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
-    uint64_t key1_inv = ~key1;
-    FURI_LOG_D(
-        TAG,
-        "Key1: %08lX%08lX -> inverted: %08lX%08lX",
-        (unsigned long)(key1 >> 32),
-        (unsigned long)(key1 & 0xFFFFFFFF),
-        (unsigned long)(key1_inv >> 32),
-        (unsigned long)(key1_inv & 0xFFFFFFFF));
-
-#ifndef REMOVE_LOGS
-    size_t key1_start = index;
-#endif
-    for(int i = 63; i >= 0; i--) {
-        bool bit = (key1_inv >> i) & 1;
-        index = vag_emit_manchester_inv(upload, index, cap, bit, 300);
+    const uint16_t key2 = (uint16_t)(instance->key2_low & 0xFFFFU);
+    const uint16_t key2_wire = (uint16_t)~key2;
+    for(int b = 15; b >= 0; b--) {
+        index = vag_emit_manch_bit(
+            upload,
+            index,
+            cap,
+            ((key2_wire >> b) & 1U) != 0U,
+            VAG_T12_TE_SHORT,
+            VAG_T12_TE_LONG,
+            &state);
     }
-    FURI_LOG_D(TAG, "Key1: %zu pulses (64 bits)", index - key1_start);
 
-    uint16_t key2 = (uint16_t)(instance->key2_low & 0xFFFF);
-    uint16_t key2_inv = ~key2;
-    FURI_LOG_D(TAG, "Key2: %04X -> inverted: %04X", key2, key2_inv);
-#ifndef REMOVE_LOGS
-    size_t key2_start = index;
-#endif
-    for(int i = 15; i >= 0; i--) {
-        bool bit = (key2_inv >> i) & 1;
-        index = vag_emit_manchester_inv(upload, index, cap, bit, 300);
-    }
-    FURI_LOG_D(TAG, "Key2: %zu pulses (16 bits)", index - key2_start);
-
+    // Inter-frame gap (> VAG_DATA_GAP_MIN) so Data1 commits the 80 accumulated bits.
     index = pp_emit(upload, index, cap, false, 6000);
 
     instance->size_upload = index;
-    FURI_LOG_I(TAG, "Type1 upload built: %zu pulses (expected: 635)", index);
-
-    if(index != 635) {
-        FURI_LOG_W(TAG, "WARNING: Pulse count %zu != expected 635!", index);
-    }
+    instance->front = 0;
 }
 
-static void vag_encoder_build_type2(SubGhzProtocolEncoderVAG* instance) {
-    FURI_LOG_I(TAG, "=== Building Type 2 upload (300us, TEA) ===");
-
-    size_t index = 0;
+static void vag_encoder_build_type_3_4(SubGhzProtocolEncoderVAG* instance) {
+    // Verbatim clone for the 500us / Type 3-4 framing.
     LevelDuration* upload = instance->upload;
     const size_t cap = VAG_ENCODER_UPLOAD_MAX_SIZE;
-
-    uint8_t btn_byte = vag_btn_to_byte(instance->btn, 2);
-    uint8_t dispatch = vag_get_dispatch_byte(btn_byte, 2);
-    instance->dispatch_byte = dispatch;
-
-    FURI_LOG_D(TAG, "btn=%02X -> btn_byte=%02X, dispatch=%02X", instance->btn, btn_byte, dispatch);
-
-    uint8_t type_byte = (uint8_t)(instance->key1_high >> 24);
-
-    uint8_t block[8];
-    block[0] = (uint8_t)(instance->serial >> 24);
-    block[1] = (uint8_t)(instance->serial >> 16);
-    block[2] = (uint8_t)(instance->serial >> 8);
-    block[3] = (uint8_t)(instance->serial);
-
-    block[4] = (uint8_t)(instance->cnt);
-    block[5] = (uint8_t)(instance->cnt >> 8);
-    block[6] = (uint8_t)(instance->cnt >> 16);
-
-    block[7] = btn_byte;
-
-    FURI_LOG_I(
-        TAG,
-        "Plaintext: %02X %02X %02X %02X %02X %02X %02X %02X (ser=%08lX cnt=%06lX btn=%02X)",
-        block[0],
-        block[1],
-        block[2],
-        block[3],
-        block[4],
-        block[5],
-        block[6],
-        block[7],
-        (unsigned long)instance->serial,
-        (unsigned long)instance->cnt,
-        btn_byte);
-
-    uint32_t v0 = ((uint32_t)block[0] << 24) | ((uint32_t)block[1] << 16) |
-                  ((uint32_t)block[2] << 8) | (uint32_t)block[3];
-    uint32_t v1 = ((uint32_t)block[4] << 24) | ((uint32_t)block[5] << 16) |
-                  ((uint32_t)block[6] << 8) | (uint32_t)block[7];
-
-    FURI_LOG_D(TAG, "TEA input: v0=%08lX v1=%08lX", (unsigned long)v0, (unsigned long)v1);
-
-    vag_tea_encrypt(&v0, &v1, vag_tea_key_schedule);
-
-    FURI_LOG_D(TAG, "TEA output: v0=%08lX v1=%08lX", (unsigned long)v0, (unsigned long)v1);
-
-    block[0] = (uint8_t)(v0 >> 24);
-    block[1] = (uint8_t)(v0 >> 16);
-    block[2] = (uint8_t)(v0 >> 8);
-    block[3] = (uint8_t)(v0);
-    block[4] = (uint8_t)(v1 >> 24);
-    block[5] = (uint8_t)(v1 >> 16);
-    block[6] = (uint8_t)(v1 >> 8);
-    block[7] = (uint8_t)(v1);
-
-    FURI_LOG_I(
-        TAG,
-        "Encrypted: %02X %02X %02X %02X %02X %02X %02X %02X",
-        block[0],
-        block[1],
-        block[2],
-        block[3],
-        block[4],
-        block[5],
-        block[6],
-        block[7]);
-
-    instance->key1_high = ((uint32_t)type_byte << 24) | ((uint32_t)block[0] << 16) |
-                          ((uint32_t)block[1] << 8) | (uint32_t)block[2];
-    instance->key1_low = ((uint32_t)block[3] << 24) | ((uint32_t)block[4] << 16) |
-                         ((uint32_t)block[5] << 8) | (uint32_t)block[6];
-    uint32_t key2_upper = ((uint32_t)(block[7] & 0xFF) << 8);
-    uint32_t key2_lower = (uint32_t)(dispatch & 0xFF);
-    instance->key2_low = (key2_upper | key2_lower) & 0xFFFF;
-    instance->key2_high = 0;
-
-    index = pp_emit_short_pairs(upload, index, cap, 300, 220);
-    index = pp_emit(upload, index, cap, false, 300);
-    index = pp_emit(upload, index, cap, true, 300);
-
-    FURI_LOG_D(TAG, "Preamble: %zu pulses (220 cycles + 2 sync)", index);
-
-    uint16_t prefix = 0xAF1C;
-#ifndef REMOVE_LOGS
-    size_t prefix_start = index;
-#endif
-    for(int i = 15; i >= 0; i--) {
-        bool bit = (prefix >> i) & 1;
-        index = vag_emit_manchester_inv(upload, index, cap, bit, 300);
-    }
-    FURI_LOG_D(TAG, "Prefix 0x%04X: %zu pulses", prefix, index - prefix_start);
-
-    uint64_t key1 = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
-    uint64_t key1_inv = ~key1;
-    FURI_LOG_D(
-        TAG,
-        "Key1: %08lX%08lX -> inverted: %08lX%08lX",
-        (unsigned long)(key1 >> 32),
-        (unsigned long)(key1 & 0xFFFFFFFF),
-        (unsigned long)(key1_inv >> 32),
-        (unsigned long)(key1_inv & 0xFFFFFFFF));
-#ifndef REMOVE_LOGS
-    size_t key1_start = index;
-#endif
-    for(int i = 63; i >= 0; i--) {
-        bool bit = (key1_inv >> i) & 1;
-        index = vag_emit_manchester_inv(upload, index, cap, bit, 300);
-    }
-    FURI_LOG_D(TAG, "Key1: %zu pulses", index - key1_start);
-
-    uint16_t key2 = (uint16_t)(instance->key2_low & 0xFFFF);
-    uint16_t key2_inv = ~key2;
-    FURI_LOG_D(TAG, "Key2: %04X -> inverted: %04X", key2, key2_inv);
-#ifndef REMOVE_LOGS
-    size_t key2_start = index;
-#endif
-    for(int i = 15; i >= 0; i--) {
-        bool bit = (key2_inv >> i) & 1;
-        index = vag_emit_manchester_inv(upload, index, cap, bit, 300);
-    }
-    FURI_LOG_D(TAG, "Key2: %zu pulses", index - key2_start);
-
-    index = pp_emit(upload, index, cap, false, 6000);
-
-    instance->size_upload = index;
-    FURI_LOG_I(TAG, "Type2 upload built: %zu pulses (expected: 635)", index);
-}
-
-static void vag_encoder_build_type3_4(SubGhzProtocolEncoderVAG* instance) {
-    FURI_LOG_I(TAG, "=== Building Type %d upload (500us, AUT64) ===", instance->vag_type);
-
     size_t index = 0;
-    LevelDuration* upload = instance->upload;
-    const size_t cap = VAG_ENCODER_UPLOAD_MAX_SIZE;
 
-    uint8_t btn_byte = vag_btn_to_byte(instance->btn, instance->vag_type);
-    uint8_t dispatch = vag_get_dispatch_byte(btn_byte, instance->vag_type);
-    instance->dispatch_byte = dispatch;
-
-    FURI_LOG_D(TAG, "btn=%02X -> btn_byte=%02X, dispatch=%02X", instance->btn, btn_byte, dispatch);
-
-    uint8_t type_byte = (uint8_t)(instance->key1_high >> 24);
-
-    uint8_t block[8];
-    block[0] = (uint8_t)(instance->serial >> 24);
-    block[1] = (uint8_t)(instance->serial >> 16);
-    block[2] = (uint8_t)(instance->serial >> 8);
-    block[3] = (uint8_t)(instance->serial);
-    block[4] = (uint8_t)(instance->cnt);
-    block[5] = (uint8_t)(instance->cnt >> 8);
-    block[6] = (uint8_t)(instance->cnt >> 16);
-    block[7] = btn_byte;
-
-    FURI_LOG_I(
-        TAG,
-        "Plaintext: %02X %02X %02X %02X %02X %02X %02X %02X (ser=%08lX cnt=%06lX btn=%02X)",
-        block[0],
-        block[1],
-        block[2],
-        block[3],
-        block[4],
-        block[5],
-        block[6],
-        block[7],
-        (unsigned long)instance->serial,
-        (unsigned long)instance->cnt,
-        btn_byte);
-
-    int key_idx;
-    if(instance->key_idx != 0xFF) {
-        key_idx = instance->key_idx;
-    } else {
-        key_idx = (instance->vag_type == 4) ? 2 : 1;
-    }
-    FURI_LOG_D(TAG, "Encrypting with AUT64 key index %d (saved=%d)", key_idx, instance->key_idx);
-
-    if(!vag_aut64_encrypt(block, key_idx)) {
-        FURI_LOG_E(TAG, "Type%d AUT64 encryption failed! Key not loaded?", instance->vag_type);
-        instance->size_upload = 0;
-        return;
+    // Preamble: >= VAG_T34_PREAMBLE_MIN te_short HIGH/LOW pairs.
+    index = pp_emit_short_pairs(upload, index, cap, VAG_T34_TE_SHORT, 45);
+    // Preamble2 -> Sync: te_long HIGH (Preamble2 exit), te_short LOW (Sync2A),
+    // then VAG_T34_SYNC_PAIRS te_sync HIGH/LOW pairs (Sync2B/2C) to reach Data2.
+    index = pp_emit(upload, index, cap, true, VAG_T34_TE_LONG);
+    index = pp_emit(upload, index, cap, false, VAG_T34_TE_SHORT);
+    for(uint8_t k = 0; k < VAG_T34_SYNC_PAIRS; k++) {
+        index = pp_emit(upload, index, cap, true, VAG_T34_SYNC);
+        index = pp_emit(upload, index, cap, false, VAG_T34_SYNC);
     }
 
-    FURI_LOG_I(
-        TAG,
-        "Encrypted: %02X %02X %02X %02X %02X %02X %02X %02X",
-        block[0],
-        block[1],
-        block[2],
-        block[3],
-        block[4],
-        block[5],
-        block[6],
-        block[7]);
-
-    instance->key1_high = ((uint32_t)type_byte << 24) | ((uint32_t)block[0] << 16) |
-                          ((uint32_t)block[1] << 8) | (uint32_t)block[2];
-    instance->key1_low = ((uint32_t)block[3] << 24) | ((uint32_t)block[4] << 16) |
-                         ((uint32_t)block[5] << 8) | (uint32_t)block[6];
-    uint32_t key2_upper = ((uint32_t)(block[7] & 0xFF) << 8);
-    uint32_t key2_lower = (uint32_t)(dispatch & 0xFF);
-    instance->key2_low = (key2_upper | key2_lower) & 0xFFFF;
-    instance->key2_high = 0;
-
-    uint64_t key1 = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
-    uint16_t key2 = (uint16_t)(instance->key2_low & 0xFFFF);
-    FURI_LOG_D(
-        TAG,
-        "Key1: %08lX%08lX (NOT inverted for Type 3/4)",
-        (unsigned long)(key1 >> 32),
-        (unsigned long)(key1 & 0xFFFFFFFF));
-    FURI_LOG_D(TAG, "Key2: %04X (NOT inverted for Type 3/4)", key2);
-#ifndef REMOVE_LOGS
-    uint8_t key1_byte6 = (key1 >> 8) & 0xFF;
-    uint8_t key1_byte7 = key1 & 0xFF;
-    FURI_LOG_D(
-        TAG,
-        "Key1 last 2 bytes: %02X %02X (bits: %d%d%d%d%d%d%d%d %d%d%d%d%d%d%d%d)",
-        key1_byte6,
-        key1_byte7,
-        (key1_byte6 >> 7) & 1,
-        (key1_byte6 >> 6) & 1,
-        (key1_byte6 >> 5) & 1,
-        (key1_byte6 >> 4) & 1,
-        (key1_byte6 >> 3) & 1,
-        (key1_byte6 >> 2) & 1,
-        (key1_byte6 >> 1) & 1,
-        (key1_byte6 >> 0) & 1,
-        (key1_byte7 >> 7) & 1,
-        (key1_byte7 >> 6) & 1,
-        (key1_byte7 >> 5) & 1,
-        (key1_byte7 >> 4) & 1,
-        (key1_byte7 >> 3) & 1,
-        (key1_byte7 >> 2) & 1,
-        (key1_byte7 >> 1) & 1,
-        (key1_byte7 >> 0) & 1);
-#endif
-    for(int repeat = 0; repeat < 2; repeat++) {
-#ifndef REMOVE_LOGS
-        size_t repeat_start = index;
-#endif
-        index = pp_emit_short_pairs(upload, index, cap, 500, 45);
-        FURI_LOG_D(
-            TAG, "Repeat %d: Preamble %zu pulses (45 cycles)", repeat + 1, index - repeat_start);
-
-        index = pp_emit(upload, index, cap, true, 1000);
-        index = pp_emit(upload, index, cap, false, 500);
-        index = pp_emit_short_pairs(upload, index, cap, 750, 3);
-
-#ifndef REMOVE_LOGS
-        size_t key1_start = index;
-#endif
-        for(int i = 63; i >= 0; i--) {
-            bool bit = (key1 >> i) & 1;
-
-            index = vag_emit_manchester_inv(upload, index, cap, bit, 500);
-        }
-        FURI_LOG_D(TAG, "Repeat %d: Key1 %zu pulses (64 bits)", repeat + 1, index - key1_start);
-
-#ifndef REMOVE_LOGS
-        size_t key2_start = index;
-#endif
-        for(int i = 15; i >= 0; i--) {
-            bool bit = (key2 >> i) & 1;
-            index = vag_emit_manchester_inv(upload, index, cap, bit, 500);
-        }
-        FURI_LOG_D(TAG, "Repeat %d: Key2 %zu pulses (16 bits)", repeat + 1, index - key2_start);
-
-        index = pp_emit(upload, index, cap, false, 10000);
-        FURI_LOG_D(TAG, "Repeat %d: Total %zu pulses", repeat + 1, index - repeat_start);
+    // Data2 begins with a decoder-injected leading '1' bit (bit_count=1, data=1),
+    // so the wire carries Key1 bits [62:0] then the 16-bit Key2. Neither field is
+    // inverted for Type 3/4.
+    ManchesterState state = ManchesterStateMid1;
+    const uint64_t key1 = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
+    for(int b = (int)VAG_KEY1_BITS - 2; b >= 0; b--) {
+        index = vag_emit_manch_bit(
+            upload,
+            index,
+            cap,
+            ((key1 >> b) & 1ULL) != 0ULL,
+            VAG_T34_TE_SHORT,
+            VAG_T34_TE_LONG,
+            &state);
     }
+    const uint16_t key2 = (uint16_t)(instance->key2_low & 0xFFFFU);
+    for(int b = 15; b >= 0; b--) {
+        index = vag_emit_manch_bit(
+            upload,
+            index,
+            cap,
+            ((key2 >> b) & 1U) != 0U,
+            VAG_T34_TE_SHORT,
+            VAG_T34_TE_LONG,
+            &state);
+    }
+
+    // Data2 commits as soon as bit_count == 80; add an idle gap for clean repeats.
+    index = pp_emit(upload, index, cap, false, 10000);
 
     instance->size_upload = index;
-    FURI_LOG_I(TAG, "Type%d upload built: %zu pulses (expected: 518)", instance->vag_type, index);
-
-    if(index != 518) {
-        FURI_LOG_W(TAG, "WARNING: Pulse count %zu != expected 518!", index);
-    }
+    instance->front = 0;
 }
 #endif
 
@@ -1666,77 +1324,13 @@ SubGhzProtocolStatus
             instance->btn,
             instance->key_idx);
 
-        if(instance->key_idx == 0xFF) {
-            FURI_LOG_I(
-                TAG, "KeyIdx not found in file, decoding original signal to find correct key...");
-
-            SubGhzProtocolDecoderVAG decoder;
-            memset(&decoder, 0, sizeof(decoder));
-            decoder.key1_low = instance->key1_low;
-            decoder.key1_high = instance->key1_high;
-            decoder.key2_low = instance->key2_low;
-            decoder.key2_high = instance->key2_high;
-            decoder.vag_type = instance->vag_type;
-            decoder.data_count_bit = 80;
-            decoder.key_idx = 0xFF;
-            vag_parse_data(&decoder);
-
-            if(decoder.decrypted) {
-                instance->key_idx = decoder.key_idx;
-                FURI_LOG_I(TAG, "Decoded key_idx=%d from original signal", instance->key_idx);
-
-                if(instance->serial == 0 && instance->cnt == 0) {
-                    instance->serial = decoder.serial;
-                    instance->cnt = decoder.cnt;
-                    instance->btn = decoder.btn;
-                    FURI_LOG_I(
-                        TAG,
-                        "Also decoded: Ser=%08lX Cnt=%06lX Btn=%02X",
-                        (unsigned long)instance->serial,
-                        (unsigned long)instance->cnt,
-                        instance->btn);
-                }
-            } else {
-                FURI_LOG_W(
-                    TAG,
-                    "Could not decode original signal - check if keys are loaded and Type is correct");
-            }
-        }
-#ifndef REMOVE_LOGS
-        uint32_t old_cnt = instance->cnt;
-#endif
-        instance->cnt = (instance->cnt + 1) & 0xFFFFFF;
-        FURI_LOG_I(
-            TAG,
-            "Counter incremented: %06lX -> %06lX",
-            (unsigned long)old_cnt,
-            (unsigned long)instance->cnt);
-
-        uint8_t type_byte = (uint8_t)(instance->key1_high >> 24);
-        if(instance->vag_type == 1 && type_byte == 0x00) {
-            FURI_LOG_I(
-                TAG,
-                "Detected Passat signal (type_byte 0x00), converting type 1 -> type 2 to fix key2 issue");
-            instance->vag_type = 2;
-        }
-
-        FURI_LOG_I(TAG, "Building upload for type %d...", instance->vag_type);
-        switch(instance->vag_type) {
-        case 1:
-            vag_encoder_build_type1(instance);
-            break;
-        case 2:
-            vag_encoder_build_type2(instance);
-            break;
-        case 3:
-        case 4:
-            vag_encoder_build_type3_4(instance);
-            break;
-        default:
-            FURI_LOG_W(TAG, "Unknown type %d, defaulting to type 1", instance->vag_type);
-            instance->vag_type = 1;
-            vag_encoder_build_type1(instance);
-            break;
+        // Rolling-code clone: replay the stored (already-encrypted) key verbatim.
+        // Do NOT increment the counter or re-encrypt -- that would desync the
+        // emitted frame from the captured serial/counter and break re-decoding.
+        if(instance->vag_type == 3 || instance->vag_type == 4) {
+            vag_encoder_build_type_3_4(instance);
+        } else {
+            vag_encoder_build_type_1_2(instance);
         }
 
         if(instance->size_upload == 0) {

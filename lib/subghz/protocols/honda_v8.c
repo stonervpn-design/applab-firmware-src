@@ -164,15 +164,25 @@ static uint32_t kl_decrypt(uint32_t ciphertext, uint64_t key) {
     return x;
 }
 
+/* True inverse of kl_decrypt: kl_decrypt() runs 528 right-shift rounds
+ * R_0..R_527, so the inverse applies the inverted rounds R_527..R_0 in
+ * reverse. Each decrypt round is s' = (s>>1) | (fb<<31) with
+ * fb = (s&1) ^ nlf(s) ^ ((s>>15)&1) ^ kb. Inverting: bits 31..1 of s come
+ * from bits 30..0 of s'; the NLF taps (1,9,20,26,31) never read bit0, so
+ * nlf(s) and s[15] are recoverable from (s'<<1), and bit0 is solved as
+ * s0 = fb ^ nlf ^ s15 ^ kb. This guarantees kl_decrypt(kl_encrypt(p)) == p
+ * so an emulated frame re-decodes to the same plaintext (a plain forward
+ * KeeLoq round is NOT the inverse of this decryptor). */
 static uint32_t kl_encrypt(uint32_t plaintext, uint64_t key) {
     uint32_t x = plaintext;
-    for(int i = 0; i < HV8_ROUNDS; i++) {
-        uint32_t kb  = (uint32_t)((key >> (i & 0x3F)) & 1u);
-        uint32_t nlf = kl_nlf(x);
-        uint32_t b0  = x & 1u;
-        uint32_t b16 = (x >> 16) & 1u;
-        uint32_t fb  = nlf ^ b16 ^ b0 ^ kb;
-        x = ((x << 1) & 0xFFFFFFFFu) | fb;
+    for(int i = HV8_ROUNDS - 1; i >= 0; i--) {
+        uint32_t kb  = (uint32_t)((key >> ((15 - i) & 0x3F)) & 1u);
+        uint32_t tmp = (x << 1);
+        uint32_t nlf = kl_nlf(tmp);
+        uint32_t s15 = (tmp >> 15) & 1u;
+        uint32_t fb  = (x >> 31) & 1u;
+        uint32_t s0  = fb ^ nlf ^ s15 ^ kb;
+        x = tmp | s0;
     }
     return x;
 }
@@ -240,9 +250,18 @@ static void kl_build_frame(
                      ((uint32_t)rc         << 16);
     uint32_t enc = kl_encrypt(plain, key);
 
-    for(int i = 0; i < 32; i++) bits[i]    = (bool)((enc    >> i) & 1u);
-    for(int i = 0; i < 28; i++) bits[32+i] = (bool)((serial >> i) & 1u);
-    for(int i = 0; i < 4;  i++) bits[60+i] = (bool)((btn    >> i) & 1u);
+    /* The decoder shifts the 64 data bits in (bit0 = first on-air) then
+     * bit-reverses them into `raw`, extracting enc=raw[0:31],
+     * serial=raw[32:59], btn=raw[60:63]. To reproduce that exact frame the
+     * air order must be MSB-first over the natural 64-bit value
+     *   raw = (btn << 60) | (serial << 32) | enc
+     * i.e. bits[0] carries raw bit63. (A LSB-first fill would make the
+     * decoder recover byte-reversed, scrambled fields.) */
+    uint64_t raw = ((uint64_t)(btn    & 0x0Fu)      << 60) |
+                   ((uint64_t)(serial & 0x0FFFFFFFu) << 32) |
+                   (uint64_t)enc;
+
+    for(int i = 0; i < 64; i++) bits[i]    = (bool)((raw >> (63 - i)) & 1u);
     for(int i = 0; i < 2;  i++) bits[64+i] = (bool)((status >> i) & 1u);
 }
 
@@ -562,8 +581,13 @@ static void kl_build_upload(SubGhzProtocolEncoderHondaV8* inst) {
             bool bit = inst->frame_bits[b];
             buf[idx++] = level_duration_make(true, HV8_TE_BASE);
             if(bit) {
+                /* Inverted PWM 1-bit: a single SHORT low, then the rest of the
+                 * bit cell is held HIGH. The decoder keys off the LOW width only
+                 * and ignores HIGH durations, so the cell must contain exactly
+                 * ONE low per bit; emitting the filler as a second LOW would be
+                 * counted as a spurious extra bit and desync the frame. */
                 buf[idx++] = level_duration_make(false, HV8_TE_BIT1_LOW);
-                buf[idx++] = level_duration_make(false,
+                buf[idx++] = level_duration_make(true,
                     HV8_TE_BASE - HV8_TE_BIT1_LOW);
             } else {
                 buf[idx++] = level_duration_make(false, HV8_TE_BASE);

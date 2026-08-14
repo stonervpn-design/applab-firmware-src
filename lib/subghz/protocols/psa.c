@@ -157,389 +157,124 @@ const SubGhzProtocol psa_protocol = {
 static void psa_calculate_checksum(uint8_t* buffer);
 
 #ifdef ENABLE_EMULATE_FEATURE
-static void psa_second_stage_xor_encrypt(uint8_t* buffer) {
-    uint8_t E6 = buffer[8];
-    uint8_t E7 = buffer[9];
-
-    uint8_t P[6];
-    P[0] = buffer[2];
-    P[1] = buffer[3];
-    P[2] = buffer[4];
-    P[3] = buffer[5];
-    P[4] = buffer[6];
-    P[5] = buffer[7];
-
-    uint8_t E5 = P[5] ^ E7 ^ E6;
-    uint8_t E0 = P[2] ^ E5;
-    uint8_t E2 = P[4] ^ E0;
-    uint8_t E4 = P[3] ^ E2;
-    uint8_t E3 = P[0] ^ E5;
-    uint8_t E1 = P[1] ^ E3;
-
-    buffer[2] = E0;
-    buffer[3] = E1;
-    buffer[4] = E2;
-    buffer[5] = E3;
-    buffer[6] = E4;
-    buffer[7] = E5;
+// Manchester event -> physical (level, duration) pulse, mirroring the decoder's
+// State2/State4 classification in subghz_protocol_decoder_psa_feed():
+//   ShortLow  <- (high, te_short)   ShortHigh <- (low, te_short)
+//   LongLow   <- (high, te_long)    LongHigh  <- (low, te_long)
+static void psa_encoder_emit_event(
+    SubGhzProtocolEncoderPSA* instance,
+    size_t* index,
+    ManchesterEvent event) {
+    bool level = false;
+    uint32_t duration = 0;
+    switch(event) {
+    case ManchesterEventShortLow:
+        level = true;
+        duration = subghz_protocol_psa_const.te_short;
+        break;
+    case ManchesterEventShortHigh:
+        level = false;
+        duration = subghz_protocol_psa_const.te_short;
+        break;
+    case ManchesterEventLongLow:
+        level = true;
+        duration = subghz_protocol_psa_const.te_long;
+        break;
+    case ManchesterEventLongHigh:
+        level = false;
+        duration = subghz_protocol_psa_const.te_long;
+        break;
+    default:
+        return;
+    }
+    if(*index < PSA_UPLOAD_CAPACITY) {
+        instance->encoder.upload[(*index)++] = level_duration_make(level, duration);
+    }
 }
 
-static void psa_build_buffer_mode23(
+// Drive a mirror copy of the decoder's manchester_advance() FSM so it outputs
+// exactly one bit `bit`. Tries a single event, else a priming (non-yielding)
+// event followed by a yielding one. This is the guaranteed inverse of the
+// decoder's Manchester recovery.
+static bool psa_encoder_put_bit(
     SubGhzProtocolEncoderPSA* instance,
-    uint8_t* buffer,
-    uint8_t* preserve_buffer01) {
-    FURI_LOG_I(TAG, "=== MODE 0x23 ENCRYPTION ===");
-    FURI_LOG_I(
-        TAG,
-        "Input: Ser:%06lX Cnt:%08lX CRC:%02X Btn:%01X",
-        (unsigned long)instance->serial,
-        (unsigned long)instance->counter,
-        (unsigned int)instance->crc,
-        (unsigned int)instance->button);
-
-    memset(buffer, 0, PSA_BUFFER_SIZE);
-
-    buffer[2] = (uint8_t)((instance->serial >> 16) & 0xFF);
-    buffer[3] = (uint8_t)((instance->serial >> 8) & 0xFF);
-    buffer[4] = (uint8_t)(instance->serial & 0xFF);
-    buffer[5] = (uint8_t)((instance->counter >> 8) & 0xFF);
-    buffer[6] = (uint8_t)(instance->counter & 0xFF);
-    buffer[7] = (uint8_t)(instance->crc & 0xFF);
-    buffer[8] = (uint8_t)(instance->button & 0xF);
-
-    uint8_t original_buffer9 = 0;
-#ifndef REMOVE_LOGS
-    uint8_t original_buffer8 = 0;
-#endif
-    bool has_original_key2 = (instance->key2_low != 0);
-    if(has_original_key2) {
-        original_buffer9 = (uint8_t)(instance->key2_low & 0xFF);
-#ifndef REMOVE_LOGS
-        original_buffer8 = (uint8_t)((instance->key2_low >> 8) & 0xFF);
-#endif
-        buffer[9] = original_buffer9;
-        FURI_LOG_D(
-            TAG,
-            "Original Key2: 0x%04X, buffer[8]=0x%02X buffer[9]=0x%02X, preserving buffer[9]",
-            (unsigned int)instance->key2_low,
-            original_buffer8,
-            original_buffer9);
-    } else {
-        FURI_LOG_D(TAG, "No original Key2, will find valid buffer[9]");
+    size_t* index,
+    ManchesterState* state,
+    bool bit) {
+    static const ManchesterEvent events[4] = {
+        ManchesterEventShortLow,
+        ManchesterEventShortHigh,
+        ManchesterEventLongLow,
+        ManchesterEventLongHigh};
+    for(int i = 0; i < 4; i++) {
+        ManchesterState next;
+        bool data;
+        if(manchester_advance(*state, events[i], &next, &data) && data == bit) {
+            psa_encoder_emit_event(instance, index, events[i]);
+            *state = next;
+            return true;
+        }
     }
-
-    FURI_LOG_D(
-        TAG,
-        "Plaintext buffer[2-9]: %02X %02X %02X %02X %02X %02X %02X %02X",
-        buffer[2],
-        buffer[3],
-        buffer[4],
-        buffer[5],
-        buffer[6],
-        buffer[7],
-        buffer[8],
-        buffer[9]);
-
-    uint8_t initial_plaintext[6];
-    initial_plaintext[0] = buffer[2];
-    initial_plaintext[1] = buffer[3];
-    initial_plaintext[2] = buffer[4];
-    initial_plaintext[3] = buffer[5];
-    initial_plaintext[4] = buffer[6];
-    initial_plaintext[5] = buffer[7];
-    uint8_t initial_button = buffer[8] & 0xF;
-
-    bool found = false;
-    // uint16_t bounds so the 0xFF case is covered: with uint8_t, buffer9_end =
-    // original_buffer9 + 1 wraps to 0 when the preserved validation low byte is 0xFF
-    // (search skipped -> CRC-corrupting fallback), and the no-original path (end=255)
-    // never tried buffer9 == 255.
-    uint16_t buffer9_to_use = has_original_key2 ? original_buffer9 : 0;
-    uint16_t buffer9_end = has_original_key2 ? (uint16_t)(original_buffer9 + 1) : 256;
-
-    for(uint16_t buffer9_try = buffer9_to_use; buffer9_try < buffer9_end && !found; buffer9_try++) {
-        for(uint16_t buffer8_high_try = 0; buffer8_high_try < 16 && !found; buffer8_high_try++) {
-            buffer[2] = initial_plaintext[0];
-            buffer[3] = initial_plaintext[1];
-            buffer[4] = initial_plaintext[2];
-            buffer[5] = initial_plaintext[3];
-            buffer[6] = initial_plaintext[4];
-            buffer[7] = initial_plaintext[5];
-            buffer[8] = initial_button | (uint8_t)(buffer8_high_try << 4);
-            buffer[9] = (uint8_t)buffer9_try;
-
-            psa_second_stage_xor_encrypt(buffer);
-
-            psa_calculate_checksum(buffer);
-            uint8_t checksum_after = buffer[11];
-            uint8_t key2_high_after = checksum_after & 0xF0;
-
-            uint8_t validation = (checksum_after ^ buffer[8]) & 0xF0;
-            if(validation == 0) {
-                buffer[8] = (buffer[8] & 0x0F) | key2_high_after;
-                buffer[13] = buffer[9] ^ buffer[8];
-                found = true;
-                FURI_LOG_D(
-                    TAG,
-                    "Found valid Key2: buffer[8]=0x%02X buffer[9]=0x%02X",
-                    buffer[8],
-                    buffer[9]);
-                break;
+    for(int i = 0; i < 4; i++) {
+        ManchesterState mid;
+        bool d0;
+        if(manchester_advance(*state, events[i], &mid, &d0)) continue;
+        for(int j = 0; j < 4; j++) {
+            ManchesterState next;
+            bool data;
+            if(manchester_advance(mid, events[j], &next, &data) && data == bit) {
+                psa_encoder_emit_event(instance, index, events[i]);
+                psa_encoder_emit_event(instance, index, events[j]);
+                *state = next;
+                return true;
             }
         }
     }
-
-    if(!found) {
-        FURI_LOG_W(TAG, "Brute force failed, using default approach");
-        buffer[2] = initial_plaintext[0];
-        buffer[3] = initial_plaintext[1];
-        buffer[4] = initial_plaintext[2];
-        buffer[5] = initial_plaintext[3];
-        buffer[6] = initial_plaintext[4];
-        buffer[7] = initial_plaintext[5];
-        buffer[8] = initial_button;
-        buffer[9] = has_original_key2 ? original_buffer9 : 0x23;
-
-        psa_second_stage_xor_encrypt(buffer);
-        psa_calculate_checksum(buffer);
-        uint8_t checksum_after = buffer[11];
-        uint8_t key2_high_after = checksum_after & 0xF0;
-        buffer[8] = (buffer[8] & 0x0F) | key2_high_after;
-        buffer[13] = buffer[9] ^ buffer[8];
-    }
-
-    if(preserve_buffer01 != NULL) {
-        buffer[0] = preserve_buffer01[0];
-        buffer[1] = preserve_buffer01[1];
-        FURI_LOG_D(
-            TAG, "Preserved buffer[0-1] from original Key1: %02X %02X", buffer[0], buffer[1]);
-    } else {
-        buffer[0] = buffer[2] ^ buffer[6];
-        buffer[1] = buffer[3] ^ buffer[7];
-        FURI_LOG_D(TAG, "Derived buffer[0-1]: %02X %02X", buffer[0], buffer[1]);
-    }
-
-    FURI_LOG_I(
-        TAG,
-        "Encrypted buffer[0-9]: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-        buffer[0],
-        buffer[1],
-        buffer[2],
-        buffer[3],
-        buffer[4],
-        buffer[5],
-        buffer[6],
-        buffer[7],
-        buffer[8],
-        buffer[9]);
+    return false;
 }
 
-static void psa_build_buffer_mode36(
-    SubGhzProtocolEncoderPSA* instance,
-    uint8_t* buffer,
-    uint8_t* preserve_buffer01) {
-    FURI_LOG_I(TAG, "=== MODE 0x36 ENCRYPTION ===");
-    FURI_LOG_I(
-        TAG,
-        "Input: Ser:%06lX Cnt:%08lX CRC:%02X Btn:%01X",
-        (unsigned long)instance->serial,
-        (unsigned long)instance->counter,
-        (unsigned int)instance->crc,
-        (unsigned int)instance->button);
+// Preamble low-shorts required by the decoder's State1 (pattern_counter must
+// exceed PSA_PATTERN_THRESHOLD_1 = 0x46 = 70); 75 leaves margin.
+#define PSA_ENC_PREAMBLE_PAIRS 75
 
-    memset(buffer, 0, PSA_BUFFER_SIZE);
-
-    uint32_t v0 = ((instance->serial & 0xFFFFFF) << 8) | ((instance->button & 0xF) << 4) |
-                  ((instance->counter >> 24) & 0xF);
-    uint32_t v1 = ((instance->counter & 0xFFFFFF) << 8) | (instance->crc & 0xFF);
-
-    FURI_LOG_D(
-        TAG, "Packed v0:0x%08lX v1:0x%08lX (before CRC)", (unsigned long)v0, (unsigned long)v1);
-
-    uint8_t crc = psa_crypto_tea_crc(v0, v1);
-    v1 = (v1 & 0xFFFFFF00) | crc;
-
-    FURI_LOG_D(
-        TAG, "Calculated CRC: 0x%02X, v1 after CRC: 0x%08lX", (unsigned int)crc, (unsigned long)v1);
-
-    uint32_t bf_counter = PSA_CRYPTO_BF1_START | (instance->serial & 0xFFFFFF);
-    FURI_LOG_D(TAG, "BF counter: 0x%08lX (BF1_START | serial)", (unsigned long)bf_counter);
-
-    uint32_t working_key[4];
-
-    uint32_t wk2 = PSA_CRYPTO_BF1_CONST_U4;
-    uint32_t wk3 = bf_counter;
-    psa_crypto_tea_encrypt(&wk2, &wk3, psa_crypto_bf1_key_schedule);
-
-    uint32_t wk0 = (bf_counter << 8) | 0x0E;
-    uint32_t wk1 = PSA_CRYPTO_BF1_CONST_U5;
-    psa_crypto_tea_encrypt(&wk0, &wk1, psa_crypto_bf1_key_schedule);
-
-    working_key[0] = wk0;
-    working_key[1] = wk1;
-    working_key[2] = wk2;
-    working_key[3] = wk3;
-
-    psa_crypto_tea_encrypt(&v0, &v1, working_key);
-
-    FURI_LOG_D(TAG, "TEA encrypted v0:0x%08lX v1:0x%08lX", (unsigned long)v0, (unsigned long)v1);
-    FURI_LOG_D(
-        TAG,
-        "Working key: %08lX %08lX %08lX %08lX",
-        (unsigned long)working_key[0],
-        (unsigned long)working_key[1],
-        (unsigned long)working_key[2],
-        (unsigned long)working_key[3]);
-
-    psa_crypto_unpack_tea_result_to_buffer(buffer, v0, v1);
-
-    if(preserve_buffer01 != NULL) {
-        buffer[0] = preserve_buffer01[0];
-        buffer[1] = preserve_buffer01[1];
-        FURI_LOG_D(
-            TAG, "Preserved buffer[0-1] from original Key1: %02X %02X", buffer[0], buffer[1]);
-    } else {
-        buffer[0] = buffer[2] ^ buffer[6];
-        buffer[1] = buffer[3] ^ buffer[7];
-        FURI_LOG_D(TAG, "Derived buffer[0-1]: %02X %02X", buffer[0], buffer[1]);
-    }
-
-    FURI_LOG_I(
-        TAG,
-        "Encrypted buffer[0-9]: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-        buffer[0],
-        buffer[1],
-        buffer[2],
-        buffer[3],
-        buffer[4],
-        buffer[5],
-        buffer[6],
-        buffer[7],
-        buffer[8],
-        buffer[9]);
-}
-
+// Rebuild the exact captured on-air frame: preamble + 64-bit Key1 + 16-bit
+// validation field, Manchester-encoded the way the decoder reads it. No cipher
+// is re-run -- the stored (already-encrypted) frame bits are reproduced as-is,
+// so re-decoding yields the same Key1/Key2 (a verbatim clone of the capture).
 static void psa_encoder_build_upload(SubGhzProtocolEncoderPSA* instance) {
     furi_check(instance);
-
-    FURI_LOG_I(TAG, "=== ENCODER BUILD UPLOAD ===");
-    FURI_LOG_I(
-        TAG,
-        "Mode: 0x%02X, Serial:%06lX Counter:%08lX CRC:%02X Button:%01X",
-        (unsigned int)instance->mode,
-        (unsigned long)instance->serial,
-        (unsigned long)instance->counter,
-        (unsigned int)instance->crc,
-        (unsigned int)instance->button);
-
-    uint8_t buffer[PSA_BUFFER_SIZE] = {0};
-
-    uint8_t preserve_buffer01[2] = {0};
-    uint8_t* preserve_ptr = NULL;
-
-    if(instance->key1_low != 0 || instance->key1_high != 0) {
-        uint8_t orig_buffer[PSA_BUFFER_SIZE] = {0};
-        psa_crypto_setup_byte_buffer(
-            orig_buffer, instance->key1_low, instance->key1_high, instance->key2_low);
-        preserve_buffer01[0] = orig_buffer[0];
-        preserve_buffer01[1] = orig_buffer[1];
-        preserve_ptr = preserve_buffer01;
-        FURI_LOG_D(
-            TAG,
-            "Original Key1: %08lX%08lX, preserving buffer[0-1]: %02X %02X",
-            (unsigned long)instance->key1_high,
-            (unsigned long)instance->key1_low,
-            preserve_buffer01[0],
-            preserve_buffer01[1]);
-    } else {
-        FURI_LOG_D(TAG, "No original Key1, will derive buffer[0-1]");
-    }
-
-    if(instance->mode == 0x23) {
-        psa_build_buffer_mode23(instance, buffer, preserve_ptr);
-    } else if(instance->mode == 0x36) {
-        psa_build_buffer_mode36(instance, buffer, preserve_ptr);
-    } else {
-        FURI_LOG_E(TAG, "Unknown mode: 0x%02X", instance->mode);
-        return;
-    }
-
-    uint32_t key1_high = ((uint32_t)buffer[0] << 24) | ((uint32_t)buffer[1] << 16) |
-                         ((uint32_t)buffer[2] << 8) | (uint32_t)buffer[3];
-    uint32_t key1_low = ((uint32_t)buffer[4] << 24) | ((uint32_t)buffer[5] << 16) |
-                        ((uint32_t)buffer[6] << 8) | (uint32_t)buffer[7];
-    uint16_t validation_field = ((uint16_t)buffer[8] << 8) | (uint16_t)buffer[9];
-
-    FURI_LOG_I(TAG, "=== ENCRYPTED KEYS ===");
-    FURI_LOG_I(TAG, "Key1: %08lX%08lX", (unsigned long)key1_high, (unsigned long)key1_low);
-    FURI_LOG_I(TAG, "Key2: %04X", (unsigned int)validation_field);
-
     size_t index = 0;
-    uint32_t te = PSA_TE_LONG_250;
+    const uint32_t te_short = subghz_protocol_psa_const.te_short;
+    const uint32_t te_long = subghz_protocol_psa_const.te_long;
 
-    for(int i = 0; i < 80; i++) {
-        if(index >= instance->encoder.size_upload - 2) break;
-        instance->encoder.upload[index++] = level_duration_make(true, te);
-        instance->encoder.upload[index++] = level_duration_make(false, te);
+    // State0 trigger: a single SHORT HIGH pulse arms State1.
+    instance->encoder.upload[index++] = level_duration_make(true, te_short);
+    // State1 preamble: SHORT pairs; each low short increments pattern_counter.
+    for(int p = 0; p < PSA_ENC_PREAMBLE_PAIRS; p++) {
+        instance->encoder.upload[index++] = level_duration_make(false, te_short);
+        instance->encoder.upload[index++] = level_duration_make(true, te_short);
+    }
+    // A LONG LOW pulse ends State1 and enters State2 (which resets Manchester).
+    instance->encoder.upload[index++] = level_duration_make(false, te_long);
+
+    // State2 Manchester data: 64 Key1 bits then 16 validation bits, MSB first.
+    ManchesterState state = ManchesterStateMid1;
+    uint64_t key1 = ((uint64_t)instance->key1_high << 32) | instance->key1_low;
+    for(int b = 63; b >= 0; b--) {
+        psa_encoder_put_bit(instance, &index, &state, (key1 >> b) & 1);
+    }
+    for(int b = 15; b >= 0; b--) {
+        psa_encoder_put_bit(instance, &index, &state, (instance->validation_field >> b) & 1);
     }
 
-    uint32_t te_long_transition = subghz_protocol_psa_const.te_long;
-    if(index < instance->encoder.size_upload - 3) {
-        instance->encoder.upload[index++] = level_duration_make(false, te);
-        instance->encoder.upload[index++] = level_duration_make(true, te_long_transition);
-        instance->encoder.upload[index++] = level_duration_make(false, te);
-    }
-
-    uint64_t key1_data = ((uint64_t)key1_high << 32) | key1_low;
-    for(int bit = 63; bit >= 0; bit--) {
-        if(index >= instance->encoder.size_upload - 2) break;
-        bool bit_value = (key1_data >> bit) & 1;
-        if(bit_value) {
-            instance->encoder.upload[index++] = level_duration_make(true, te);
-            instance->encoder.upload[index++] = level_duration_make(false, te);
-        } else {
-            instance->encoder.upload[index++] = level_duration_make(false, te);
-            instance->encoder.upload[index++] = level_duration_make(true, te);
-        }
-    }
-
-    for(int bit = 15; bit >= 0; bit--) {
-        if(index >= instance->encoder.size_upload - 2) break;
-        bool bit_value = (validation_field >> bit) & 1;
-        if(bit_value) {
-            instance->encoder.upload[index++] = level_duration_make(true, te);
-            instance->encoder.upload[index++] = level_duration_make(false, te);
-        } else {
-            instance->encoder.upload[index++] = level_duration_make(false, te);
-            instance->encoder.upload[index++] = level_duration_make(true, te);
-        }
-    }
-
-    uint32_t end_duration = PSA_TE_END_1000;
-    if(index < instance->encoder.size_upload - 1) {
-        instance->encoder.upload[index++] = level_duration_make(true, end_duration);
-        instance->encoder.upload[index++] = level_duration_make(false, end_duration);
+    // End marker: HIGH ~1000us finalizes the frame in State2.
+    if(index < PSA_UPLOAD_CAPACITY) {
+        instance->encoder.upload[index++] = level_duration_make(true, PSA_TE_END_1000);
     }
 
     instance->encoder.size_upload = index;
     instance->encoder.front = 0;
     instance->encoder.repeat = 10;
-
-    FURI_LOG_I(TAG, "=== TRANSMISSION PARAMETERS ===");
-    FURI_LOG_I(
-        TAG,
-        "TE: %lu, TE_LONG_TRANS: %lu, TE_END: %lu",
-        (unsigned long)te,
-        (unsigned long)te_long_transition,
-        (unsigned long)end_duration);
-    FURI_LOG_I(
-        TAG,
-        "Upload size: %zu levels, Repeat: %d",
-        instance->encoder.size_upload,
-        instance->encoder.repeat);
-    FURI_LOG_I(TAG, "Key1 data (64-bit): %016llX", (unsigned long long)key1_data);
-    FURI_LOG_I(TAG, "Key2 data (16-bit): %04X", (unsigned int)validation_field);
-    FURI_LOG_I(TAG, "=== END ENCODER BUILD ===");
 }
 
 void* subghz_protocol_encoder_psa_alloc(SubGhzEnvironment* environment) {
@@ -573,6 +308,11 @@ SubGhzProtocolStatus
     furi_check(context);
     SubGhzProtocolEncoderPSA* instance = context;
 
+    // A faithful clone only needs the raw on-air fields the decoder always
+    // serializes: Key1 (64-bit) and Key_2 (validation). Serial/Btn/Cnt/Type/CRC
+    // are ONLY present when a frame decrypted at capture time, so they must be
+    // optional here -- otherwise non-decrypted (e.g. TEA/0x36) captures, whose
+    // serialize omits them, would fail to re-emit.
     uint64_t key1 = 0;
     if(!pp_flipper_read_hex_u64(flipper_format, FF_KEY, &key1)) {
         return SubGhzProtocolStatusError;
@@ -587,41 +327,8 @@ SubGhzProtocolStatus
     instance->key2_low = (uint32_t)(key2 & 0xFFFFFFFFU);
     instance->validation_field = (uint16_t)(key2 & 0xFFFFU);
 
-    uint32_t serial = UINT32_MAX;
-    uint32_t btn = UINT32_MAX;
-    uint32_t cnt = UINT32_MAX;
-    uint32_t type_val = UINT32_MAX;
-    pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, &type_val);
-    if(serial == UINT32_MAX || btn == UINT32_MAX || cnt == UINT32_MAX || type_val == UINT32_MAX) {
-        return SubGhzProtocolStatusError;
-    }
-    instance->serial = serial;
-    instance->counter = cnt;
-    instance->button = (uint8_t)(btn & 0xFFU);
-    instance->type = (uint8_t)(type_val & 0xFFU);
-
-    uint32_t crc_val = 0;
-    flipper_format_rewind(flipper_format);
-    if(!flipper_format_read_uint32(flipper_format, "CRC", &crc_val, 1)) {
-        return SubGhzProtocolStatusError;
-    }
-    instance->crc = (uint16_t)(crc_val & 0xFFFFU);
-
-    // Seed is OPTIONAL: seed == serial by construction and is never consumed by the
-    // encoder, so a capture without a "Seed" field is still valid. Default to 0 when
-    // the field is absent instead of failing deserialize.
-    uint32_t seed_val = 0;
-    flipper_format_rewind(flipper_format);
-    if(!flipper_format_read_uint32(flipper_format, "Seed", &seed_val, 1)) {
-        seed_val = 0;
-    }
-    instance->seed = (uint8_t)(seed_val & 0xFFU);
-
-    instance->mode = (instance->type == 0x36) ? 0x36 : 0x23;
-
     psa_encoder_build_upload(instance);
-    // Honor the capture's Repeat field. build_upload hardcodes encoder.repeat = 10,
-    // so read Repeat AFTER the build call (default 10 when the field is absent/0).
+    // build_upload hardcodes repeat = 10; honor a capture's Repeat if present.
     instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 10);
     instance->is_running = true;
     return SubGhzProtocolStatusOk;

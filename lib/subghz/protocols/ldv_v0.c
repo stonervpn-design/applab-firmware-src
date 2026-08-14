@@ -74,7 +74,14 @@ struct SubGhzProtocolEncoderLdvV0 {
     SubGhzProtocolEncoderBase base;
     SubGhzProtocolBlockEncoder encoder;
     SubGhzBlockGeneric generic;
+    uint64_t data_2; // second 64 bits of 128-bit frame
 };
+
+// Preamble Manchester 1-bits emitted before the sync 0-bit. The decoder needs
+// >= 48 (see LdvV0StepPreamble); 60 leaves comfortable margin.
+#define LDV_V0_PREAMBLE_BITS 60
+// Reset-trigger (1) + preamble+sync+128 data bits (<= 2 pulses each) + end gap (1).
+#define LDV_V0_UPLOAD_MAX    512
 
 typedef enum {
     LdvV0StepReset = 0,
@@ -129,7 +136,12 @@ const SubGhzProtocol subghz_protocol_ldv_v0 = {
 };
 
 // ============================================================================
-// Encoder stubs (decode-only for now)
+// Encoder: clones the captured 128-bit frame verbatim (re-emits the stored
+// Key/Key_2 bits). The decoder recovers bits through manchester_advance(), so
+// the encoder drives a mirror copy of that same FSM: for each desired output
+// bit it picks the pulse(s) that make manchester_advance() emit exactly that
+// bit. This is the guaranteed inverse of the decoder (no rolling crypto is
+// re-run — the stored, already-encrypted hop bits are reproduced as-is).
 // ============================================================================
 
 void* subghz_protocol_encoder_ldv_v0_alloc(SubGhzEnvironment* environment) {
@@ -137,10 +149,12 @@ void* subghz_protocol_encoder_ldv_v0_alloc(SubGhzEnvironment* environment) {
     SubGhzProtocolEncoderLdvV0* instance = malloc(sizeof(SubGhzProtocolEncoderLdvV0));
     instance->base.protocol = &subghz_protocol_ldv_v0;
     instance->generic.protocol_name = subghz_protocol_ldv_v0.name;
-    instance->encoder.repeat = 1;
-    instance->encoder.size_upload = 2;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
+    instance->encoder.repeat = 3;
+    instance->encoder.size_upload = 0;
+    instance->encoder.front = 0;
+    instance->encoder.upload = malloc(LDV_V0_UPLOAD_MAX * sizeof(LevelDuration));
     instance->encoder.is_running = false;
+    instance->data_2 = 0;
     return instance;
 }
 
@@ -151,11 +165,156 @@ void subghz_protocol_encoder_ldv_v0_free(void* context) {
     free(instance);
 }
 
+// Map a decoder ManchesterEvent back to the physical (level, duration) pulse
+// that produces it. Mirrors the classification in subghz_protocol_decoder_ldv_v0_feed:
+//   ShortLow  <- (high, te_short)   ShortHigh <- (low, te_short)
+//   LongLow   <- (high, te_long)    LongHigh  <- (low, te_long)
+static void ldv_v0_emit_event(
+    SubGhzProtocolEncoderLdvV0* instance,
+    size_t* index,
+    ManchesterEvent event) {
+    bool level = false;
+    uint32_t duration = 0;
+    switch(event) {
+    case ManchesterEventShortLow:
+        level = true;
+        duration = subghz_protocol_ldv_v0_const.te_short;
+        break;
+    case ManchesterEventShortHigh:
+        level = false;
+        duration = subghz_protocol_ldv_v0_const.te_short;
+        break;
+    case ManchesterEventLongLow:
+        level = true;
+        duration = subghz_protocol_ldv_v0_const.te_long;
+        break;
+    case ManchesterEventLongHigh:
+        level = false;
+        duration = subghz_protocol_ldv_v0_const.te_long;
+        break;
+    default:
+        return;
+    }
+    if(*index < LDV_V0_UPLOAD_MAX) {
+        instance->encoder.upload[(*index)++] = level_duration_make(level, duration);
+    }
+}
+
+// Drive the mirror decoder FSM to output a single Manchester bit `bit`.
+// Tries a one-pulse event first, otherwise a priming (non-yielding) event
+// followed by a yielding one. Returns false only if no drive exists (never
+// happens for this FSM, but guards the caller).
+static bool ldv_v0_put_bit(
+    SubGhzProtocolEncoderLdvV0* instance,
+    size_t* index,
+    ManchesterState* state,
+    bool bit) {
+    static const ManchesterEvent events[4] = {
+        ManchesterEventShortLow,
+        ManchesterEventShortHigh,
+        ManchesterEventLongLow,
+        ManchesterEventLongHigh};
+
+    for(int i = 0; i < 4; i++) {
+        ManchesterState next;
+        bool data;
+        if(manchester_advance(*state, events[i], &next, &data) && data == bit) {
+            ldv_v0_emit_event(instance, index, events[i]);
+            *state = next;
+            return true;
+        }
+    }
+    for(int i = 0; i < 4; i++) {
+        ManchesterState mid;
+        bool d0;
+        if(manchester_advance(*state, events[i], &mid, &d0)) continue; // yielded a bit, skip
+        for(int j = 0; j < 4; j++) {
+            ManchesterState next;
+            bool data;
+            if(manchester_advance(mid, events[j], &next, &data) && data == bit) {
+                ldv_v0_emit_event(instance, index, events[i]);
+                ldv_v0_emit_event(instance, index, events[j]);
+                *state = next;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void subghz_protocol_encoder_ldv_v0_get_upload(SubGhzProtocolEncoderLdvV0* instance) {
+    furi_assert(instance);
+    size_t index = 0;
+
+    // First SHORT HIGH pulse is consumed by the decoder's Reset step (it only
+    // arms preamble detection and resets the Manchester state), so it is not
+    // part of the Manchester bitstream.
+    instance->encoder.upload[index++] =
+        level_duration_make(true, subghz_protocol_ldv_v0_const.te_short);
+
+    // The decoder resets its Manchester state to Mid1 on the trigger; mirror it.
+    ManchesterState state = ManchesterStateMid1;
+
+    for(int i = 0; i < LDV_V0_PREAMBLE_BITS; i++) {
+        ldv_v0_put_bit(instance, &index, &state, true); // preamble 1-bits
+    }
+    ldv_v0_put_bit(instance, &index, &state, false); // sync 0-bit
+
+    for(int b = 63; b >= 0; b--) {
+        ldv_v0_put_bit(instance, &index, &state, (instance->generic.data >> b) & 1);
+    }
+    for(int b = 63; b >= 0; b--) {
+        ldv_v0_put_bit(instance, &index, &state, (instance->data_2 >> b) & 1);
+    }
+
+    // End gap (> te_long*4) so the decoder finalizes the frame.
+    if(index < LDV_V0_UPLOAD_MAX) {
+        instance->encoder.upload[index++] =
+            level_duration_make(false, subghz_protocol_ldv_v0_const.te_long * 8);
+    }
+
+    instance->encoder.size_upload = index;
+    instance->encoder.front = 0;
+}
+
 SubGhzProtocolStatus
     subghz_protocol_encoder_ldv_v0_deserialize(void* context, FlipperFormat* flipper_format) {
-    UNUSED(context);
-    UNUSED(flipper_format);
-    return SubGhzProtocolStatusError;
+    furi_assert(context);
+    SubGhzProtocolEncoderLdvV0* instance = context;
+    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
+
+    do {
+        ret = subghz_block_generic_deserialize_check_count_bit(
+            &instance->generic,
+            flipper_format,
+            subghz_protocol_ldv_v0_const.min_count_bit_for_found);
+        if(ret != SubGhzProtocolStatusOk) break;
+
+        // Read Key_2 (second 64 bits) symmetrically with the decoder serialize.
+        if(!flipper_format_rewind(flipper_format)) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+            break;
+        }
+        uint8_t key_data_2[sizeof(uint64_t)] = {0};
+        if(!flipper_format_read_hex(flipper_format, "Key_2", key_data_2, sizeof(uint64_t))) {
+            ret = SubGhzProtocolStatusErrorParserOthers;
+            break;
+        }
+        instance->data_2 = 0;
+        for(uint8_t i = 0; i < sizeof(uint64_t); i++) {
+            instance->data_2 = (instance->data_2 << 8) | key_data_2[i];
+        }
+
+        // Optional repeat override.
+        flipper_format_read_uint32(
+            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
+
+        subghz_protocol_encoder_ldv_v0_get_upload(instance);
+        instance->encoder.is_running = true;
+        ret = SubGhzProtocolStatusOk;
+    } while(false);
+
+    return ret;
 }
 
 void subghz_protocol_encoder_ldv_v0_stop(void* context) {
@@ -165,8 +324,20 @@ void subghz_protocol_encoder_ldv_v0_stop(void* context) {
 }
 
 LevelDuration subghz_protocol_encoder_ldv_v0_yield(void* context) {
-    UNUSED(context);
-    return level_duration_reset();
+    furi_assert(context);
+    SubGhzProtocolEncoderLdvV0* instance = context;
+
+    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
+        instance->encoder.is_running = false;
+        return level_duration_reset();
+    }
+
+    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
+    if(++instance->encoder.front == instance->encoder.size_upload) {
+        instance->encoder.repeat--;
+        instance->encoder.front = 0;
+    }
+    return ret;
 }
 
 // ============================================================================

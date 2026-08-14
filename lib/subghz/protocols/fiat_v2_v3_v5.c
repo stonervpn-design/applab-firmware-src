@@ -916,12 +916,14 @@ static void fiat_process_frame(SubGhzProtocolDecoderFiat* instance) {
             hop = (hop << 1) | instance->bits[start + i];
         }
 
-        // Structural validation on complete frames:
+        // Require a COMPLETE, structurally-valid frame. Partial frames
+        // (data_len < FRAME_BITS) previously skipped the hop stop-bit check, which
+        // let other cars' signals (Kia V5, Isuzu, VW) false-match as Fiat. Real
+        // Fiat fobs always transmit the full frame, so demand it.
         // hop[43:42] must be 00, hop[0] must be 1 (stop bit)
-        if(data_len >= FIAT_V3_FRAME_BITS) {
-            if((hop >> 42) != 0) return;
-            if((hop & 1) != 1) return;
-        }
+        if(data_len < FIAT_V3_FRAME_BITS) return;
+        if((hop >> 42) != 0) return;
+        if((hop & 1) != 1) return;
 
         instance->extra.v3.fix_value = fix;
         instance->extra.v3.btn = btn;
@@ -968,10 +970,10 @@ static void fiat_process_frame(SubGhzProtocolDecoderFiat* instance) {
 
         if(!fiat_v5_is_valid_button(btn)) return;
 
-        // Structural validation on complete frames: hop[0] must be 1 (stop bit)
-        if(data_len >= FIAT_V5_FRAME_BITS) {
-            if((hop & 1) != 1) return;
-        }
+        // Require a COMPLETE frame (see V3): partial frames skip the hop stop-bit
+        // check and let non-Fiat signals false-match. Real Fiat sends the full frame.
+        if(data_len < FIAT_V5_FRAME_BITS) return;
+        if((hop & 1) != 1) return;
 
         instance->extra.v5.fix_value = fix;
         instance->extra.v5.type_byte = type_byte;
@@ -1742,6 +1744,13 @@ SubGhzProtocolStatus
 
         // Optional Repeat
         flipper_format_read_uint32(flipper_format, "Repeat", (uint32_t*)&enc->encoder.repeat, 1);
+
+        // flipper_format_read_uint32 is forward-only and the optional reads above
+        // (Variant/Repeat) leave the stream cursor at EOF when a key is absent, which
+        // would make every variant-specific read below silently fail (dropping HopLow/
+        // Status/Type/Seed/Btn/Cnt/Tail and corrupting the emitted frame). Rewind so the
+        // per-variant fields are found from the top.
+        flipper_format_rewind(flipper_format);
 
         switch(enc->variant) {
         case FiatVariantV2: {
