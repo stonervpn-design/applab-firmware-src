@@ -1029,6 +1029,14 @@ static void vag_encoder_build_type_1_2(SubGhzProtocolEncoderVAG* instance) {
     // LOW pulse is the Preamble1 -> Data1 trigger.
     index = pp_emit(upload, index, cap, true, VAG_T12_TE_SHORT);
     index = pp_emit(upload, index, cap, false, VAG_T12_TE_LONG);
+    // Sync trailing half-cell: a single te_short HIGH. From Mid1 the decoder maps a
+    // HIGH pulse to ShortLow, a no-bit self-reset that leaves the state at Mid1 and
+    // consumes no data bit. It is required physically: the first Data1 symbol from
+    // Mid1 always OPENS with a LOW pulse, and without this HIGH the te_long LOW sync
+    // would sit directly against that LOW -> two same-level entries a real radio
+    // merges into one corrupted pulse. Emitting this HIGH makes the sync->data
+    // boundary a genuine level transition while leaving the decoded bits unchanged.
+    index = pp_emit(upload, index, cap, true, VAG_T12_TE_SHORT);
 
     // Data1 stream, differential Manchester starting from the reset state Mid1:
     //   15-bit frame prefix (verbatim on the wire), then 64-bit ~Key1, then
@@ -1096,6 +1104,13 @@ static void vag_encoder_build_type_3_4(SubGhzProtocolEncoderVAG* instance) {
         index = pp_emit(upload, index, cap, true, VAG_T34_SYNC);
         index = pp_emit(upload, index, cap, false, VAG_T34_SYNC);
     }
+    // Sync trailing half-cell: a single te_short HIGH. The final sync pair ends on a
+    // LOW (consumed by Sync2C to enter Data2), and the first Data2 symbol from Mid1
+    // also OPENS with a LOW -> without this HIGH the two LOWs sit adjacent and a real
+    // radio merges them into one corrupted pulse. From Mid1 the decoder maps this
+    // HIGH to ShortLow, a no-bit self-reset (state stays Mid1, bit_count unchanged),
+    // so the sync->data boundary becomes a real transition with no decoded-bit change.
+    index = pp_emit(upload, index, cap, true, VAG_T34_TE_SHORT);
 
     // Data2 begins with a decoder-injected leading '1' bit (bit_count=1, data=1),
     // so the wire carries Key1 bits [62:0] then the 16-bit Key2. Neither field is

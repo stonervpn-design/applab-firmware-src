@@ -543,8 +543,17 @@ static void subghz_protocol_encoder_hitag2_get_upload(SubGhzProtocolEncoderHitag
             lvl = !lvl;
         }
     }
-    // trailing gap so each (repeated) frame ends on a burst boundary
-    if(k < enc_cap) instance->encoder.upload[k++] = level_duration_make(false, HITAG2_GAP * 4);
+    // Trailing gap so each (repeated) frame ends on a burst boundary. Emit it at
+    // the OPPOSITE level from the last data pulse: on a real radio (and under the
+    // merge-aware harness) adjacent same-level entries coalesce into one pulse, so
+    // a LOW gap following a LOW final pulse would fuse into a single >= HITAG2_GAP
+    // space. feed() ends the burst on that space WITHOUT recording the final pulse,
+    // dropping the last half-bit — the chk byte then fails the checksum and the
+    // frame is lost. An opposite-level gap keeps the completing pulse in the burst.
+    if(k < enc_cap) {
+        bool last_level = level_duration_get_level(instance->encoder.upload[k - 1]);
+        instance->encoder.upload[k++] = level_duration_make(!last_level, HITAG2_GAP * 4);
+    }
     instance->encoder.size_upload = k;
 }
 

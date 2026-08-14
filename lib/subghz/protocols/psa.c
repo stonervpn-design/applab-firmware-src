@@ -256,6 +256,16 @@ static void psa_encoder_build_upload(SubGhzProtocolEncoderPSA* instance) {
     }
     // A LONG LOW pulse ends State1 and enters State2 (which resets Manchester).
     instance->encoder.upload[index++] = level_duration_make(false, te_long);
+    // Sync trailing half-cell: a single SHORT HIGH. State2 starts from Mid1, where
+    // a HIGH pulse maps to ShortLow -- a no-bit self-reset (state stays Mid1,
+    // decode_count_bit unchanged). It is required physically: the first State2 data
+    // symbol from Mid1 always OPENS with a LOW pulse, so without this HIGH the
+    // te_long LOW marker would sit directly against that LOW -> two same-level
+    // entries a real radio merges into one corrupted pulse. Emitting this HIGH makes
+    // the State1->State2 boundary a genuine level transition with no bit change.
+    if(index < PSA_UPLOAD_CAPACITY) {
+        instance->encoder.upload[index++] = level_duration_make(true, te_short);
+    }
 
     // State2 Manchester data: 64 Key1 bits then 16 validation bits, MSB first.
     ManchesterState state = ManchesterStateMid1;
@@ -265,6 +275,19 @@ static void psa_encoder_build_upload(SubGhzProtocolEncoderPSA* instance) {
     }
     for(int b = 15; b >= 0; b--) {
         psa_encoder_put_bit(instance, &index, &state, (instance->validation_field >> b) & 1);
+    }
+
+    // End-marker transition guard: the final Manchester symbol ends HIGH or LOW
+    // depending on the last data bit, and the END marker below is HIGH. When the
+    // last data pulse is also HIGH the two would sit adjacent and a real radio merges
+    // them into one over-long HIGH -> the last bit and the END are both corrupted.
+    // Emit a LOW te_short half-cell first in that case (at decode_count_bit == 80 the
+    // decoder swallows it without consuming a bit), so the data->END boundary is
+    // always a genuine level transition. When the last pulse is already LOW the END
+    // HIGH is a clean transition and no filler is needed.
+    if(index > 0 && level_duration_get_level(instance->encoder.upload[index - 1]) &&
+       index < PSA_UPLOAD_CAPACITY) {
+        instance->encoder.upload[index++] = level_duration_make(false, te_short);
     }
 
     // End marker: HIGH ~1000us finalizes the frame in State2.

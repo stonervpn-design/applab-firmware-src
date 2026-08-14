@@ -267,10 +267,18 @@ static void subghz_protocol_encoder_ldv_v0_get_upload(SubGhzProtocolEncoderLdvV0
         ldv_v0_put_bit(instance, &index, &state, (instance->data_2 >> b) & 1);
     }
 
-    // End gap (> te_long*4) so the decoder finalizes the frame.
+    // End gap (> te_long*4) so the decoder finalizes the frame. Emit it at the
+    // OPPOSITE level from the last data pulse: on a real radio (and in the merge-
+    // aware harness) two consecutive same-level entries physically coalesce into
+    // one pulse. If the final data bit completes on a LOW pulse (a trailing 0-bit)
+    // and the gap were also LOW, the two would merge into a single over-long LOW
+    // that the decoder reads as the end gap alone — swallowing the 128th bit and
+    // dropping the frame below min_count_bit_for_found. An opposite-level gap keeps
+    // that completing pulse a distinct transition so all 128 bits are delivered.
     if(index < LDV_V0_UPLOAD_MAX) {
+        bool last_level = level_duration_get_level(instance->encoder.upload[index - 1]);
         instance->encoder.upload[index++] =
-            level_duration_make(false, subghz_protocol_ldv_v0_const.te_long * 8);
+            level_duration_make(!last_level, subghz_protocol_ldv_v0_const.te_long * 8);
     }
 
     instance->encoder.size_upload = index;

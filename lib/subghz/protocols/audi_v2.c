@@ -397,6 +397,16 @@ static void subghz_protocol_encoder_audi_v2_get_upload(SubGhzProtocolEncoderAudi
                 level_duration_make(false, (uint32_t)subghz_protocol_audi_v2_const.te_short);
     }
 
+    // The pairs end on a SHORT LOW and the trigger below is a LONG LOW. On a real
+    // radio (and under the merge-aware harness) adjacent same-level entries coalesce
+    // into one pulse, so a LOW-LOW pair here would fuse into a ~840us LOW matching
+    // neither te_short nor te_long — the decoder would drop the frame before data.
+    // Cap the preamble with one extra SHORT HIGH (still a valid preamble short) so
+    // the LONG LOW trigger stays a distinct transition against the preamble.
+    if(index < enc_cap)
+        instance->encoder.upload[index++] =
+            level_duration_make(true, (uint32_t)subghz_protocol_audi_v2_const.te_short);
+
     // TRIGGER: LONG LOW (first long pulse transitions to data)
     if(index < enc_cap)
         instance->encoder.upload[index++] =

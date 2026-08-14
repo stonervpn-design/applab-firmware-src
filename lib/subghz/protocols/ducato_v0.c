@@ -610,6 +610,15 @@ static void subghz_protocol_encoder_ducato_v0_get_upload(SubGhzProtocolEncoderDu
         buf[idx++] = level_duration_make(false, subghz_protocol_ducato_v0_const.te_short);
     }
 
+    // The pairs end on a SHORT LOW; the 800us sync below is also LOW. On a real
+    // radio (and in the merge-aware harness) two consecutive same-level entries
+    // coalesce into one pulse, which would fuse the last preamble half-bit into
+    // the sync and yield a ~1000us LOW that matches neither te_short nor the sync
+    // window — dropping the frame before it reaches data decode. Cap the preamble
+    // with one extra SHORT HIGH (still a valid preamble short) so the LOW sync is
+    // bracketed by HIGH pulses on both sides and stays a distinct transition.
+    buf[idx++] = level_duration_make(true, subghz_protocol_ducato_v0_const.te_short);
+
     // Sync: 800us LOW
     buf[idx++] = level_duration_make(false, DUCATO_TE_SYNC);
 
@@ -630,8 +639,13 @@ static void subghz_protocol_encoder_ducato_v0_get_upload(SubGhzProtocolEncoderDu
         idx += ducato_encode_bit(&buf[idx], &state, b);
     }
 
-    // End gap
-    buf[idx++] = level_duration_make(true, 6000);
+    // End gap. The decoder finalizes on the 71st decoded bit, so the pulse that
+    // completes the last bit must reach feed() intact. Emit the gap at the OPPOSITE
+    // level from the last data pulse: were it the same level it would coalesce with
+    // that completing pulse into one over-long pulse (matching no te window), the
+    // final bit would never be produced and the frame would stall at 70 bits.
+    bool last_level = level_duration_get_level(buf[idx - 1]);
+    buf[idx++] = level_duration_make(!last_level, 6000);
 
     instance->encoder.size_upload = idx;
 }

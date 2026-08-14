@@ -251,6 +251,16 @@ static void kia_protocol_encoder_v5_get_upload(SubGhzProtocolEncoderKiaV5* insta
     // data bit below is decoded starting from Mid1.
     i = pp_emit(upload, i, cap, true, te_long);
 
+    // Sync trailing half-cell: a single LOW te_short. From Mid1 the decoder's
+    // Manchester machine maps ShortLow to a no-bit self-reset (stays Mid1), so this
+    // consumes no data bit. Its purpose is physical: the first data symbol from Mid1
+    // always OPENS with a HIGH pulse, and without this LOW the sync's HIGH te_long
+    // would sit directly against that HIGH -> two same-level entries that a real
+    // radio merges into one corrupted pulse. Emitting the sync's return-to-LOW makes
+    // the sync->data boundary a genuine level transition while leaving the decoded
+    // bitstream (which still begins from Mid1) unchanged.
+    i = pp_emit(upload, i, cap, false, te_short);
+
     ManchesterState state = ManchesterStateMid1;
     for(int b = (int)KIA_V5_DATA_BITS - 1; b >= 0; b--) {
         const bool bit_value = ((instance->replay_data >> b) & 1ULL) != 0ULL;
@@ -260,6 +270,18 @@ static void kia_protocol_encoder_v5_get_upload(SubGhzProtocolEncoderKiaV5* insta
     i = kia_v5_emit_manchester_bit(upload, i, cap, ((instance->replay_crc >> 2U) & 1U) != 0U, &state);
     i = kia_v5_emit_manchester_bit(upload, i, cap, ((instance->replay_crc >> 1U) & 1U) != 0U, &state);
     i = kia_v5_emit_manchester_bit(upload, i, cap, (instance->replay_crc & 1U) != 0U, &state);
+
+    // Data->END transition guard: the final Manchester symbol can close on a LOW
+    // pulse (Mid0 bit1 = LOW te_long, or the LOW half of a Mid1 bit1). The END gap
+    // below is also LOW, so in that case the last bit's closing pulse would merge
+    // into the gap on-air, be reclassified out-of-range, and drop the final CRC bit.
+    // Emit a HIGH te_short first when the last pulse is LOW: the decoder already holds
+    // all 67 bits (bit_count > 66) and ignores this extra pulse, so the gap stays a
+    // clean level transition and every bit survives the merge. When the last pulse is
+    // already HIGH the LOW gap is a clean edge and no filler is needed.
+    if(i > 0 && !level_duration_get_level(upload[i - 1])) {
+        i = pp_emit(upload, i, cap, true, te_short);
+    }
 
     // Terminating idle gap: the V5 decoder only commits its accumulated bits when
     // it sees an out-of-range duration in the Data step. pp_encoder_yield replays
