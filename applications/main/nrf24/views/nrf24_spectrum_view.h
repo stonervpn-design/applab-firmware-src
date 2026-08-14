@@ -9,6 +9,11 @@ typedef struct {
     uint16_t sweep_count;
     bool running;
     bool hardware_ok;
+    uint8_t peaks[NRF24_SPECTRUM_CHANNELS]; /* max-hold */
+    bool max_hold; /* toggle */
+    uint8_t cursor_ch; /* 0..NRF24_SPECTRUM_CHANNELS-1 (Task 5) */
+    bool cursor_on; /* show cursor readout (Task 5) */
+    uint16_t dwell_us; /* current dwell (Task 5) */
 } Nrf24SpectrumModel;
 
 View* nrf24_spectrum_view_alloc(void);

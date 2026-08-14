@@ -1,4 +1,5 @@
 #include "nrf24_spectrum_view.h"
+#include "../helpers/nrf24_spectrum_calc.h"
 
 #include <gui/canvas.h>
 #include <gui/elements.h>
@@ -47,6 +48,26 @@ static void nrf24_spectrum_draw_callback(Canvas* canvas, void* _model) {
             int w = BAR_X(i + 1) - x;
             if(w < 1) w = 1;
             canvas_draw_box(canvas, x, BAR_BOTTOM - h, w, h);
+        }
+    }
+
+    /* Band markers: WiFi 1/6/11 (solid tick) + BLE adv 37/38/39 (dotted tick) */
+    for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) {
+        int x = BAR_X(i);
+        if(nrf24_channel_is_wifi_marker((uint8_t)i)) {
+            canvas_draw_line(canvas, x, BAR_TOP - 2, x, BAR_TOP - 6);
+        } else if(nrf24_channel_is_ble_marker((uint8_t)i)) {
+            canvas_draw_dot(canvas, x, BAR_TOP - 3);
+            canvas_draw_dot(canvas, x, BAR_TOP - 5);
+        }
+    }
+    /* Max-hold overlay: a 1px cap at each peak */
+    if(model->max_hold) {
+        const int bar_h = BAR_BOTTOM - BAR_TOP;
+        for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) {
+            int ph = (model->peaks[i] * bar_h * 3) / (125 * 2);
+            if(ph > bar_h) ph = bar_h;
+            if(ph > 0) canvas_draw_dot(canvas, BAR_X(i), BAR_BOTTOM - ph);
         }
     }
 

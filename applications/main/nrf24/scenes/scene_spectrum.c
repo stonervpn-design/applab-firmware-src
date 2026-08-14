@@ -1,5 +1,6 @@
 #include "../nrf24_app.h"
 #include "../nrf24_hw.h"
+#include "../helpers/nrf24_spectrum_calc.h"
 
 #include <furi.h>
 
@@ -31,6 +32,11 @@ static int32_t nrf24_spectrum_worker(void* context) {
             model->running = ok;
             for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) model->levels[i] = 0;
             model->sweep_count = 0;
+            model->max_hold = false;
+            model->cursor_ch = 0;
+            model->cursor_on = false;
+            model->dwell_us = 250;
+            for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) model->peaks[i] = 0;
         },
         true);
 
@@ -58,6 +64,10 @@ static int32_t nrf24_spectrum_worker(void* context) {
             {
                 memcpy(model->levels, local_levels, NRF24_SPECTRUM_CHANNELS);
                 model->sweep_count++;
+                if(model->max_hold) {
+                    for(int j = 0; j < NRF24_SPECTRUM_CHANNELS; j++)
+                        model->peaks[j] = nrf24_maxhold_update(model->peaks[j], local_levels[j]);
+                }
             },
             true);
 
@@ -89,6 +99,11 @@ void nrf24_app_scene_spectrum_on_enter(void* context) {
             model->running = false;
             model->sweep_count = 0;
             for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) model->levels[i] = 0;
+            model->max_hold = false;
+            model->cursor_ch = 0;
+            model->cursor_on = false;
+            model->dwell_us = 250;
+            for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) model->peaks[i] = 0;
         },
         true);
 
