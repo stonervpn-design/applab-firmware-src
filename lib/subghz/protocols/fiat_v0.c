@@ -247,17 +247,25 @@ SubGhzProtocolStatus
     if(!pp_flipper_read_hex_u64(flipper_format, FF_KEY, &key)) {
         return SubGhzProtocolStatusError;
     }
-    instance->generic.data = key;
-    instance->hop = (uint32_t)(key >> 32);
     instance->fix = (uint32_t)(key & 0xFFFFFFFFU);
 
     uint32_t eb_read = 0;
     flipper_format_rewind(flipper_format);
     bool have_endbyte = flipper_format_read_uint32(flipper_format, "EndByte", &eb_read, 1);
 
+    // Fiat V0 SECOND-FOB synthesis: this protocol carries the rolling value ("hop")
+    // as the upper 32 data bits IN THE CLEAR -- the decoder applies no cipher, so
+    // the counter is the plaintext hop and a genuine second fob simply transmits
+    // the next value. Drive the hop from the (possibly harness-bumped) Cnt field so
+    // incrementing the counter emits a new valid frame; fall back to the captured
+    // hop (upper Key bits) when no Cnt is present. With the captured Cnt this
+    // reproduces the exact on-air frame (bit-identical resend).
     uint32_t btn_u32 = 0;
+    uint32_t cnt_u32 = UINT32_MAX;
     flipper_format_rewind(flipper_format);
-    pp_encoder_read_fields(flipper_format, NULL, &btn_u32, NULL, NULL);
+    pp_encoder_read_fields(flipper_format, NULL, &btn_u32, &cnt_u32, NULL);
+    instance->hop = (cnt_u32 == UINT32_MAX) ? (uint32_t)(key >> 32) : cnt_u32;
+    instance->generic.data = ((uint64_t)instance->hop << 32) | instance->fix;
 
     if(have_endbyte) {
         instance->endbyte = (uint8_t)(eb_read & 0x7FU);

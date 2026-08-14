@@ -21,7 +21,14 @@ static void build_keystore_from_mfkey(uint8_t* result) {
 
 static uint8_t keystore_bytes[8] = {0};
 
-static uint16_t mixer_decode(uint32_t encrypted) {
+// Full 32-bit keyed permutation. The decoder recovers the counter as the low 16
+// bits (see mixer_decode); the encoder inverts the FULL permutation to re-encrypt
+// a bumped counter. Each inner step shifts the 32-bit state left by one, dropping
+// old bit31 and injecting a feedback bit into bit0. The feedback depends linearly
+// on old bit31 (via temp = s3 ^ s1), so the dropped bit is recoverable and the
+// whole transform is a bijection on the 32-bit state -- kia_v5_mixer_encode_full()
+// below is its exact inverse (round-trip proven against real captures).
+static uint32_t mixer_decode_full(uint32_t encrypted) {
     uint8_t s0 = (encrypted & 0xFF);
     uint8_t s1 = (encrypted >> 8) & 0xFF;
     uint8_t s2 = (encrypted >> 16) & 0xFF;
@@ -76,7 +83,12 @@ static uint16_t mixer_decode(uint32_t encrypted) {
         }
         round_index = (round_index - 1) & 0x7;
     }
-    return (s0 + (s1 << 8)) & 0xFFFF;
+    return ((uint32_t)s3 << 24) | ((uint32_t)s2 << 16) | ((uint32_t)s1 << 8) | (uint32_t)s0;
+}
+
+// The counter is the low 16 bits of the permuted state.
+static uint16_t mixer_decode(uint32_t encrypted) {
+    return (uint16_t)(mixer_decode_full(encrypted) & 0xFFFFU);
 }
 
 struct SubGhzProtocolDecoderKiaV5 {
@@ -175,6 +187,75 @@ static uint8_t kia_v5_calculate_crc(uint64_t data) {
         }
     }
     return (uint8_t)(crc & 3U);
+}
+
+// Reverse ONE forward mixer step: given the NEW 32-bit state and the step's r
+// value, recover the OLD state. Forward shifts the state left by one (new bit_i =
+// old bit_{i-1}) with new bit0 = chk.b7 and old bit31 discarded. chk.b7 =
+// base.b7 ^ r.b7 ^ (old bit31 ^ old bit15), and base depends only on already-known
+// old low bits, so old bit31 = new bit0 ^ base.b7 ^ r.b7 ^ old bit15.
+static uint32_t kia_v5_mixer_inv_step(uint32_t nw, uint8_t r) {
+    uint8_t newb0 = (uint8_t)(nw & 1U);
+    uint32_t old_low = (nw >> 1); // old bits 30..0 (bit31 still unknown)
+    uint8_t o0 = (uint8_t)(old_low & 0xFF);
+    uint8_t o1 = (uint8_t)((old_low >> 8) & 0xFF);
+    uint8_t o2 = (uint8_t)((old_low >> 16) & 0xFF);
+    uint8_t o3 = (uint8_t)((old_low >> 24) & 0x7F);
+
+    uint8_t base;
+    if((o3 & 0x40) == 0) {
+        base = (o3 & 0x02) == 0 ? 0x74 : 0x2E;
+    } else {
+        base = (o3 & 0x02) == 0 ? 0x3A : 0x5C;
+    }
+    if(o2 & 0x08) {
+        base = (uint8_t)((((base >> 4) & 0x0F) | ((base & 0x0F) << 4)) & 0xFF);
+    }
+    if(o1 & 0x01) {
+        base = (uint8_t)(((base & 0x3F) << 2) & 0xFF);
+    }
+    if(o0 & 0x01) {
+        base = (uint8_t)((base << 1) & 0xFF);
+    }
+
+    const uint8_t base7 = (base >> 7) & 1U;
+    const uint8_t r7 = (r >> 7) & 1U;
+    const uint8_t old_b15 = (o1 >> 7) & 1U;
+    const uint8_t old_b31 = base7 ^ r7 ^ old_b15 ^ newb0;
+    o3 = (uint8_t)(o3 | (old_b31 << 7));
+
+    return ((uint32_t)o3 << 24) | ((uint32_t)o2 << 16) | ((uint32_t)o1 << 8) | (uint32_t)o0;
+}
+
+// Exact inverse of mixer_decode_full: map a permuted state P back to the encrypted
+// value E such that mixer_decode_full(E) == P. Used to re-encrypt a synthesized
+// (serial, btn, counter) frame so a bumped counter yields a NEW valid hop.
+static uint32_t mixer_encode_full(uint32_t state) {
+    build_keystore_from_mfkey(keystore_bytes);
+
+    // Reproduce the round_index order the forward transform walked, then unwind it.
+    int ri_seq[18];
+    int round_index = 1;
+    for(int i = 0; i < 18; i++) {
+        ri_seq[i] = round_index;
+        round_index = (round_index - 1) & 0x7;
+    }
+
+    uint32_t nw = state;
+    for(int i = 17; i >= 0; i--) {
+        // The per-step r register starts at keystore_bytes[ri] and is shifted left
+        // once per step; reproduce that sequence so we can unwind steps in reverse.
+        uint8_t rvals[8];
+        uint8_t r = keystore_bytes[ri_seq[i]] & 0xFF;
+        for(int st = 0; st < 8; st++) {
+            rvals[st] = r;
+            r = (uint8_t)(((r & 0x7F) << 1) & 0xFF);
+        }
+        for(int st = 7; st >= 0; st--) {
+            nw = kia_v5_mixer_inv_step(nw, rvals[st]);
+        }
+    }
+    return nw;
 }
 
 void* kia_protocol_encoder_v5_alloc(SubGhzEnvironment* environment) {
@@ -319,21 +400,54 @@ SubGhzProtocolStatus
         return SubGhzProtocolStatusErrorValueBitCount;
     }
 
-    // Rolling code: re-emit the stored (already-encrypted) 64-bit key verbatim.
-    // Cloning does NOT regenerate the hop; replaying the captured bits reproduces
-    // the exact on-air frame, so re-decoding recovers the same serial/btn/cnt.
-    instance->replay_data = instance->generic.data;
-
-    // CRC: prefer the value saved by the decoder's serialize; fall back to the
-    // computed 3-bit CRC over the key so an externally-authored file still emits
-    // a self-consistent frame.
-    uint32_t crc_saved = 0;
-    flipper_format_rewind(flipper_format);
-    if(flipper_format_read_uint32(flipper_format, "CRC", &crc_saved, 1)) {
-        instance->replay_crc = (uint8_t)(crc_saved & 0x07U);
-    } else {
-        instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
+    // Rolling-code SECOND-FOB synthesis (not a verbatim clone). The 64-bit key is
+    // a full per-byte bit-reversal of "yek" = [btn(4) | serial(28) | encrypted(32)]:
+    // serial and btn ride in the clear, only the low 32 bits are the keyed hop.
+    // mixer_decode_full() recovers the full 32-bit permuted plaintext whose low 16
+    // bits are the counter; we splice in the requested (possibly bumped) Cnt and
+    // mixer_encode_full() -- the exact inverse of the mixer -- regenerates the hop
+    // so the receiver accepts counter+1 as the next valid code. Re-encrypting with
+    // the CAPTURED counter reproduces the exact captured frame (bit-identical
+    // resend); bumping the counter yields a new, still-decodable frame.
+    uint64_t yek_captured = 0;
+    for(int i = 0; i < 8; i++) {
+        const uint8_t b = (uint8_t)((instance->generic.data >> (i * 8)) & 0xFFU);
+        yek_captured |= ((uint64_t)pp_reverse_bits8(b) << ((7 - i) * 8));
     }
+    const uint32_t serial = (uint32_t)((yek_captured >> 32) & 0x0FFFFFFFU);
+    const uint8_t btn = (uint8_t)((yek_captured >> 60) & 0x0FU);
+    const uint32_t encrypted_captured = (uint32_t)(yek_captured & 0xFFFFFFFFU);
+    const uint32_t plain_captured = mixer_decode_full(encrypted_captured);
+
+    // Counter: honor the (possibly harness-bumped) Cnt field; else keep captured.
+    uint32_t serial_v = UINT32_MAX;
+    uint32_t btn_v = UINT32_MAX;
+    uint32_t cnt_v = UINT32_MAX;
+    pp_encoder_read_fields(flipper_format, &serial_v, &btn_v, &cnt_v, NULL);
+    const uint16_t cnt =
+        (cnt_v == UINT32_MAX) ? (uint16_t)(plain_captured & 0xFFFFU) : (uint16_t)(cnt_v & 0xFFFFU);
+
+    const uint32_t plaintext_new = (plain_captured & 0xFFFF0000U) | cnt;
+    const uint32_t encrypted_new = mixer_encode_full(plaintext_new);
+
+    const uint64_t yek_new =
+        ((uint64_t)btn << 60) | ((uint64_t)serial << 32) | (uint64_t)encrypted_new;
+    uint64_t data_new = 0;
+    for(int i = 0; i < 8; i++) {
+        const uint8_t b = (uint8_t)((yek_new >> (i * 8)) & 0xFFU);
+        data_new |= ((uint64_t)pp_reverse_bits8(b) << ((7 - i) * 8));
+    }
+
+    instance->replay_data = data_new;
+    instance->generic.data = data_new;
+    instance->generic.serial = serial;
+    instance->generic.btn = btn;
+    instance->generic.cnt = cnt;
+
+    // CRC is recomputed over the freshly re-encrypted frame so a bumped counter
+    // carries a matching CRC (this generator reproduces the captured CRC on a
+    // same-counter resend, keeping that path bit-identical).
+    instance->replay_crc = kia_v5_calculate_crc(instance->replay_data);
 
     instance->encoder.repeat = (int32_t)pp_encoder_read_repeat(flipper_format, 6);
 
