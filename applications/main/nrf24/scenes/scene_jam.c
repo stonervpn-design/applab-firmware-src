@@ -8,6 +8,7 @@
 
 #include "../nrf24_app.h"
 #include "../nrf24_hw.h"
+#include "../helpers/nrf24_export.h"
 
 #include <furi.h>
 #include <stdlib.h>
@@ -42,6 +43,7 @@ typedef struct {
     volatile bool stop;
     volatile bool desired_running;
     volatile int mode;
+    uint16_t saved_dwell; /* dwell as loaded from shared settings; passed back unchanged on save */
 } JamCtx;
 
 static JamCtx* g_ctx = NULL;
@@ -206,14 +208,18 @@ void nrf24_app_scene_jam_on_enter(void* context) {
     ctx->app = app;
     ctx->stop = false;
     ctx->desired_running = false;
-    ctx->mode = 0;
+    uint8_t saved_mode = 0;
+    uint16_t saved_dwell = 250;
+    nrf24_settings_load(&saved_mode, &saved_dwell);
+    ctx->mode = saved_mode;
+    ctx->saved_dwell = saved_dwell;
     g_ctx = ctx;
 
     with_view_model(
         app->jam_view,
         Nrf24JamModel * model,
         {
-            model->mode = 0;
+            model->mode = saved_mode;
             model->running = false;
             model->hardware_ok = true;
         },
@@ -262,6 +268,7 @@ void nrf24_app_scene_jam_on_exit(void* context) {
     g_ctx->stop = true;
     furi_thread_join(g_ctx->worker);
     furi_thread_free(g_ctx->worker);
+    nrf24_settings_save((uint8_t)g_ctx->mode, g_ctx->saved_dwell);
     free(g_ctx);
     g_ctx = NULL;
 }

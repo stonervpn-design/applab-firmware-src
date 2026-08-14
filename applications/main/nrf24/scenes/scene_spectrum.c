@@ -1,6 +1,7 @@
 #include "../nrf24_app.h"
 #include "../nrf24_hw.h"
 #include "../helpers/nrf24_spectrum_calc.h"
+#include "../helpers/nrf24_export.h"
 
 #include <furi.h>
 
@@ -11,6 +12,7 @@ typedef struct {
     FuriThread* worker;
     volatile bool stop;
     volatile uint16_t dwell_us;
+    uint8_t saved_mode; /* jam mode as loaded from shared settings; passed back unchanged on save */
 } Nrf24SpectrumCtx;
 
 static Nrf24SpectrumCtx* g_ctx = NULL;
@@ -90,7 +92,11 @@ void nrf24_app_scene_spectrum_on_enter(void* context) {
     if(!ctx) return;
     ctx->app = app;
     ctx->stop = false;
-    ctx->dwell_us = 250;
+    uint8_t saved_mode = 0;
+    uint16_t saved_dwell = 250;
+    nrf24_settings_load(&saved_mode, &saved_dwell);
+    ctx->dwell_us = saved_dwell;
+    ctx->saved_mode = saved_mode;
     g_ctx = ctx;
 
     with_view_model(
@@ -104,7 +110,7 @@ void nrf24_app_scene_spectrum_on_enter(void* context) {
             model->max_hold = false;
             model->cursor_ch = 0;
             model->cursor_on = false;
-            model->dwell_us = 250;
+            model->dwell_us = saved_dwell;
             for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) model->peaks[i] = 0;
         },
         true);
@@ -161,9 +167,16 @@ bool nrf24_app_scene_spectrum_on_event(void* context, SceneManagerEvent event) {
             true);
         return true;
     }
-    case Nrf24SpectrumEventExport:
-        /* wired in Task 6 */
+    case Nrf24SpectrumEventExport: {
+        uint8_t snap[NRF24_SPECTRUM_CHANNELS];
+        with_view_model(
+            app->spectrum_view,
+            Nrf24SpectrumModel * m,
+            { memcpy(snap, m->levels, NRF24_SPECTRUM_CHANNELS); },
+            false);
+        nrf24_export_scan(snap, NRF24_SPECTRUM_CHANNELS);
         return true;
+    }
     default:
         return false;
     }
@@ -176,6 +189,7 @@ void nrf24_app_scene_spectrum_on_exit(void* context) {
     g_ctx->stop = true;
     furi_thread_join(g_ctx->worker);
     furi_thread_free(g_ctx->worker);
+    nrf24_settings_save(g_ctx->saved_mode, g_ctx->dwell_us);
     free(g_ctx);
     g_ctx = NULL;
 }
