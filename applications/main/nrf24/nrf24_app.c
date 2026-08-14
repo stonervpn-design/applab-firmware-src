@@ -2,6 +2,9 @@
 #include "nrf24_hw.h"
 #include <furi_hal_power.h>
 #include <stdlib.h>
+#ifndef PUBLIC_BUILD
+#include "helpers/nrf24_capture.h" // on-demand capture ring, freed here (private only)
+#endif
 
 static bool nrf24_app_custom_event_callback(void* context, uint32_t event) {
     furi_assert(context);
@@ -93,6 +96,13 @@ static void nrf24_app_free(Nrf24App* app) {
 
     scene_manager_free(app->scene_manager);
     view_dispatcher_free(app->view_dispatcher);
+
+#ifndef PUBLIC_BUILD
+    /* Return the on-demand capture ring (~3 KB) to the heap. Safe here: every
+     * scene's on_exit (which stops its RX/promiscuous worker) has already run
+     * via scene_manager_free above, so no capture writer can race this. */
+    nrf24_capture_free();
+#endif
 
     furi_record_close(RECORD_STORAGE);
     app->storage = NULL;

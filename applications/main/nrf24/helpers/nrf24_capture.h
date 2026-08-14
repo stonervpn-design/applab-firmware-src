@@ -38,16 +38,23 @@ typedef struct {
 /* Clear the store (count -> 0). */
 void nrf24_capture_reset(void);
 
-/* Copy `c` into the store. Always succeeds: if the store is at N24_CAP_MAX,
- * the oldest entry is dropped to make room. Returns true if stored (always,
- * for a non-NULL `c`; false only if `c` is NULL). */
+/* Copy `c` into the store. The ~3 KB ring is allocated on the first add (not
+ * resident at boot). If the store is at N24_CAP_MAX, the oldest entry is
+ * dropped to make room. Returns true if stored; false if `c` is NULL or the
+ * one-time ring allocation failed (out of heap -> the frame is dropped). */
 bool nrf24_capture_add(const Nrf24Capture* c);
 
 /* Number of entries currently stored, saturates at N24_CAP_MAX. */
 size_t nrf24_capture_count(void);
 
-/* 0-based, oldest-first. NULL if i >= nrf24_capture_count(). */
+/* 0-based, oldest-first. NULL if i >= nrf24_capture_count() (or never allocated). */
 const Nrf24Capture* nrf24_capture_get(size_t i);
+
+/* Free the on-demand ring back to the heap and reset the store to empty.
+ * Call only after all capture writers (the promiscuous RX workers) have
+ * stopped -- e.g. from nrf24_app_free, after every scene's on_exit. Safe to
+ * call when nothing was ever captured (no-op). */
+void nrf24_capture_free(void);
 
 /* ---- Transmit / replay ----
  * Implemented in nrf24_capture_tx.c (NOT nrf24_capture.c) so this header's
