@@ -27,8 +27,11 @@
 
 extern const SubGhzProtocol kia_protocol_v3_v4;
 
-// keys API under test
-extern bool protopirate_keys_load(SubGhzEnvironment* environment);
+// keys API under test. NOTE: this test links the lib/subghz copy of keys.c,
+// whose protopirate_keys_load returns void (the proto_pirate copy returns bool);
+// declare void to match the definition we actually link, and use
+// get_kia_mf_key_count() as the "did it load" signal instead of a return value.
+extern void protopirate_keys_load(SubGhzEnvironment* environment);
 extern uint64_t get_kia_mf_key(void);
 extern uint8_t get_kia_mf_key_count(void);
 extern uint64_t get_kia_mf_key_at(uint8_t index);
@@ -66,11 +69,12 @@ int main(void) {
     int fails = 0;
 
     // ---- (1) LOAD ---------------------------------------------------------
-    if(!protopirate_keys_load((SubGhzEnvironment*)0x1)) {
-        fprintf(stderr, "FAIL: protopirate_keys_load returned false\n");
+    protopirate_keys_load((SubGhzEnvironment*)0x1);
+    uint8_t nk = get_kia_mf_key_count();
+    if(nk == 0) {
+        fprintf(stderr, "FAIL: protopirate_keys_load loaded no KIA_KEY1 keys\n");
         return 1;
     }
-    uint8_t nk = get_kia_mf_key_count();
     printf("[load] kia_mf_key_count=%u  legacy get_kia_mf_key()=%016llX\n",
            nk, (unsigned long long)get_kia_mf_key());
     bool canon_present = false, last_present = false;
