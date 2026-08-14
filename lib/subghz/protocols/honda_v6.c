@@ -186,26 +186,14 @@ void subghz_protocol_decoder_honda_v6_reset(void* context) {
 // ============================================================================
 
 static void honda_v6_process_ook(SubGhzProtocolDecoderHondaV6* instance) {
-    if(instance->ook_carriers < HONDA_V6_OOK_MIN_CARRIERS) {
-        instance->ook_carriers = 0;
-        return;
-    }
-
-    FURI_LOG_D(TAG, "OOK detection: %u carriers", instance->ook_carriers);
-
-    instance->generic.data = (uint64_t)instance->ook_carriers << 48;
-    instance->generic.data_count_bit = 0;
-    instance->generic.serial = 0;
-    instance->generic.cnt = instance->ook_carriers;
-    instance->generic.btn = 0;
-    instance->generic.seed = 0;
-    instance->generic.extra_check = true;
-    instance->ook_detected = true;
-
-    if(instance->base.callback) {
-        instance->base.callback(&instance->base, instance->base.context);
-    }
-
+    /* OOK carrier detection formerly emitted a "use FSK preset" advisory through
+     * the decode callback (data_count_bit=0, empty serial). But that fired on ANY
+     * OOK signal with >= HONDA_V6_OOK_MIN_CARRIERS carrier bursts, so it
+     * false-matched the vast majority of OOK car remotes across every make
+     * (88 of 91 HondaV6 corpus hits were this advisory, not a real decode). Honda
+     * V6 only yields real data from an FSK-preset capture, so the OOK path must
+     * never report a decode. Keep the detector inert to avoid polluting the
+     * receiver with false HondaV6 identifications. */
     instance->ook_carriers = 0;
 }
 
