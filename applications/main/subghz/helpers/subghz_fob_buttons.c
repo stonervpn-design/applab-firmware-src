@@ -289,6 +289,24 @@ bool subghz_fob_protocol_supported(const char* protocol_name) {
     return subghz_fob_buttons(protocol_name, &n) != NULL && n > 0;
 }
 
+SubGhzFobEmulateKind subghz_fob_emulate_kind(const char* protocol_name) {
+    if(!protocol_name) return SubGhzFobEmulateReplay;
+    // VAG and KeeLoq are single-button rolling clones handled by dedicated paths
+    // in subghz_scene_keeloq_fob; every other rolling second fob routes through
+    // the multi-button counter-rolling path iff it has an enumerable button table.
+    if(strcmp(protocol_name, "VAG") == 0 || strcmp(protocol_name, "KeeLoq") == 0) {
+        return SubGhzFobEmulateSynth;
+    }
+    if(subghz_fob_protocol_supported(protocol_name)) {
+        return SubGhzFobEmulateSynth;
+    }
+    return SubGhzFobEmulateReplay;
+}
+
+const char* subghz_fob_emulate_kind_str(SubGhzFobEmulateKind kind) {
+    return kind == SubGhzFobEmulateSynth ? "Second fob" : "Replay";
+}
+
 // Protocols whose encoder reads the button from a field other than "Btn". The
 // Honda OOK/KeeLoq/FSK families (V5/V7/V8/V9) read "Button"; the combined
 // V2&V3 protocol reads "BtnLo". Everything else uses the "Btn" default.

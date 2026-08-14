@@ -75,6 +75,22 @@ int main(void) {
     assert(strcmp(subghz_fob_button_field("NotARealProtocol"), "Btn") == 0);
     assert(strcmp(subghz_fob_button_field(NULL), "Btn") == 0);
 
+    // Emulate-kind classifier: table-backed rolling protocols + VAG/KeeLoq are
+    // Synth (true rolling second fob); everything else is Replay. Both modes are
+    // desync-safe; the label just tells the operator which one they're in.
+    assert(subghz_fob_emulate_kind("Kia V0") == SubGhzFobEmulateSynth);
+    assert(subghz_fob_emulate_kind("Ford V0") == SubGhzFobEmulateSynth);
+    assert(subghz_fob_emulate_kind("Subaru") == SubGhzFobEmulateSynth);
+    assert(subghz_fob_emulate_kind("HondaV8") == SubGhzFobEmulateSynth);
+    assert(subghz_fob_emulate_kind("VAG") == SubGhzFobEmulateSynth);
+    assert(subghz_fob_emulate_kind("KeeLoq") == SubGhzFobEmulateSynth);
+    // No button table (not yet routed through the counter-roll path) -> Replay.
+    assert(subghz_fob_emulate_kind("Kia V5") == SubGhzFobEmulateReplay);
+    assert(subghz_fob_emulate_kind("NotARealProtocol") == SubGhzFobEmulateReplay);
+    assert(subghz_fob_emulate_kind(NULL) == SubGhzFobEmulateReplay);
+    assert(strcmp(subghz_fob_emulate_kind_str(SubGhzFobEmulateSynth), "Second fob") == 0);
+    assert(strcmp(subghz_fob_emulate_kind_str(SubGhzFobEmulateReplay), "Replay") == 0);
+
     printf("test_subghz_fob_buttons OK\n");
     return 0;
 }

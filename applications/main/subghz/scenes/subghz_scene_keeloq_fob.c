@@ -101,9 +101,14 @@ static bool subghz_scene_keeloq_fob_enter_generic(SubGhz* subghz) {
     const char* cnt_field = subghz_fob_counter_field(proto_cstr);
     strncpy(subghz->keeloq_fob_cnt_field, cnt_field, sizeof(subghz->keeloq_fob_cnt_field) - 1);
     subghz->keeloq_fob_cnt_field[sizeof(subghz->keeloq_fob_cnt_field) - 1] = '\0';
-    // Static-lifetime title for the view (protocol name).
-    strncpy(subghz->keeloq_fob_title, proto_cstr, sizeof(subghz->keeloq_fob_title) - 1);
-    subghz->keeloq_fob_title[sizeof(subghz->keeloq_fob_title) - 1] = '\0';
+    // Static-lifetime title for the view: protocol name + emulate mode, so the
+    // operator sees this is a desync-safe rolling "Second fob" (counter +1/press).
+    snprintf(
+        subghz->keeloq_fob_title,
+        sizeof(subghz->keeloq_fob_title),
+        "%s \xB7 %s",
+        proto_cstr,
+        subghz_fob_emulate_kind_str(subghz_fob_emulate_kind(proto_cstr)));
 
     uint32_t captured_btn = 0, cnt_file = 0;
     flipper_format_rewind(fff);

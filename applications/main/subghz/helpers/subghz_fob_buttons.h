@@ -38,6 +38,28 @@ const SubGhzFobButton* subghz_fob_buttons(const char* protocol_name, size_t* out
 // table). False for replay-only / unsupported protocols.
 bool subghz_fob_protocol_supported(const char* protocol_name);
 
+// How emulating a captured frame of this protocol behaves, for honest UI
+// labelling. All three modes are DESYNC-SAFE for the owner's original fob:
+//  * Synth  — true rolling "second fob": the encoder re-encrypts a fresh frame
+//             with counter+1 each press (desync-safe default jump=0), so the
+//             receiver stays in step and the original recovers in 1-2 presses.
+//  * Replay — the single captured frame is re-sent verbatim. For a fixed-code
+//             fob that is a perfect permanent clone; for a rolling fob it works
+//             once (the receiver already accepted that exact counter), so it
+//             cannot advance the counter and cannot desync the original.
+typedef enum {
+    SubGhzFobEmulateSynth = 0,
+    SubGhzFobEmulateReplay = 1,
+} SubGhzFobEmulateKind;
+
+// Classify a protocol's emulate behaviour. Synth iff it routes through the
+// counter-rolling fob path (has a button table, or is one of the single-button
+// rolling clones VAG/KeeLoq); Replay otherwise.
+SubGhzFobEmulateKind subghz_fob_emulate_kind(const char* protocol_name);
+
+// Short human label for the kind ("Second fob" / "Replay"), never NULL.
+const char* subghz_fob_emulate_kind_str(SubGhzFobEmulateKind kind);
+
 // The FlipperFormat field name each protocol's encoder deserialize reads for the
 // button code (what the fob-emulate press path must write). Most protocols read
 // "Btn"; the Honda families differ: V5/V7/V8/V9 read "Button", V2&V3 reads
