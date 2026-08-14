@@ -266,6 +266,80 @@ static const char* roundtrip(const SubGhzProtocol* proto, void* dec, const char*
     return rt;
 }
 
+// Yield one frame from a fresh encoder deserialized from ff (at its start).
+static void synth_yield(
+    const SubGhzProtocol* proto,
+    FlipperFormat* ff,
+    int* buf,
+    size_t* pn,
+    size_t cap) {
+    static char dummy_env4;
+    *pn = 0;
+    flipper_format_rewind(ff);
+    void* enc = proto->encoder->alloc((SubGhzEnvironment*)&dummy_env4);
+    if(proto->encoder->deserialize(enc, ff) == SubGhzProtocolStatusOk) {
+        for(int g = 0; g < 16384; g++) {
+            LevelDuration ld = proto->encoder->yield(enc);
+            if(level_duration_is_reset(ld)) break;
+            if(*pn < cap)
+                buf[(*pn)++] = level_duration_get_level(ld) ?
+                                   (int)level_duration_get_duration(ld) :
+                                   -(int)level_duration_get_duration(ld);
+        }
+    }
+    if(proto->encoder->free) proto->encoder->free(enc);
+}
+
+// Second-fob synthesis check: does bumping the counter produce a DIFFERENT,
+// still-decodable frame (true rolling synth) or the identical frame (clone-only,
+// single-use)? Uses the standard "Cnt" field.
+static const char* synthcheck(const SubGhzProtocol* proto, void* dec) {
+    FuriString* pn = furi_string_alloc();
+    furi_string_cat_str(pn, "AM650");
+    SubGhzRadioPreset preset = {
+        .name = pn, .frequency = 433920000, .data = NULL, .data_size = 0};
+    FlipperFormat* ff = flipper_format_string_alloc();
+    const char* r = "SYNTH:fail-ser";
+    if(proto->decoder->serialize &&
+       proto->decoder->serialize(dec, ff, &preset) == SubGhzProtocolStatusOk) {
+        // The counter field is protocol-specific (see subghz_fob_counter_field):
+        // most use "Cnt"; some use "Rolling"/"RollingCode"/"Counter".
+        static const char* CF[] = {"Cnt", "Rolling", "RollingCode", "Counter"};
+        const char* cfield = NULL;
+        uint32_t c0 = 0;
+        for(unsigned i = 0; i < sizeof(CF) / sizeof(CF[0]); i++) {
+            flipper_format_rewind(ff);
+            if(flipper_format_read_uint32(ff, CF[i], &c0, 1)) {
+                cfield = CF[i];
+                break;
+            }
+        }
+        if(!cfield) {
+            r = "SYNTH:no-cnt";
+        } else {
+            static int fa[16384], fb[16384];
+            size_t na = 0, nb = 0;
+            synth_yield(proto, ff, fa, &na, 16384);
+            uint32_t c1 = c0 + 1;
+            flipper_format_rewind(ff);
+            flipper_format_update_uint32(ff, cfield, &c1, 1);
+            synth_yield(proto, ff, fb, &nb, 16384);
+            if(na == 0 || nb == 0) {
+                r = "SYNTH:no-upload";
+            } else if(na == nb && memcmp(fa, fb, na * sizeof(int)) == 0) {
+                r = "SYNTH:clone-only";
+            } else {
+                FuriString* rs = furi_string_alloc();
+                r = feed_decode(proto, fb, nb, rs) ? "SYNTH:ok" : "SYNTH:badframe";
+                furi_string_free(rs);
+            }
+        }
+    }
+    flipper_format_free(ff);
+    furi_string_free(pn);
+    return r;
+}
+
 int main(int argc, char** argv) {
     if(argc < 2) {
         fprintf(stderr, "usage: %s <capture.sub>\n", argv[0]);
@@ -311,7 +385,14 @@ int main(int argc, char** argv) {
                 rt = roundtrip(proto, dec, flat);
             }
 
-            printf("%s\tDECODED\t%s\thits=%d\t%s\t%s\n", path, proto->name, hf.hit, rt, flat);
+            char scbuf[32] = "";
+            if(getenv("SYNTHCHECK") && proto->encoder && proto->encoder->alloc &&
+               proto->encoder->deserialize && proto->encoder->yield) {
+                snprintf(scbuf, sizeof(scbuf), "\t%s", synthcheck(proto, dec));
+            }
+            printf(
+                "%s\tDECODED\t%s\thits=%d\t%s\t%s%s\n",
+                path, proto->name, hf.hit, rt, flat, scbuf);
             furi_string_free(out);
         }
         if(proto->decoder->free) proto->decoder->free(dec);
