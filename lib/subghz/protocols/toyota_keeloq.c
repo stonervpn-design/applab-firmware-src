@@ -43,6 +43,15 @@ static const SubGhzBlockConst subghz_protocol_toyota_keeloq_const_b = {
 #define TOYOTA_KEELOQ_B_MIN_PULSE_US 100U
 #define TOYOTA_KEELOQ_B_MAX_PULSE_US 600U
 #define TOYOTA_KEELOQ_B_BITS          67U
+// Variant B (Tundra/NRZ): require a real preamble run AND end it on the
+// documented sync-gap LOW (~1500-2600us), NOT by inferring the boundary from
+// pulse shape -- a genuine data pair (short,long) is indistinguishable from a
+// preamble pair, so a shape-only break can start the 67-bit window at the wrong
+// offset and yield a plausible-but-WRONG decode. Gating on the sync gap makes
+// the parser fail-safe: it declines ambiguous bursts instead of mis-decoding.
+#define TOYOTA_KEELOQ_B_MIN_PREAMBLE_PAIRS 6U
+#define TOYOTA_KEELOQ_B_SYNC_MIN_US        1500U
+#define TOYOTA_KEELOQ_B_SYNC_MAX_US        2600U
 
 // Frame payload (both variants, once framed): hop(32) | serial(28) | button(4)
 // = 64 bits total, packed as (hop<<32)|(serial<<4)|button. The on-air data
@@ -139,6 +148,11 @@ static bool toyota_keeloq_b_is_long(uint32_t duration) {
 // NRZ per-pulse bit classification via midpoint, with a sanity envelope so
 // the ~1500-2600us inter-repeat sync gap (and other noise) cannot be
 // misread as a data bit.
+// The documented Variant-B preamble terminator: a LOW gap of ~1500-2600us.
+static bool toyota_keeloq_b_is_sync_gap(uint32_t duration) {
+    return duration >= TOYOTA_KEELOQ_B_SYNC_MIN_US && duration <= TOYOTA_KEELOQ_B_SYNC_MAX_US;
+}
+
 static bool toyota_keeloq_b_classify_pulse(uint32_t duration, bool* bit_out) {
     if(duration < TOYOTA_KEELOQ_B_MIN_PULSE_US || duration > TOYOTA_KEELOQ_B_MAX_PULSE_US) {
         return false;
@@ -358,48 +372,25 @@ void subghz_protocol_decoder_toyota_keeloq_feed(void* context, bool level, uint3
             break;
         }
 
-        if(instance->preamble_count < 1U) {
-            // Never even saw one clean preamble pair -- not a real burst.
-            instance->decoder.parser_step = ToyotaKeeloqDecoderStepReset;
+        // Preamble ends ONLY on the documented sync-gap LOW, and only after a
+        // real preamble run. This is the fail-safe boundary: a data pair whose
+        // LOW leg is a normal ~200/390us bit is NOT a sync gap, so it can never
+        // masquerade as the preamble terminator and mis-offset the data window.
+        if(instance->preamble_count >= TOYOTA_KEELOQ_B_MIN_PREAMBLE_PAIRS &&
+           toyota_keeloq_b_is_sync_gap(duration)) {
+            // Data begins with the NEXT pulse (this LOW is the separator, and
+            // the just-latched first_high was the last preamble HIGH -- neither
+            // is a data bit).
+            instance->in_data = true;
+            instance->data = 0;
+            instance->bit_count = 0;
+            instance->decoder.parser_step = ToyotaKeeloqDecoderStepBData;
             break;
         }
 
-        // The preamble pattern just broke: NRZ data begins here. Both the
-        // already-latched first_high AND this LOW leg are each one bit.
-        instance->in_data = true;
-        instance->data = 0;
-        instance->bit_count = 0;
-
-        bool bit = false;
-        if(!toyota_keeloq_b_classify_pulse(instance->first_high, &bit)) {
-            instance->decoder.parser_step = ToyotaKeeloqDecoderStepReset;
-            break;
-        }
-        toyota_keeloq_shift_in_bit(instance, bit);
-        if(instance->bit_count == TOYOTA_KEELOQ_B_BITS) {
-            if(toyota_keeloq_finish_frame(instance, TOYOTA_KEELOQ_B_BITS) &&
-               instance->base.callback) {
-                instance->base.callback(&instance->base, instance->base.context);
-            }
-            instance->decoder.parser_step = ToyotaKeeloqDecoderStepReset;
-            break;
-        }
-
-        if(!toyota_keeloq_b_classify_pulse(duration, &bit)) {
-            instance->decoder.parser_step = ToyotaKeeloqDecoderStepReset;
-            break;
-        }
-        toyota_keeloq_shift_in_bit(instance, bit);
-        if(instance->bit_count == TOYOTA_KEELOQ_B_BITS) {
-            if(toyota_keeloq_finish_frame(instance, TOYOTA_KEELOQ_B_BITS) &&
-               instance->base.callback) {
-                instance->base.callback(&instance->base, instance->base.context);
-            }
-            instance->decoder.parser_step = ToyotaKeeloqDecoderStepReset;
-            break;
-        }
-
-        instance->decoder.parser_step = ToyotaKeeloqDecoderStepBData;
+        // Anything else (short preamble, or an ambiguous non-sync-gap break):
+        // decline rather than risk a wrong decode.
+        instance->decoder.parser_step = ToyotaKeeloqDecoderStepReset;
         break;
     }
 

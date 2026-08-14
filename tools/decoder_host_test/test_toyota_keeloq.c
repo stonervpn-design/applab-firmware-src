@@ -108,19 +108,21 @@ static size_t build_variant_b(int* durs, size_t cap) {
     size_t n = 0;
     const uint64_t payload = build_payload();
 
-    for(int i = 0; i < 8; i++) { // preamble: short-HIGH + long-LOW pairs
+    for(int i = 0; i < 8; i++) { // >=6 preamble pairs: short-HIGH + long-LOW
         emit(durs, &n, cap, true, 200);
         emit(durs, &n, cap, false, 390);
     }
 
-    // Transition pair carries the first two stream bits (pad bits 0,1).
-    const bool b0 = stream_bit(PAD_B_VAL, PAD_B_BITS, payload, 64, 0);
-    const bool b1 = stream_bit(PAD_B_VAL, PAD_B_BITS, payload, 64, 1);
-    emit(durs, &n, cap, true, b0 ? 390 : 200);
-    emit(durs, &n, cap, false, b1 ? 390 : 200);
+    // Final preamble HIGH, then the sync gap: a ~2000us LOW (in the documented
+    // 1500-2600us window) is the unambiguous preamble->data separator. The
+    // decoder ends the preamble on this LOW while awaiting a low (it just
+    // latched this HIGH as the last preamble high). Data begins next pulse.
+    emit(durs, &n, cap, true, 200);
+    emit(durs, &n, cap, false, 2000);
 
-    bool level = true; // alternating from the LOW leg just emitted
-    for(int i = 2; i < 67; i++) {
+    // 67 NRZ data bits, one per pulse, alternating level starting from HIGH.
+    bool level = true;
+    for(int i = 0; i < 67; i++) {
         const bool bit = stream_bit(PAD_B_VAL, PAD_B_BITS, payload, 64, i);
         emit(durs, &n, cap, level, bit ? 390 : 200);
         level = !level;
