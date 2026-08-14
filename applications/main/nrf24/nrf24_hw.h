@@ -82,6 +82,14 @@ void nrf24_hw_jammer_set_channel(uint8_t channel);
  * Must be wrapped in acquire/release. */
 void nrf24_hw_jammer_stop(void);
 
+/* --- RPD reactive jammer (listen on RPD, fire CW only when a carrier appears).
+ * All three run inside acquire()/release(). CE is the caller's responsibility.
+ * Typical loop: reactive_setup(ch); ce(true); wait 130us; poll RPD; on hit ->
+ * ce(false); react_to_tx(); ce(true); wait ~430us; ce(false); react_to_rx(next). */
+void nrf24_hw_reactive_setup(uint8_t channel);
+void nrf24_hw_react_to_tx(void);
+void nrf24_hw_react_to_rx(uint8_t channel);
+
 /* ---- Data-flooding jammer ----
  * Alternative strategy to the constant carrier: instead of an unmodulated
  * tone this floods the channel with full 32-byte ESB packets (AutoAck off,

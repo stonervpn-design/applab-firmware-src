@@ -340,6 +340,41 @@ void nrf24_hw_jammer_stop(void) {
     nrf24_hw_cmd(NRF_CMD_FLUSH_TX);
 }
 
+/* RX + pre-loaded TX FIFO so react_to_tx radiates instantly. CE left LOW. */
+void nrf24_hw_reactive_setup(uint8_t channel) {
+    furi_hal_gpio_write(&nrf24_ce, false);
+    nrf24_hw_write_reg(NRF_REG_EN_AA, 0x00);
+    nrf24_hw_write_reg(NRF_REG_SETUP_RETR, 0x00);
+    nrf24_hw_write_reg(NRF_REG_CONFIG, NRF_CONFIG_PWR_UP | NRF_CONFIG_PRIM_RX);
+    nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
+    /* normal 2M (CW off) so RPD is meaningful while listening */
+    nrf24_negotiate_rf_setup(1, nrf24_jam_pa_for_supply(3), false);
+    /* pre-fill TX FIFO with 32x0xFF */
+    uint8_t pl[1 + 32];
+    pl[0] = NRF_CMD_W_TX_PAYLOAD;
+    memset(&pl[1], 0xFF, 32);
+    nrf24_hw_cmd(NRF_CMD_FLUSH_TX);
+    furi_hal_spi_bus_tx(&furi_hal_spi_bus_handle_nrf24, pl, sizeof(pl), 100);
+    esp_rom_delay_us(1500); /* Tpd2stby */
+}
+
+/* RX -> CW/TX flip. Caller must have CE LOW; caller raises CE after. */
+void nrf24_hw_react_to_tx(void) {
+    nrf24_negotiate_rf_setup(1, nrf24_jam_pa_for_supply(3), true); /* CONT_WAVE|PLL */
+    uint8_t cfg = nrf24_hw_read_reg(NRF_REG_CONFIG);
+    cfg &= (uint8_t)~NRF_CONFIG_PRIM_RX; /* enter TX */
+    nrf24_hw_write_reg(NRF_REG_CONFIG, cfg);
+}
+
+/* CW/TX -> RX flip + retune. Caller must have CE LOW; caller raises CE after. */
+void nrf24_hw_react_to_rx(uint8_t channel) {
+    nrf24_negotiate_rf_setup(1, nrf24_jam_pa_for_supply(3), false); /* CW off */
+    uint8_t cfg = nrf24_hw_read_reg(NRF_REG_CONFIG);
+    cfg |= NRF_CONFIG_PRIM_RX; /* enter RX */
+    nrf24_hw_write_reg(NRF_REG_CONFIG, cfg);
+    nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
+}
+
 /* ===== Data-flooding jammer ===== */
 
 /* RF_SETUP for 250 kbps, PA max: RF_DR_LOW(bit5) | RF_PWR=3 | LNA-enable(bit0).
