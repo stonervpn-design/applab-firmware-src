@@ -172,6 +172,16 @@ uint8_t nrf24_hw_listen_rpd(uint8_t channel) {
     return nrf24_hw_read_reg(NRF_REG_RPD) & 0x01;
 }
 
+uint8_t nrf24_hw_listen_rpd_dwell(uint8_t channel, uint16_t dwell_us) {
+    furi_hal_gpio_write(&nrf24_ce, false);
+    nrf24_hw_write_reg(NRF_REG_CONFIG, NRF_CONFIG_PWR_UP | NRF_CONFIG_PRIM_RX);
+    nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
+    furi_hal_gpio_write(&nrf24_ce, true);
+    esp_rom_delay_us(dwell_us);
+    furi_hal_gpio_write(&nrf24_ce, false);
+    return nrf24_hw_read_reg(NRF_REG_RPD) & 0x01;
+}
+
 /* Build an RF_SETUP byte for the given data rate (0=1M, 1=2M, 2=250k), PA level
  * (0..3 = MIN/LOW/HIGH/MAX) and optional continuous-wave + PLL-lock bits.
  * Bit0 (LNA enable) is always set to byte-match Bruce's RF24::setPALevel(level,

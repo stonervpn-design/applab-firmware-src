@@ -10,6 +10,7 @@ typedef struct {
     Nrf24App* app;
     FuriThread* worker;
     volatile bool stop;
+    volatile uint16_t dwell_us;
 } Nrf24SpectrumCtx;
 
 static Nrf24SpectrumCtx* g_ctx = NULL;
@@ -52,7 +53,7 @@ static int32_t nrf24_spectrum_worker(void* context) {
         nrf24_hw_acquire();
 
         for(uint8_t ch = 0; ch < NRF24_SPECTRUM_CHANNELS && !ctx->stop; ch++) {
-            uint8_t rpd = nrf24_hw_listen_rpd(ch);
+            uint8_t rpd = nrf24_hw_listen_rpd_dwell(ch, ctx->dwell_us);
             local_levels[ch] = (uint8_t)((local_levels[ch] * 3 + rpd * 125) / 4);
         }
 
@@ -89,6 +90,7 @@ void nrf24_app_scene_spectrum_on_enter(void* context) {
     if(!ctx) return;
     ctx->app = app;
     ctx->stop = false;
+    ctx->dwell_us = 250;
     g_ctx = ctx;
 
     with_view_model(
@@ -114,9 +116,57 @@ void nrf24_app_scene_spectrum_on_enter(void* context) {
 }
 
 bool nrf24_app_scene_spectrum_on_event(void* context, SceneManagerEvent event) {
-    UNUSED(context);
-    UNUSED(event);
-    return false;
+    Nrf24App* app = context;
+    if(event.type != SceneManagerEventTypeCustom || !g_ctx) return false;
+    switch(event.event) {
+    case Nrf24SpectrumEventCursorLeft:
+        with_view_model(
+            app->spectrum_view,
+            Nrf24SpectrumModel * m,
+            {
+                m->cursor_on = true;
+                if(m->cursor_ch) m->cursor_ch--;
+            },
+            true);
+        return true;
+    case Nrf24SpectrumEventCursorRight:
+        with_view_model(
+            app->spectrum_view,
+            Nrf24SpectrumModel * m,
+            {
+                m->cursor_on = true;
+                if(m->cursor_ch < NRF24_SPECTRUM_CHANNELS - 1) m->cursor_ch++;
+            },
+            true);
+        return true;
+    case Nrf24SpectrumEventToggleMaxHold:
+        with_view_model(
+            app->spectrum_view,
+            Nrf24SpectrumModel * m,
+            {
+                m->max_hold = !m->max_hold;
+                if(!m->max_hold)
+                    for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) m->peaks[i] = 0;
+            },
+            true);
+        return true;
+    case Nrf24SpectrumEventDwellCycle: {
+        static uint8_t di = 1; /* 250us */
+        di = nrf24_dwell_next(di);
+        g_ctx->dwell_us = nrf24_dwell_presets[di];
+        with_view_model(
+            app->spectrum_view,
+            Nrf24SpectrumModel * m,
+            { m->dwell_us = g_ctx->dwell_us; },
+            true);
+        return true;
+    }
+    case Nrf24SpectrumEventExport:
+        /* wired in Task 6 */
+        return true;
+    default:
+        return false;
+    }
 }
 
 void nrf24_app_scene_spectrum_on_exit(void* context) {

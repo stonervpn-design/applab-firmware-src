@@ -58,6 +58,11 @@ void nrf24_hw_set_channel(uint8_t channel);
  * Must be wrapped in acquire/release. */
 uint8_t nrf24_hw_listen_rpd(uint8_t channel);
 
+/* As nrf24_hw_listen_rpd but with a caller-selectable dwell time (microseconds)
+ * instead of the fixed 140us. Lets the spectrum view trade sweep speed for
+ * per-channel sensitivity. Must be wrapped in acquire/release. */
+uint8_t nrf24_hw_listen_rpd_dwell(uint8_t channel, uint16_t dwell_us);
+
 /* Constant-carrier jammer: enable continuous wave on the given channel
  * at maximum PA power, 2 Mbps data rate, PLL locked.
  * Must be wrapped in acquire/release. CE is left HIGH on return. */
