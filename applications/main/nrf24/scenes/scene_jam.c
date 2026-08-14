@@ -11,6 +11,7 @@
 
 #include <furi.h>
 #include <stdlib.h>
+#include <esp_rom_sys.h>
 
 #define TAG      "Nrf24Jam"
 #define PA_MAX   3 /* Nrf24Pa_Max */
@@ -45,6 +46,34 @@ typedef struct {
 
 static JamCtx* g_ctx = NULL;
 
+/* One reactive pass over the 3 BLE advertising channels: listen on RPD, and the
+ * instant a carrier appears fire a short CW pulse, then retune to the next adv
+ * channel. Runs inside the acquired bus. */
+static void jam_reactive_pass(JamCtx* ctx) {
+    static const uint8_t BLE_ADV[3] = {2, 26, 80};
+    for(int k = 0; k < 3 && !ctx->stop && ctx->desired_running &&
+                   nrf24_jam_mode_is_reactive(ctx->mode);
+        k++) {
+        uint8_t ch = BLE_ADV[k];
+        nrf24_hw_reactive_setup(ch);
+        nrf24_hw_ce(true);
+        esp_rom_delay_us(130); /* Tstby2a -> RX */
+        for(int t = 0; t < 40 && !ctx->stop && ctx->desired_running; t++) { /* ~2ms window */
+            if(nrf24_hw_read_rpd_raw()) {
+                nrf24_hw_ce(false);
+                nrf24_hw_react_to_tx();
+                nrf24_hw_ce(true);
+                esp_rom_delay_us(430); /* 130 settle + ~300 CW pulse */
+                nrf24_hw_ce(false);
+                nrf24_hw_react_to_rx(ch);
+                break;
+            }
+            esp_rom_delay_us(50);
+        }
+        nrf24_hw_ce(false);
+    }
+}
+
 static int32_t jam_worker(void* context) {
     JamCtx* ctx = context;
     Nrf24App* app = ctx->app;
@@ -61,6 +90,7 @@ static int32_t jam_worker(void* context) {
         {CH_USB, sizeof(CH_USB)},         /* 6 USB         */
         {CH_VIDEO, sizeof(CH_VIDEO)},     /* 7 Video       */
         {NULL, 0},                        /* 8 Full Band   */
+        {CH_BLE_ADV, sizeof(CH_BLE_ADV)}, /* 9 BLE Reactive (jam_reactive_pass drives its own hop) */
     };
 
     nrf24_hw_init();
@@ -77,7 +107,7 @@ static int32_t jam_worker(void* context) {
     nrf24_hw_pa_unclamped(true); /* full PA MAX on USB (boards have the caps) */
 
     uint32_t hz = furi_kernel_get_tick_frequency();
-    bool active = false, cur_flood = false;
+    bool active = false, cur_flood = false, cur_reactive = false;
     int cur = -1;
     size_t i = 0;
 
@@ -86,25 +116,45 @@ static int32_t jam_worker(void* context) {
         int mi = ctx->mode;
         const ModeCh* m = &chans[mi];
         bool flood = nrf24_jam_mode_is_flood(mi);
+        bool reactive = nrf24_jam_mode_is_reactive(mi);
 
         if(want && (!active || mi != cur)) {
             nrf24_hw_acquire();
             if(active) {
-                if(cur_flood) nrf24_hw_flood_stop();
-                else nrf24_hw_jammer_stop();
+                if(cur_reactive) {
+                    nrf24_hw_ce(false);
+                    nrf24_hw_power_down();
+                } else if(cur_flood) {
+                    nrf24_hw_flood_stop();
+                } else {
+                    nrf24_hw_jammer_stop();
+                }
             }
-            uint8_t ch0 = m->count ? m->list[0] : 0;
-            if(flood) nrf24_hw_flood_start_ex(ch0, RATE_2M, PA_MAX);
-            else nrf24_hw_jammer_start_ex(ch0, PA_MAX);
+            if(reactive) {
+                /* jam_reactive_pass() fully configures the chip (reactive_setup)
+                 * on its first pass -- skip the jammer/flood start here so we
+                 * don't key a stray carrier before the reactive loop takes over. */
+            } else {
+                uint8_t ch0 = m->count ? m->list[0] : 0;
+                if(flood) nrf24_hw_flood_start_ex(ch0, RATE_2M, PA_MAX);
+                else nrf24_hw_jammer_start_ex(ch0, PA_MAX);
+            }
             nrf24_hw_release();
             active = true;
             cur = mi;
             cur_flood = flood;
+            cur_reactive = reactive;
             i = 0;
         } else if(!want && active) {
             nrf24_hw_acquire();
-            if(cur_flood) nrf24_hw_flood_stop();
-            else nrf24_hw_jammer_stop();
+            if(cur_reactive) {
+                nrf24_hw_ce(false);
+                nrf24_hw_power_down();
+            } else if(cur_flood) {
+                nrf24_hw_flood_stop();
+            } else {
+                nrf24_hw_jammer_stop();
+            }
             nrf24_hw_release();
             active = false;
             cur = -1;
@@ -112,13 +162,17 @@ static int32_t jam_worker(void* context) {
 
         if(active) {
             nrf24_hw_acquire();
-            uint32_t end = furi_get_tick() + (BATCH_MS * hz) / 1000;
-            while(!ctx->stop && ctx->desired_running && ctx->mode == mi &&
-                  furi_get_tick() < end) {
-                uint8_t ch = m->count ? m->list[i % m->count] : (uint8_t)(i % 84);
-                if(flood) nrf24_hw_flood_burst(ch, 12, true);
-                else nrf24_hw_jammer_set_channel(ch);
-                i++;
+            if(reactive) {
+                jam_reactive_pass(ctx);
+            } else {
+                uint32_t end = furi_get_tick() + (BATCH_MS * hz) / 1000;
+                while(!ctx->stop && ctx->desired_running && ctx->mode == mi &&
+                      furi_get_tick() < end) {
+                    uint8_t ch = m->count ? m->list[i % m->count] : (uint8_t)(i % 84);
+                    if(flood) nrf24_hw_flood_burst(ch, 12, true);
+                    else nrf24_hw_jammer_set_channel(ch);
+                    i++;
+                }
             }
             nrf24_hw_release();
             furi_delay_ms(1); /* yield to GUI/input (worker below UI priority) */
@@ -129,8 +183,14 @@ static int32_t jam_worker(void* context) {
 
     if(active) {
         nrf24_hw_acquire();
-        if(cur_flood) nrf24_hw_flood_stop();
-        else nrf24_hw_jammer_stop();
+        if(cur_reactive) {
+            nrf24_hw_ce(false);
+            nrf24_hw_power_down();
+        } else if(cur_flood) {
+            nrf24_hw_flood_stop();
+        } else {
+            nrf24_hw_jammer_stop();
+        }
         nrf24_hw_release();
     }
     nrf24_hw_pa_unclamped(false);

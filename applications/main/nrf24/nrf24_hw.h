@@ -90,6 +90,11 @@ void nrf24_hw_reactive_setup(uint8_t channel);
 void nrf24_hw_react_to_tx(void);
 void nrf24_hw_react_to_rx(uint8_t channel);
 
+/* Raw RPD (received-power-detect) bit, for the reactive jammer's poll loop.
+ * Keeps the register address private to nrf24_hw.c. Must be wrapped in
+ * acquire/release. */
+uint8_t nrf24_hw_read_rpd_raw(void);
+
 /* ---- Data-flooding jammer ----
  * Alternative strategy to the constant carrier: instead of an unmodulated
  * tone this floods the channel with full 32-byte ESB packets (AutoAck off,

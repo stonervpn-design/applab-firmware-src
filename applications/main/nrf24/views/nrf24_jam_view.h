@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define NRF24_JAM_MODE_COUNT 9
+#define NRF24_JAM_MODE_COUNT 10
 
 /* Simple mode-list jammer model (Bruce-base + concentration/noise improvements). */
 typedef struct {
@@ -22,6 +22,7 @@ typedef enum {
 /* Shared mode metadata (single source of truth for view + worker). */
 const char* nrf24_jam_mode_name(int mode);
 bool nrf24_jam_mode_is_flood(int mode); /* true = Turbo noise-flood, false = CW */
+bool nrf24_jam_mode_is_reactive(int mode); /* true = RPD reactive BLE (mode 9) */
 
 View* nrf24_jam_view_alloc(void);
 void nrf24_jam_view_free(View* view);

@@ -7,7 +7,16 @@
 
 /* Mode metadata — single source of truth (worker in scene_jam.c uses these). */
 static const char* const MODE_NAMES[NRF24_JAM_MODE_COUNT] = {
-    "WiFi", "BT Classic", "BLE Adv", "BLE Data", "Zigbee", "RC", "USB", "Video", "Full Band"};
+    "WiFi",
+    "BT Classic",
+    "BLE Adv",
+    "BLE Data",
+    "Zigbee",
+    "RC",
+    "USB",
+    "Video",
+    "Full Band",
+    "BLE Reactive"};
 
 const char* nrf24_jam_mode_name(int mode) {
     return MODE_NAMES[(mode >= 0 && mode < NRF24_JAM_MODE_COUNT) ? mode : 0];
@@ -15,6 +24,10 @@ const char* nrf24_jam_mode_name(int mode) {
 
 bool nrf24_jam_mode_is_flood(int mode) {
     return mode == 0 || mode == 4; /* WiFi (OFDM), Zigbee (DSSS) -> noise flood */
+}
+
+bool nrf24_jam_mode_is_reactive(int mode) {
+    return mode == 9; /* BLE Reactive: RPD-triggered CW, not flood/plain-CW */
 }
 
 /* Scrolling list nav — selected row shows ">" (or "*" when jamming) + strategy;

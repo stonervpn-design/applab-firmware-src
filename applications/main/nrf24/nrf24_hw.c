@@ -375,6 +375,10 @@ void nrf24_hw_react_to_rx(uint8_t channel) {
     nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
 }
 
+uint8_t nrf24_hw_read_rpd_raw(void) {
+    return nrf24_hw_read_reg(NRF_REG_RPD) & 0x01;
+}
+
 /* ===== Data-flooding jammer ===== */
 
 /* RF_SETUP for 250 kbps, PA max: RF_DR_LOW(bit5) | RF_PWR=3 | LNA-enable(bit0).
