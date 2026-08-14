@@ -155,6 +155,7 @@ const SubGhzProtocol psa_protocol = {
 };
 
 static void psa_calculate_checksum(uint8_t* buffer);
+static void psa_second_stage_xor_decrypt(uint8_t* buffer);
 
 #ifdef ENABLE_EMULATE_FEATURE
 // Manchester event -> physical (level, duration) pulse, mirroring the decoder's
@@ -326,6 +327,60 @@ void subghz_protocol_encoder_psa_free(void* context) {
     free(instance);
 }
 
+// Exact inverse of psa_second_stage_xor_decrypt. The decrypt derives plaintext
+// buffer[2..7] from the encrypted bytes E2..E9 (E = buffer[2..9]) via:
+//   P2 = E5^E7, P3 = E3^E5, P4 = E7^E2, P5 = E6^E4, P6 = E2^E4, P7 = E7^E9^E8
+// buffer[8],buffer[9] (E8,E9) are never modified, so given plaintext P2..P7 the
+// encrypted bytes are uniquely recoverable:
+//   E7 = P7^E9^E8; E2 = P4^E7; E5 = P2^E7; E3 = P3^E5; E4 = P6^E2; E6 = P5^E4
+// Proven identity: decrypt then encrypt (and vice-versa) restores buffer[2..9]
+// (host unit test over all 256 seeds).
+static void psa_second_stage_xor_encrypt(uint8_t* buffer) {
+    const uint8_t E8 = buffer[8];
+    const uint8_t E9 = buffer[9];
+    const uint8_t P2 = buffer[2];
+    const uint8_t P3 = buffer[3];
+    const uint8_t P4 = buffer[4];
+    const uint8_t P5 = buffer[5];
+    const uint8_t P6 = buffer[6];
+    const uint8_t P7 = buffer[7];
+    const uint8_t E7 = (uint8_t)(P7 ^ E9 ^ E8);
+    const uint8_t E2 = (uint8_t)(P4 ^ E7);
+    const uint8_t E5 = (uint8_t)(P2 ^ E7);
+    const uint8_t E3 = (uint8_t)(P3 ^ E5);
+    const uint8_t E4 = (uint8_t)(P6 ^ E2);
+    const uint8_t E6 = (uint8_t)(P5 ^ E4);
+    buffer[2] = E2;
+    buffer[3] = E3;
+    buffer[4] = E4;
+    buffer[5] = E5;
+    buffer[6] = E6;
+    buffer[7] = E7;
+}
+
+// Rolling re-encode for direct-XOR (Type 0x23) frames: recover the plaintext block
+// from the stored Key1/Key2 via the SAME decode transform the decoder used, splice
+// the requested rolling number into the counter bytes (decrypted buffer[5]=high,
+// buffer[6]=low -- exactly where psa_extract_fields_mode23 reads counter =
+// buffer[6] | buffer[5]<<8), then run the INVERSE transform to rebuild Key1. With
+// the CAPTURED counter this is an exact identity, reproducing the stored value
+// byte-for-byte; a bumped counter yields the next hop. Key1's top two bytes
+// (buffer[0],buffer[1]) and Key2 (buffer[8],buffer[9]) are outside the XOR network
+// and are preserved, so the decoder's 0xA device-class gate still passes.
+static void psa_reencode_with_cnt(SubGhzProtocolEncoderPSA* instance, uint32_t cnt) {
+    uint8_t buffer[PSA_BUFFER_SIZE] = {0};
+    psa_crypto_setup_byte_buffer(
+        buffer, instance->key1_low, instance->key1_high, instance->key2_low);
+    psa_second_stage_xor_decrypt(buffer);
+    buffer[6] = (uint8_t)(cnt & 0xFF);
+    buffer[5] = (uint8_t)((cnt >> 8) & 0xFF);
+    psa_second_stage_xor_encrypt(buffer);
+    instance->key1_high = ((uint32_t)buffer[0] << 24) | ((uint32_t)buffer[1] << 16) |
+                          ((uint32_t)buffer[2] << 8) | (uint32_t)buffer[3];
+    instance->key1_low = ((uint32_t)buffer[4] << 24) | ((uint32_t)buffer[5] << 16) |
+                         ((uint32_t)buffer[6] << 8) | (uint32_t)buffer[7];
+}
+
 SubGhzProtocolStatus
     subghz_protocol_encoder_psa_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_check(context);
@@ -349,6 +404,17 @@ SubGhzProtocolStatus
     }
     instance->key2_low = (uint32_t)(key2 & 0xFFFFFFFFU);
     instance->validation_field = (uint16_t)(key2 & 0xFFFFU);
+
+    // Rolling re-encode: direct-XOR (Type 0x23) captures serialize a decoded Cnt.
+    // Re-derive Key1 with the (possibly harness-bumped) counter spliced in -- exact
+    // identity for the captured counter (byte-for-byte clone), next hop for +1.
+    // Undecrypted (0x36 / no-Cnt) captures skip this and are cloned verbatim.
+    uint32_t type_val = 0;
+    uint32_t cnt_val = UINT32_MAX;
+    pp_encoder_read_fields(flipper_format, NULL, NULL, &cnt_val, &type_val);
+    if(type_val == 0x23 && cnt_val != UINT32_MAX) {
+        psa_reencode_with_cnt(instance, cnt_val);
+    }
 
     psa_encoder_build_upload(instance);
     // build_upload hardcodes repeat = 10; honor a capture's Repeat if present.

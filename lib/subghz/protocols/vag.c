@@ -1013,6 +1013,121 @@ typedef struct SubGhzProtocolEncoderVAG {
     bool is_running;
 } SubGhzProtocolEncoderVAG;
 
+// Exact inverse of vag_tea_decrypt: standard 32-round XTEA forward pass. The decrypt
+// runs sum from DELTA*ROUNDS downward subtracting the two half-round updates; the
+// encrypt runs sum from 0 upward adding them in reversed order. Proven identity:
+// vag_tea_decrypt(vag_tea_encrypt(x)) == x (host unit test).
+static void vag_tea_encrypt(uint32_t* v0, uint32_t* v1, const uint32_t* key_schedule) {
+    uint32_t sum = 0;
+    for(int i = 0; i < VAG_TEA_ROUNDS; i++) {
+        *v0 += (((*v1 << 4) ^ (*v1 >> 5)) + *v1) ^ (sum + key_schedule[sum & 3]);
+        sum += VAG_TEA_DELTA;
+        *v1 += (((*v0 << 4) ^ (*v0 >> 5)) + *v0) ^ (sum + key_schedule[(sum >> 11) & 3]);
+    }
+}
+
+// AUT64 forward transform, mirroring vag_aut64_decrypt's key selection (the decoder
+// decrypts with protocol_vag_get_key(key_index + 1); aut64_encrypt is the exact
+// paired inverse of aut64_decrypt).
+static bool vag_aut64_encrypt_block(uint8_t* block, int key_index) {
+    struct aut64_key* key = protocol_vag_get_key(key_index + 1);
+    if(!key) {
+        FURI_LOG_E(TAG, "Encrypt key not found: %d", key_index + 1);
+        return false;
+    }
+    return aut64_encrypt(key, block) == AUT64_OK;
+}
+
+// Rolling re-encode: recover the full cipher-block plaintext from the stored Key1/Key2
+// via the SAME decode transform the decoder used for this frame's Type, splice the
+// requested rolling number into plaintext bytes [4],[5],[6] (little-endian 24-bit --
+// the exact positions vag_fill_from_decrypted reads the counter from), then run the
+// INVERSE transform to rebuild Key1/Key2. With the CAPTURED counter this is an exact
+// identity (decrypt then re-encrypt reproduces the stored value byte-for-byte); with
+// counter+1 it produces the next valid hop. The frame type byte (Key1 MSB) and the
+// dispatch byte (Key2 low byte) are never part of the cipher block, so they are
+// preserved verbatim. Returns false (caller keeps verbatim clone) if the transform
+// cannot run (e.g. AUT64 key not loaded).
+static bool vag_reencode_with_cnt(SubGhzProtocolEncoderVAG* instance, uint32_t cnt) {
+    uint8_t key1_bytes[8];
+    key1_bytes[0] = (uint8_t)(instance->key1_high >> 24);
+    key1_bytes[1] = (uint8_t)(instance->key1_high >> 16);
+    key1_bytes[2] = (uint8_t)(instance->key1_high >> 8);
+    key1_bytes[3] = (uint8_t)(instance->key1_high);
+    key1_bytes[4] = (uint8_t)(instance->key1_low >> 24);
+    key1_bytes[5] = (uint8_t)(instance->key1_low >> 16);
+    key1_bytes[6] = (uint8_t)(instance->key1_low >> 8);
+    key1_bytes[7] = (uint8_t)(instance->key1_low);
+
+    const uint8_t dispatch = (uint8_t)(instance->key2_low & 0xFF);
+    const uint8_t key2_high = (uint8_t)((instance->key2_low >> 8) & 0xFF);
+
+    uint8_t block[8];
+    block[0] = key1_bytes[1];
+    block[1] = key1_bytes[2];
+    block[2] = key1_bytes[3];
+    block[3] = key1_bytes[4];
+    block[4] = key1_bytes[5];
+    block[5] = key1_bytes[6];
+    block[6] = key1_bytes[7];
+    block[7] = key2_high;
+
+    if(instance->vag_type == 2) {
+        // Type 2 packs the block into two big-endian uint32 halves for XTEA.
+        uint32_t v0 = ((uint32_t)block[0] << 24) | ((uint32_t)block[1] << 16) |
+                      ((uint32_t)block[2] << 8) | (uint32_t)block[3];
+        uint32_t v1 = ((uint32_t)block[4] << 24) | ((uint32_t)block[5] << 16) |
+                      ((uint32_t)block[6] << 8) | (uint32_t)block[7];
+        vag_tea_decrypt(&v0, &v1, vag_tea_key_schedule);
+
+        uint8_t dec[8] = {
+            (uint8_t)(v0 >> 24),
+            (uint8_t)(v0 >> 16),
+            (uint8_t)(v0 >> 8),
+            (uint8_t)v0,
+            (uint8_t)(v1 >> 24),
+            (uint8_t)(v1 >> 16),
+            (uint8_t)(v1 >> 8),
+            (uint8_t)v1};
+        dec[4] = (uint8_t)(cnt & 0xFF);
+        dec[5] = (uint8_t)((cnt >> 8) & 0xFF);
+        dec[6] = (uint8_t)((cnt >> 16) & 0xFF);
+
+        uint32_t e0 = ((uint32_t)dec[0] << 24) | ((uint32_t)dec[1] << 16) |
+                      ((uint32_t)dec[2] << 8) | (uint32_t)dec[3];
+        uint32_t e1 = ((uint32_t)dec[4] << 24) | ((uint32_t)dec[5] << 16) |
+                      ((uint32_t)dec[6] << 8) | (uint32_t)dec[7];
+        vag_tea_encrypt(&e0, &e1, vag_tea_key_schedule);
+        block[0] = (uint8_t)(e0 >> 24);
+        block[1] = (uint8_t)(e0 >> 16);
+        block[2] = (uint8_t)(e0 >> 8);
+        block[3] = (uint8_t)e0;
+        block[4] = (uint8_t)(e1 >> 24);
+        block[5] = (uint8_t)(e1 >> 16);
+        block[6] = (uint8_t)(e1 >> 8);
+        block[7] = (uint8_t)e1;
+    } else {
+        // Types 1/3/4 are AUT64; the decoder recorded which key index decoded.
+        const int key_index = (instance->key_idx == 0xFF) ? 2 : (int)instance->key_idx;
+        uint8_t dec[8];
+        memcpy(dec, block, 8);
+        if(!vag_aut64_decrypt(dec, key_index)) return false;
+        dec[4] = (uint8_t)(cnt & 0xFF);
+        dec[5] = (uint8_t)((cnt >> 8) & 0xFF);
+        dec[6] = (uint8_t)((cnt >> 16) & 0xFF);
+        if(!vag_aut64_encrypt_block(dec, key_index)) return false;
+        memcpy(block, dec, 8);
+    }
+
+    instance->key1_high = ((uint32_t)key1_bytes[0] << 24) | ((uint32_t)block[0] << 16) |
+                          ((uint32_t)block[1] << 8) | (uint32_t)block[2];
+    instance->key1_low = ((uint32_t)block[3] << 24) | ((uint32_t)block[4] << 16) |
+                         ((uint32_t)block[5] << 8) | (uint32_t)block[6];
+    instance->key2_low = ((uint32_t)block[7] << 8) | (uint32_t)dispatch;
+    instance->key2_high = 0;
+    return true;
+}
+
 static void vag_encoder_build_type_1_2(SubGhzProtocolEncoderVAG* instance) {
     // Verbatim clone: re-emit the stored (already-encrypted) Key1/Key2 exactly as
     // the decoder framed them, so re-decoding recovers the same key -> the same
@@ -1339,9 +1454,20 @@ SubGhzProtocolStatus
             instance->btn,
             instance->key_idx);
 
-        // Rolling-code clone: replay the stored (already-encrypted) key verbatim.
-        // Do NOT increment the counter or re-encrypt -- that would desync the
-        // emitted frame from the captured serial/counter and break re-decoding.
+        // Rolling re-encode: when the capture carried a decoded counter, re-derive
+        // Key1/Key2 from the cipher block with the (possibly harness-bumped) counter
+        // spliced back in. With the captured counter this reproduces the stored value
+        // byte-for-byte (transform is an exact identity); a bumped counter yields the
+        // next valid hop. If no counter was stored, or the transform can't run, fall
+        // back to the verbatim clone below.
+        uint32_t cnt_reenc = UINT32_MAX;
+        pp_encoder_read_fields(flipper_format, NULL, NULL, &cnt_reenc, NULL);
+        if(cnt_reenc != UINT32_MAX) {
+            if(vag_reencode_with_cnt(instance, cnt_reenc)) {
+                instance->cnt = cnt_reenc;
+            }
+        }
+
         if(instance->vag_type == 3 || instance->vag_type == 4) {
             vag_encoder_build_type_3_4(instance);
         } else {
