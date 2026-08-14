@@ -141,11 +141,21 @@ static bool kia_v3_v4_process_buffer(SubGhzProtocolDecoderKiaV3V4* instance) {
     uint8_t btn = (pp_reverse_bits8(b[7]) & 0xF0) >> 4;
     uint8_t our_serial_lsb = serial & 0xFF;
 
-    uint32_t decrypted = subghz_protocol_keeloq_common_decrypt(encrypted, get_kia_mf_key());
-    uint8_t dec_btn = (decrypted >> 28) & 0x0F;
-    uint8_t dec_serial_lsb = (decrypted >> 16) & 0xFF;
-
-    if(dec_btn != btn || dec_serial_lsb != our_serial_lsb) {
+    // Try every provisioned KIA_KEY1 manufacturer key; accept the first whose
+    // KeeLoq decrypt is self-consistent (top nibble == button, disc byte ==
+    // serial LSB). A single last-wins key would shadow all the others.
+    uint32_t decrypted = 0;
+    bool key_ok = false;
+    uint8_t nkeys = get_kia_mf_key_count();
+    for(uint8_t ki = 0; ki < nkeys; ki++) {
+        uint32_t d = subghz_protocol_keeloq_common_decrypt(encrypted, get_kia_mf_key_at(ki));
+        if(((d >> 28) & 0x0F) == btn && ((d >> 16) & 0xFF) == our_serial_lsb) {
+            decrypted = d;
+            key_ok = true;
+            break;
+        }
+    }
+    if(!key_ok) {
         return false;
     }
 
