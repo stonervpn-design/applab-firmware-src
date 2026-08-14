@@ -74,6 +74,24 @@ static bool subghz_scene_keeloq_fob_enter_generic(SubGhz* subghz) {
 
     size_t n = 0;
     const SubGhzFobButton* buttons = have_proto ? subghz_fob_buttons(proto_cstr, &n) : NULL;
+
+    // Single-button "resend rolling" clone for synth-capable protocols that have
+    // NO multi-button table (Kia V5/PSA/Fiat V0). Build a 1-tile table whose code
+    // is the CAPTURED button, so the on-air button always matches the capture
+    // (works whether or not the encoder reads Btn) while the counter still rolls
+    // +1 per press. Static-lifetime buffer: the view stores the pointer, only one
+    // emulate runs at a time.
+    static SubGhzFobButton single_tile[1];
+    if((!buttons || n == 0) && have_proto && subghz_fob_single_button_synth(proto_cstr)) {
+        uint32_t cap_btn = 0;
+        flipper_format_rewind(fff);
+        flipper_format_read_uint32(fff, subghz_fob_button_field(proto_cstr), &cap_btn, 1);
+        single_tile[0].code = (uint8_t)cap_btn;
+        single_tile[0].name = "Send";
+        buttons = single_tile;
+        n = 1;
+    }
+
     if(!buttons || n == 0) {
         // Provider flagged this supported at routing time but has no table now — bail
         // to the previous scene rather than show an empty grid.

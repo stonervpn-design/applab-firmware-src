@@ -52,9 +52,16 @@ typedef enum {
     SubGhzFobEmulateReplay = 1,
 } SubGhzFobEmulateKind;
 
+// True for protocols whose encoder synthesizes a rolling frame from the "Cnt"
+// field (verified counter-advance) but which have NO enumerable multi-button
+// table — so they route through a SINGLE-button "resend rolling" clone (one
+// "Send" tile carrying the captured button, counter +1 per press). Kia V5 / PSA
+// / Fiat V0. Distinct from subghz_fob_protocol_supported (multi-button table).
+bool subghz_fob_single_button_synth(const char* protocol_name);
+
 // Classify a protocol's emulate behaviour. Synth iff it routes through the
-// counter-rolling fob path (has a button table, or is one of the single-button
-// rolling clones VAG/KeeLoq); Replay otherwise.
+// counter-rolling fob path (multi-button table, single-button rolling clone, or
+// the VAG/KeeLoq special cases); Replay otherwise.
 SubGhzFobEmulateKind subghz_fob_emulate_kind(const char* protocol_name);
 
 // Short human label for the kind ("Second fob" / "Replay"), never NULL.

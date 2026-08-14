@@ -289,15 +289,30 @@ bool subghz_fob_protocol_supported(const char* protocol_name) {
     return subghz_fob_buttons(protocol_name, &n) != NULL && n > 0;
 }
 
+bool subghz_fob_single_button_synth(const char* protocol_name) {
+#ifndef PUBLIC_BUILD
+    if(!protocol_name) return false;
+    return strcmp(protocol_name, "Kia V5") == 0 || strcmp(protocol_name, "PSA") == 0 ||
+           strcmp(protocol_name, "Fiat V0") == 0;
+#else
+    // PRIVATE-only: the car protocol name literals must not ship in a public
+    // build (verify_public_no_car). No single-button-synth protocol is public.
+    (void)protocol_name;
+    return false;
+#endif
+}
+
 SubGhzFobEmulateKind subghz_fob_emulate_kind(const char* protocol_name) {
     if(!protocol_name) return SubGhzFobEmulateReplay;
     // VAG and KeeLoq are single-button rolling clones handled by dedicated paths
     // in subghz_scene_keeloq_fob; every other rolling second fob routes through
-    // the multi-button counter-rolling path iff it has an enumerable button table.
+    // the multi-button counter-rolling path iff it has an enumerable button table,
+    // or the single-button "resend rolling" path for synth-no-table protocols.
     if(strcmp(protocol_name, "VAG") == 0 || strcmp(protocol_name, "KeeLoq") == 0) {
         return SubGhzFobEmulateSynth;
     }
-    if(subghz_fob_protocol_supported(protocol_name)) {
+    if(subghz_fob_protocol_supported(protocol_name) ||
+       subghz_fob_single_button_synth(protocol_name)) {
         return SubGhzFobEmulateSynth;
     }
     return SubGhzFobEmulateReplay;

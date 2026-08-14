@@ -84,8 +84,19 @@ int main(void) {
     assert(subghz_fob_emulate_kind("HondaV8") == SubGhzFobEmulateSynth);
     assert(subghz_fob_emulate_kind("VAG") == SubGhzFobEmulateSynth);
     assert(subghz_fob_emulate_kind("KeeLoq") == SubGhzFobEmulateSynth);
-    // No button table (not yet routed through the counter-roll path) -> Replay.
-    assert(subghz_fob_emulate_kind("Kia V5") == SubGhzFobEmulateReplay);
+    // Single-button synth (no table, but rolling via Cnt) -> Synth via the
+    // resend-rolling path. Kia V5 / PSA / Fiat V0.
+    assert(subghz_fob_single_button_synth("Kia V5"));
+    assert(subghz_fob_single_button_synth("PSA"));
+    assert(subghz_fob_single_button_synth("Fiat V0"));
+    assert(!subghz_fob_single_button_synth("Kia V0")); // has a table, not single-button
+    assert(!subghz_fob_single_button_synth("Toyota V0")); // no synth
+    assert(!subghz_fob_single_button_synth(NULL));
+    assert(subghz_fob_emulate_kind("Kia V5") == SubGhzFobEmulateSynth);
+    assert(subghz_fob_emulate_kind("PSA") == SubGhzFobEmulateSynth);
+    assert(subghz_fob_emulate_kind("Fiat V0") == SubGhzFobEmulateSynth);
+    // Still Replay: rolling protocols with neither table nor Cnt-synth.
+    assert(subghz_fob_emulate_kind("Toyota V0") == SubGhzFobEmulateReplay);
     assert(subghz_fob_emulate_kind("NotARealProtocol") == SubGhzFobEmulateReplay);
     assert(subghz_fob_emulate_kind(NULL) == SubGhzFobEmulateReplay);
     assert(strcmp(subghz_fob_emulate_kind_str(SubGhzFobEmulateSynth), "Second fob") == 0);

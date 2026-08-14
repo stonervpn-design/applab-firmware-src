@@ -14,7 +14,21 @@
 
 bool subghz_fob_can_emulate(FlipperFormat* fff, const char* proto) {
     if(!fff || !proto) return false;
-    if(!subghz_fob_protocol_supported(proto)) return false;
+    // Multi-button table protocols, or synth-capable protocols with no table that
+    // route through the single-button "resend rolling" clone (Kia V5/PSA/Fiat V0).
+    bool single_button = subghz_fob_single_button_synth(proto);
+    if(!subghz_fob_protocol_supported(proto) && !single_button) return false;
+
+    // A single-button synth needs its rolling counter present in the capture.
+    // PSA 0x36-brute captures resolve no counter (serialize omits Cnt), so they
+    // fall back to plain replay rather than a non-advancing "rolling" clone.
+    if(single_button) {
+        uint32_t cnt = 0;
+        flipper_format_rewind(fff);
+        if(!flipper_format_read_uint32(fff, subghz_fob_counter_field(proto), &cnt, 1)) {
+            return false;
+        }
+    }
 
     // Honda V2&V3 shares one protocol name across two on-air variants. The V3
     // sub-variant bakes the button into the transmitted frame (replay), so only a
