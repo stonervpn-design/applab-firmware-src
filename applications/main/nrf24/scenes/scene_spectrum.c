@@ -52,14 +52,17 @@ static int32_t nrf24_spectrum_worker(void* context) {
     uint8_t local_levels[NRF24_SPECTRUM_CHANNELS] = {0};
 
     while(!ctx->stop) {
-        nrf24_hw_acquire();
-
+        /* Scope the nRF24 SPI acquire PER-CHANNEL, not across the whole sweep.
+         * nrf24_hw_acquire() takes the global furi_hal_spi_bus_lock, which the
+         * LCD refresh (furi_hal_display_commit) also needs; holding it across
+         * all channels (~25ms) starves the display -> faint/garbled screen.
+         * Releasing between channels lets the LCD commit interleave. */
         for(uint8_t ch = 0; ch < NRF24_SPECTRUM_CHANNELS && !ctx->stop; ch++) {
+            nrf24_hw_acquire();
             uint8_t rpd = nrf24_hw_listen_rpd_dwell(ch, ctx->dwell_us);
+            nrf24_hw_release();
             local_levels[ch] = (uint8_t)((local_levels[ch] * 3 + rpd * 125) / 4);
         }
-
-        nrf24_hw_release();
 
         with_view_model(
             app->spectrum_view,

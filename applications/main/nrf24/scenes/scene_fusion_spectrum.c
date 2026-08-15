@@ -135,13 +135,17 @@ static int32_t fusion_sweep_worker(void* context) {
     uint8_t local[NRF24_FUSION_CH] = {0};
 
     while(!ctx->stop) {
-        nrf24_hw_acquire();
+        /* Per-channel SPI acquire (NOT across the whole sweep): the global
+         * furi_hal_spi_bus_lock is shared with the render worker's blits and
+         * the LCD commit; holding it across all 126 channels (~38ms) starves
+         * the display. Release between channels so blits/commits interleave. */
         for(uint8_t ch = 0; ch < NRF24_FUSION_CH && !ctx->stop; ch++) {
+            nrf24_hw_acquire();
             uint8_t rpd = nrf24_hw_listen_rpd_dwell(ch, ctx->dwell_us);
+            nrf24_hw_release();
             /* EMA into 0..100 occupancy (rpd is a 1-bit carrier flag) */
             local[ch] = (uint8_t)((local[ch] * 3 + rpd * 100) / 4);
         }
-        nrf24_hw_release();
 
         furi_mutex_acquire(ctx->lock, FuriWaitForever);
         memcpy(ctx->model.occ, local, NRF24_FUSION_CH);
