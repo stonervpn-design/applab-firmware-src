@@ -16,4 +16,6 @@ ADD_SCENE(nrf24_app, keysniffer, KeySniffer)
 ADD_SCENE(nrf24_app, fuzz, Fuzz)
 // Drone (Bayang) -- toy-quadcopter bind/control (drone_bayang), private only.
 ADD_SCENE(nrf24_app, drone_bayang, DroneBayang)
+// Fusion Spectrum -- full-screen color takeover + nRF24 heat-waterfall, private only.
+ADD_SCENE(nrf24_app, fusion_spectrum, FusionSpectrum)
 #endif

@@ -12,6 +12,7 @@ enum SubmenuIndex {
     SubmenuIndexKeySniffer,
     SubmenuIndexFuzzer,
     SubmenuIndexDroneBayang,
+    SubmenuIndexFusionSpectrum,
 #endif
 };
 
@@ -54,6 +55,12 @@ void nrf24_app_scene_menu_on_enter(void* context) {
         SubmenuIndexDroneBayang,
         nrf24_scene_menu_submenu_callback,
         app);
+    submenu_add_item(
+        app->submenu,
+        "Fusion Spectrum",
+        SubmenuIndexFusionSpectrum,
+        nrf24_scene_menu_submenu_callback,
+        app);
 #endif
 
     view_dispatcher_switch_to_view(app->view_dispatcher, Nrf24ViewSubmenu);
@@ -92,6 +99,10 @@ bool nrf24_app_scene_menu_on_event(void* context, SceneManagerEvent event) {
             break;
         case SubmenuIndexDroneBayang:
             scene_manager_next_scene(app->scene_manager, Nrf24AppSceneDroneBayang);
+            consumed = true;
+            break;
+        case SubmenuIndexFusionSpectrum:
+            scene_manager_next_scene(app->scene_manager, Nrf24AppSceneFusionSpectrum);
             consumed = true;
             break;
 #endif
