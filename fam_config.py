@@ -290,10 +290,44 @@ OPTIONAL_APPS = {
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
     "clock", "qrcode", "pocketlab", "defender",
 }
+# ── Hidden inter-app link dependencies ───────────────────────────────────────
+# A handful of apps' C sources call functions that are DEFINED in ANOTHER app's
+# translation unit (each app dir is its own compile target, so a symbol only exists
+# when its owning app is in the build). If a custom build keeps the dependent but
+# drops its provider, the firmware fails to LINK ("undefined reference"). So when a
+# selection names a dependent, transitively pull in the providers it needs BEFORE
+# narrowing — every custom subset then stays linkable no matter what the user picks.
+# A provider already removed by the board/variant filters above stays absent (adding
+# an absent appid to the wanted-set is a harmless no-op). Verified vs origin/main:
+#   defender  -> ble_spam : scenes/scene_ble_spam.c + scene_ble_tracker.c call
+#                           ble_walk_hal_*/ble_tracker_hal_* (ble_spam/ble_walk_hal.c,
+#                           ble_tracker_hal.c, tracker_follow.c).
+#   defender  -> subghz   : scenes/scene_jammer.c calls subghz_threshold_rssi_*
+#                           (subghz/helpers/subghz_threshold_rssi.c).
+#   defender  -> wlan     : defender_wifi_tap.c calls wlan_hal_* (wlan_app/wlan_hal.c).
+#   flippergotchi -> wlan : fg_attack.c/fg_capture.c/flippergotchi.c call
+#                           pmkid_*/wlan_hs_*/wlan_pcap_*/wlan_hal_* (wlan_app/).
+# NOTE: wiegand also needs gpio_catalog_* (gpio/gpio_pin_catalog.c) but the `gpio`
+# app is not in APPS on any board, so it cannot be auto-included here — see the
+# catalog notes; wiegand is handled separately.
+APP_REQUIRES = {
+    "defender": {"ble_spam", "subghz", "wlan"},
+    "flippergotchi": {"wlan"},
+}
+
 _apps_env = os.environ.get("FLIPPER_APPS", "").strip()
 if _apps_env:
     _want = {a.strip() for a in _apps_env.split(",") if a.strip()}
-    # Keep every core app; among OPTIONAL apps keep only the requested ones.
+    # Transitively add each selected app's required providers so the link succeeds.
+    _stack = list(_want)
+    while _stack:
+        _dep = _stack.pop()
+        for _prov in APP_REQUIRES.get(_dep, ()):
+            if _prov not in _want:
+                _want.add(_prov)
+                _stack.append(_prov)
+    # Keep every core app; among OPTIONAL apps keep only the requested ones
+    # (plus any providers pulled in just above).
     APPS = [a for a in APPS if a not in OPTIONAL_APPS or a in _want]
 
 EXTRA_EXT_APPS = []
