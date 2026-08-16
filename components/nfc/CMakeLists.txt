@@ -55,6 +55,7 @@ idf_component_register(
         "protocols/mf_classic/mf_classic_poller_i.c"
         "protocols/mf_classic/mf_classic_poller_sync.c"
         "protocols/mf_desfire/mf_desfire.c"
+        "protocols/mf_desfire/mf_desfire_crypto.c"
         "protocols/mf_desfire/mf_desfire_i.c"
         "protocols/mf_desfire/mf_desfire_poller.c"
         "protocols/mf_desfire/mf_desfire_poller_i.c"
