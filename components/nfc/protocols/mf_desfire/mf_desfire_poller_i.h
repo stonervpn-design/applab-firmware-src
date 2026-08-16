@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mf_desfire_poller.h"
+#include "mf_desfire_crypto.h"
 
 #include <protocols/iso14443_4a/iso14443_4a_poller_i.h>
 
@@ -39,6 +40,7 @@ struct MfDesfirePoller {
     BitBuffer* rx_buffer;
     BitBuffer* input_buffer;
     BitBuffer* result_buffer;
+    MfDesfireCryptoCtx crypto; /**< Auth session state (Task 6: authenticate + read_file_data_authed). */
     MfDesfirePollerEventData mf_desfire_event_data;
     MfDesfirePollerEvent mf_desfire_event;
     NfcGenericEvent general_event;

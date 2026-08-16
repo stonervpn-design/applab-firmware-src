@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mf_desfire.h"
+#include "mf_desfire_crypto.h"
 
 #include <protocols/iso14443_4a/iso14443_4a_poller.h>
 #include <helpers/nxp_native_command_mode.h>
@@ -337,6 +338,57 @@ MfDesfireError mf_desfire_poller_read_applications(
     MfDesfirePoller* instance,
     const SimpleArray* app_ids,
     SimpleArray* data);
+
+/**
+ * @brief Authenticate to the currently selected application on MfDesfire card.
+ *
+ * Must ONLY be used inside the callback function.
+ *
+ * Performs the 3-pass mutual authentication handshake (legacy DES/2K3DES
+ * `0x0a`, ISO 3K3DES `0x1a`, or AES `0xaa`, selected by @p key_type). On
+ * success the poller's crypto session is authenticated and CMAC subkeys are
+ * derived, enabling `mf_desfire_poller_read_file_data_authed` for
+ * `Authenticated` (MAC) comm files.
+ *
+ * @param[in, out] instance pointer to the instance to be used in the transaction.
+ * @param[in] key_no key number to authenticate with.
+ * @param[in] key_type type of the key (determines auth command and challenge size).
+ * @param[in] key pointer to the raw key bytes (length = mf_desfire_key_size(key_type)).
+ * @return MfDesfireErrorNone on success, an error code on failure.
+ */
+MfDesfireError mf_desfire_poller_authenticate(
+    MfDesfirePoller* instance,
+    uint8_t key_no,
+    MfDesfireKeyType key_type,
+    const uint8_t* key);
+
+/**
+ * @brief Read file data on MfDesfire card using an authenticated session (Phase A).
+ *
+ * Must ONLY be used inside the callback function. Requires a prior successful
+ * call to `mf_desfire_poller_authenticate` when @p comm is `Authenticated`.
+ *
+ * Honors `Plaintext` and `Authenticated` (MAC) communication settings.
+ * `Enciphered` comm is Phase B and is not yet implemented: this function
+ * returns MfDesfireErrorProtocol for it.
+ *
+ * @param[in, out] instance pointer to the instance to be used in the transaction.
+ * @param[in] file_id file id to read data from.
+ * @param[in] comm communication settings the file was created with.
+ * @param[in] offset offset in bytes to start reading from.
+ * @param[in] length number of bytes to read.
+ * @param[out] out buffer to be filled with file data (must hold at least @p length bytes).
+ * @param[out] out_len pointer to be filled with the number of bytes actually written to @p out.
+ * @return MfDesfireErrorNone on success, an error code on failure.
+ */
+MfDesfireError mf_desfire_poller_read_file_data_authed(
+    MfDesfirePoller* instance,
+    MfDesfireFileId file_id,
+    MfDesfireFileCommunicationSettings comm,
+    uint32_t offset,
+    uint32_t length,
+    uint8_t* out,
+    uint32_t* out_len);
 
 #ifdef __cplusplus
 }

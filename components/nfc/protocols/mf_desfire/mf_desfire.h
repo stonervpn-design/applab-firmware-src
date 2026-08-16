@@ -28,6 +28,11 @@ extern "C" {
 #define MF_DESFIRE_CMD_GET_VALUE    (0x6C)
 #define MF_DESFIRE_CMD_READ_RECORDS (0xBB)
 
+// Additional-frame indicator: sent by the PICC as a status byte when more
+// data/processing is pending, and echoed back by the PCD (optionally with a
+// command-specific payload, e.g. the auth token) to request/continue it.
+#define MF_DESFIRE_CMD_ADDITIONAL_FRAME (0xaf)
+
 #define MF_DESFIRE_MAX_KEYS  (14)
 #define MF_DESFIRE_MAX_FILES (32)
 

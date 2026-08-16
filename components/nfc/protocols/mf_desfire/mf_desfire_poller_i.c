@@ -1,7 +1,9 @@
 #include "mf_desfire_poller_i.h"
 
 #include <furi.h>
+#include <furi_hal_random.h>
 #include <bit_lib.h>
+#include <string.h>
 
 #include "mf_desfire_i.h"
 
@@ -64,6 +66,70 @@ MfDesfireError mf_desfire_poller_send_chunks(
     }
 
     return mf_desfire_process_status_code(status_code);
+}
+
+// Single round-trip NXP native-command frame: builds the command per
+// instance->command_mode and returns the status byte + payload of exactly
+// ONE response, mirroring nxp_native_command_iso14443_4a_poller's framing
+// logic (see nxp_native_command.c) but WITHOUT its auto-continuation loop.
+//
+// mf_desfire_poller_send_chunks() cannot be used for the DESFire auth
+// handshake: that loop, on seeing status NXP_NATIVE_COMMAND_STATUS_
+// ADDITIONAL_FRAME (0xaf), automatically resends a bare, payload-less continuation frame
+// before ever returning to the caller. That is correct for chunked reads
+// (GetVersion/ReadData/...), where the continuation genuinely carries no
+// extra payload, but it is protocol-incorrect for authentication: the
+// second auth frame must carry the RndA-derived token as its payload, and
+// injecting that payload into the wrapper's auto-continuation is not
+// possible. This helper performs exactly one transceive so the caller can
+// decide what to send next.
+static Iso14443_4aError mf_desfire_poller_send_raw_frame(
+    MfDesfirePoller* instance,
+    const BitBuffer* input_buffer,
+    BitBuffer* result_buffer,
+    uint8_t* status_code) {
+    BitBuffer* tx_buffer = instance->tx_buffer;
+    BitBuffer* rx_buffer = instance->rx_buffer;
+
+    bit_buffer_reset(tx_buffer);
+    if(instance->command_mode == NxpNativeCommandModePlain) {
+        bit_buffer_append(tx_buffer, input_buffer);
+    } else if(instance->command_mode == NxpNativeCommandModeIsoWrapped) {
+        bit_buffer_append_byte(tx_buffer, NXP_NATIVE_COMMAND_ISO_CLA);
+        bit_buffer_append_byte(tx_buffer, bit_buffer_get_byte(input_buffer, 0));
+        bit_buffer_append_byte(tx_buffer, NXP_NATIVE_COMMAND_ISO_P1);
+        bit_buffer_append_byte(tx_buffer, NXP_NATIVE_COMMAND_ISO_P2);
+        if(bit_buffer_get_size_bytes(input_buffer) > 1) {
+            bit_buffer_append_byte(tx_buffer, bit_buffer_get_size_bytes(input_buffer) - 1);
+            bit_buffer_append_right(tx_buffer, input_buffer, 1);
+        }
+        bit_buffer_append_byte(tx_buffer, NXP_NATIVE_COMMAND_ISO_LE);
+    }
+
+    bit_buffer_reset(rx_buffer);
+    Iso14443_4aError error =
+        iso14443_4a_poller_send_block(instance->iso14443_4a_poller, tx_buffer, rx_buffer);
+    if(error != Iso14443_4aErrorNone) return error;
+
+    size_t response_len = bit_buffer_get_size_bytes(rx_buffer);
+    *status_code = NXP_NATIVE_COMMAND_STATUS_LENGTH_ERROR;
+    bit_buffer_reset(result_buffer);
+    if(instance->command_mode == NxpNativeCommandModePlain && response_len >= sizeof(uint8_t)) {
+        *status_code = bit_buffer_get_byte(rx_buffer, 0);
+        if(response_len > sizeof(uint8_t)) {
+            bit_buffer_copy_right(result_buffer, rx_buffer, sizeof(uint8_t));
+        }
+    } else if(
+        instance->command_mode == NxpNativeCommandModeIsoWrapped &&
+        response_len >= 2 * sizeof(uint8_t) &&
+        bit_buffer_get_byte(rx_buffer, response_len - 2) == NXP_NATIVE_COMMAND_ISO_SW1) {
+        *status_code = bit_buffer_get_byte(rx_buffer, response_len - 1);
+        if(response_len > 2 * sizeof(uint8_t)) {
+            bit_buffer_copy_left(result_buffer, rx_buffer, response_len - 2 * sizeof(uint8_t));
+        }
+    }
+
+    return Iso14443_4aErrorNone;
 }
 
 MfDesfireError mf_desfire_poller_read_version(MfDesfirePoller* instance, MfDesfireVersion* data) {
@@ -631,4 +697,121 @@ MfDesfireError mf_desfire_poller_read_applications(
     }
 
     return error;
+}
+
+MfDesfireError mf_desfire_poller_authenticate(
+    MfDesfirePoller* instance,
+    uint8_t key_no,
+    MfDesfireKeyType key_type,
+    const uint8_t* key) {
+    furi_check(instance);
+    furi_check(key);
+
+    const size_t bs = mf_desfire_challenge_size(key_type);
+
+    // Frame 1: Authenticate(key_no) -> status 0xAF + E(RndB).
+    bit_buffer_reset(instance->input_buffer);
+    bit_buffer_append_byte(instance->input_buffer, mf_desfire_auth_cmd(key_type));
+    bit_buffer_append_byte(instance->input_buffer, key_no);
+
+    uint8_t status_code = NXP_NATIVE_COMMAND_STATUS_OPERATION_OK;
+    Iso14443_4aError io_error = mf_desfire_poller_send_raw_frame(
+        instance, instance->input_buffer, instance->result_buffer, &status_code);
+    if(io_error != Iso14443_4aErrorNone) return mf_desfire_process_error(io_error);
+    if(status_code != NXP_NATIVE_COMMAND_STATUS_ADDITIONAL_FRAME) {
+        // Card answered without requesting the second auth frame: either a
+        // hard error (bad key_no, auth delay, ...) or an unsupported command.
+        return mf_desfire_process_status_code(status_code);
+    }
+    if(bit_buffer_get_size_bytes(instance->result_buffer) < bs) return MfDesfireErrorProtocol;
+    const uint8_t* enc_rndb = bit_buffer_get_data(instance->result_buffer);
+
+    uint8_t rnda[MF_DESFIRE_CRYPTO_BLOCK_MAX];
+    furi_hal_random_fill_buf(rnda, bs);
+    uint8_t token[MF_DESFIRE_CRYPTO_BLOCK_MAX * 2];
+    if(!mf_desfire_auth_begin(&instance->crypto, key_type, key, enc_rndb, rnda, token)) {
+        return MfDesfireErrorProtocol;
+    }
+
+    // Frame 2: 0xAF + token -> status 0x00 + E(RndA'').
+    bit_buffer_reset(instance->input_buffer);
+    bit_buffer_append_byte(instance->input_buffer, MF_DESFIRE_CMD_ADDITIONAL_FRAME);
+    bit_buffer_append_bytes(instance->input_buffer, token, bs * 2);
+
+    status_code = NXP_NATIVE_COMMAND_STATUS_OPERATION_OK;
+    io_error = mf_desfire_poller_send_raw_frame(
+        instance, instance->input_buffer, instance->result_buffer, &status_code);
+    if(io_error != Iso14443_4aErrorNone) return mf_desfire_process_error(io_error);
+    if(status_code != NXP_NATIVE_COMMAND_STATUS_OPERATION_OK) {
+        return mf_desfire_process_status_code(status_code);
+    }
+    if(bit_buffer_get_size_bytes(instance->result_buffer) < bs) return MfDesfireErrorProtocol;
+    const uint8_t* enc_rndap = bit_buffer_get_data(instance->result_buffer);
+
+    if(!mf_desfire_auth_finish(&instance->crypto, key, enc_rndap)) {
+        return MfDesfireErrorAuthentication;
+    }
+    mf_desfire_cmac_init(&instance->crypto);
+
+    return MfDesfireErrorNone;
+}
+
+MfDesfireError mf_desfire_poller_read_file_data_authed(
+    MfDesfirePoller* instance,
+    MfDesfireFileId file_id,
+    MfDesfireFileCommunicationSettings comm,
+    uint32_t offset,
+    uint32_t length,
+    uint8_t* out,
+    uint32_t* out_len) {
+    furi_check(instance);
+    furi_check(out);
+    furi_check(out_len);
+
+    if(comm == MfDesfireFileCommunicationSettingsEnciphered) {
+        // Phase B (enciphered comm) is a separate plan; not implemented here.
+        return MfDesfireErrorProtocol;
+    }
+
+    bit_buffer_reset(instance->input_buffer);
+    bit_buffer_append_byte(instance->input_buffer, MF_DESFIRE_CMD_READ_DATA);
+    bit_buffer_append_byte(instance->input_buffer, file_id);
+    const uint8_t off3[3] = {
+        (uint8_t)(offset & 0xff),
+        (uint8_t)((offset >> 8) & 0xff),
+        (uint8_t)((offset >> 16) & 0xff),
+    };
+    const uint8_t len3[3] = {
+        (uint8_t)(length & 0xff),
+        (uint8_t)((length >> 8) & 0xff),
+        (uint8_t)((length >> 16) & 0xff),
+    };
+    bit_buffer_append_bytes(instance->input_buffer, off3, sizeof(off3));
+    bit_buffer_append_bytes(instance->input_buffer, len3, sizeof(len3));
+
+    // ReadData's continuation is a bare additional-frame request (no payload
+    // beyond the 0xAF status byte itself), which is exactly what
+    // mf_desfire_poller_send_chunks()'s auto-continuation loop implements.
+    // Unlike authenticate(), no per-continuation payload is needed here, so
+    // the ordinary chunked-transport helper is correct (same pattern as
+    // mf_desfire_poller_read_version / the static mf_desfire_poller_read_file).
+    MfDesfireError error =
+        mf_desfire_poller_send_chunks(instance, instance->input_buffer, instance->result_buffer);
+    if(error != MfDesfireErrorNone) return error;
+
+    size_t payload = bit_buffer_get_size_bytes(instance->result_buffer);
+    const uint8_t* data = bit_buffer_get_data(instance->result_buffer);
+
+    // MAC-comm reads append an 8-byte CMAC after the data; Phase A does not
+    // re-verify it here (that lands with the Enciphered/Phase B work), it
+    // just strips the trailing MAC so callers get plain file bytes.
+    if(comm == MfDesfireFileCommunicationSettingsAuthenticated) {
+        if(payload < 8) return MfDesfireErrorProtocol;
+        payload -= 8;
+    }
+    if(payload > length) payload = length;
+
+    memcpy(out, data, payload);
+    *out_len = (uint32_t)payload;
+    return MfDesfireErrorNone;
 }
