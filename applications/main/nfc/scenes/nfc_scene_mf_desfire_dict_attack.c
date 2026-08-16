@@ -5,29 +5,26 @@
 #ifndef PUBLIC_BUILD
 // DESFire dictionary/key-sweep attack scene (Task 9, PRIVATE-only).
 //
-// Runs a single MfDesfire poller session: the poller's own read FSM (Task
-// 1-8 mf_desfire_poller.c) always completes its standard read (version,
-// free memory, master key settings, application ids/applications) before
-// invoking our callback at ReadSuccess/ReadFailed. On that callback we get
-// a live MfDesfirePoller* (event.instance) and run the actual sweep:
-// mf_desfire_attack_sweep() calls our try_auth for every
-// (AID, key_no, dict entry), which selects the AID
+// Runs a single MfDesfire poller session. The scene puts the poller into
+// Attack mode (mf_desfire_poller_set_mode, Task 10b) BEFORE nfc_poller_start,
+// so once the poller's read FSM (mf_desfire_poller.c) completes its standard
+// read (version, free memory, master key settings, application ids/applications)
+// it fires MfDesfirePollerEventTypeRequestAttack *while the iso14443_4a poller
+// is still activated* — RF field up, card selected — and BEFORE the terminating
+// iso14443_4a_poller_halt(). On that event we get a live MfDesfirePoller*
+// (event.instance) and run the actual sweep: mf_desfire_attack_sweep() calls our
+// try_auth for every (AID, key_no, dict entry), which selects the AID
 // (mf_desfire_poller_select_application) then authenticates
 // (mf_desfire_poller_authenticate). For each key found, we re-select +
 // re-authenticate and dump Standard/Backup files via
 // mf_desfire_poller_read_file_data_authed.
 //
-// KNOWN CONCERN (see task-9-report.md): mf_desfire_poller_handler_read_success
-// / _read_fail both call iso14443_4a_poller_halt() (which sends a real HLTA
-// and resets the iso14443_4a/iso14443_3a poller state to Idle) *before*
-// invoking instance->callback. The DESFire poller exposes no pre-halt hook
-// analogous to MfClassic's PollerMode (RequestMode/RequestKey), so every
-// select/authenticate call made from this callback targets an
-// already-halted card. This compiles and runs safely (failed
-// select/authenticate calls just return an error, so try_auth returns
-// false and the sweep continues/completes normally with 0 hits) but is
-// expected to be non-functional against real hardware until the poller
-// gains a live pre-halt hook — flagged for Task 10 review/HW test.
+// FIX (Task 10b): previously the poller called iso14443_4a_poller_halt() (real
+// HLTA + reset to Idle) BEFORE invoking the callback at ReadSuccess/ReadFailed,
+// so every select/authenticate targeted an already-halted card and the sweep
+// always found 0 keys even with the correct key present. The pre-halt Attack
+// hook resolves that: select/authenticate now transceive to a live card.
+// Functional key recovery still needs a real-card HW test.
 
 // DESFire AIDs are 24-bit; mf_desfire_attack_sweep's "aid" parameter is only
 // 16-bit. We repurpose it as an index into a local real-AID table built
@@ -164,7 +161,6 @@ static void nfc_scene_mf_desfire_dict_attack_run(NfcApp* instance, MfDesfirePoll
         if(fk->aid == 0 || fk->aid >= aid_count) continue; // PICC master has no files
         size_t app_idx = fk->aid - 1;
         const MfDesfireApplication* app = simple_array_cget(data->applications, app_idx);
-        if(!app) continue;
 
         if(mf_desfire_poller_select_application(poller, &real_aids[fk->aid]) != MfDesfireErrorNone)
             continue;
@@ -270,10 +266,22 @@ NfcCommand nfc_scene_mf_desfire_dict_attack_worker_callback(NfcGenericEvent even
     NfcApp* instance = context;
     MfDesfirePollerEvent* desfire_event = event.event_data;
 
-    if(desfire_event->type == MfDesfirePollerEventTypeReadSuccess ||
-       desfire_event->type == MfDesfirePollerEventTypeReadFailed) {
+    if(desfire_event->type == MfDesfirePollerEventTypeRequestAttack) {
+        // Pre-halt hook: the iso14443_4a poller is still activated (RF field up,
+        // card selected) and the standard read has populated the model. Running
+        // the sweep HERE means every mf_desfire_poller_select_application /
+        // mf_desfire_poller_authenticate transceives to a LIVE card, so a correct
+        // dictionary key actually authenticates (the pre-halt fix for Task 10b).
         MfDesfirePoller* poller = event.instance;
         nfc_scene_mf_desfire_dict_attack_run(instance, poller);
+        view_dispatcher_send_custom_event(
+            instance->view_dispatcher, NfcCustomEventDesfireAttackComplete);
+    } else if(desfire_event->type == MfDesfirePollerEventTypeReadFailed) {
+        // iso14443_4a-level activation error (card removed / never activated):
+        // there is no live session to attack. Finish the scene WITHOUT touching
+        // the device model (Minor: a failed re-poll must not clobber a
+        // previously-good MfDesfireData).
+        instance->mf_desfire_attack.sweep_complete = true;
         view_dispatcher_send_custom_event(
             instance->view_dispatcher, NfcCustomEventDesfireAttackComplete);
     }
@@ -307,6 +315,12 @@ void nfc_scene_mf_desfire_dict_attack_on_enter(void* context) {
     nfc_blink_read_start(instance);
 
     instance->poller = nfc_poller_alloc(instance->nfc, NfcProtocolMfDesfire);
+    // Enter Attack mode BEFORE starting the session so the poller fires its
+    // pre-halt MfDesfirePollerEventTypeRequestAttack hook (field still up, card
+    // selected) instead of the post-halt ReadSuccess/ReadFailed events. The tail
+    // poller instance exists immediately after nfc_poller_alloc().
+    mf_desfire_poller_set_mode(
+        nfc_poller_get_poller(instance->poller), MfDesfirePollerModeAttack);
     nfc_poller_start(instance->poller, nfc_scene_mf_desfire_dict_attack_worker_callback, instance);
 }
 

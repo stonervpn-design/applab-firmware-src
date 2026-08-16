@@ -21,7 +21,30 @@ typedef struct MfDesfirePoller MfDesfirePoller;
 typedef enum {
     MfDesfirePollerEventTypeReadSuccess, /**< Card was read successfully. */
     MfDesfirePollerEventTypeReadFailed, /**< Poller failed to read card. */
+    MfDesfirePollerEventTypeRequestAttack, /**< PRIVATE: pre-halt attack hook (Attack mode only).
+                                                Emitted while the iso14443_4a poller is still
+                                                activated (RF field up, card selected) and the
+                                                standard read has populated the model, BEFORE any
+                                                iso14443_4a_poller_halt(). The callback may issue
+                                                live select_application/authenticate transceives on
+                                                event.instance, then return a command that lets the
+                                                poller halt and end the session. Never emitted in the
+                                                default Read mode, so Read-mode consumers are
+                                                unaffected. */
 } MfDesfirePollerEventType;
+
+/**
+ * @brief MfDesfire poller operating mode.
+ *
+ * Controls whether the poller runs its plain read-and-halt flow (default) or
+ * additionally fires a pre-halt attack hook. Only the PRIVATE dict-attack scene
+ * selects Attack mode; every other scene leaves the poller in Read mode, which
+ * preserves the original (halt-then-callback) behavior byte-for-byte.
+ */
+typedef enum {
+    MfDesfirePollerModeRead, /**< Default: standard read, halt then ReadSuccess/ReadFailed. */
+    MfDesfirePollerModeAttack, /**< PRIVATE: emit MfDesfirePollerEventTypeRequestAttack pre-halt. */
+} MfDesfirePollerMode;
 
 /**
  * @brief MfDesfire poller event data.
@@ -49,6 +72,18 @@ typedef struct {
 void mf_desfire_poller_set_command_mode(
     MfDesfirePoller* instance,
     NxpNativeCommandMode command_mode);
+
+/**
+ * @brief Select the poller operating mode (PRIVATE dict-attack support).
+ *
+ * Must be called before the poller session starts (i.e. before nfc_poller_start),
+ * while the poller state is Idle. Defaults to MfDesfirePollerModeRead, so scenes
+ * that never call this keep the original read behavior unchanged.
+ *
+ * @param[in, out] instance pointer to the instance to affect.
+ * @param[in] mode operating mode to use for this session.
+ */
+void mf_desfire_poller_set_mode(MfDesfirePoller* instance, MfDesfirePollerMode mode);
 
 /**
  * @brief Transmit and receive MfDesfire chunks in poller mode.

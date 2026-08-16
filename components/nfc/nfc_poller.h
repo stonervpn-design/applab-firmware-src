@@ -136,6 +136,20 @@ NfcProtocol nfc_poller_get_protocol(const NfcPoller* instance);
  */
 const NfcDeviceData* nfc_poller_get_data(const NfcPoller* instance);
 
+/**
+ * @brief Get the protocol-specific (tail) poller instance backing this NfcPoller.
+ *
+ * Returns the same instance that is later delivered as `event.instance` inside
+ * the poller callback, but obtained up front (e.g. right after nfc_poller_alloc)
+ * so a scene can configure the protocol poller before nfc_poller_start. Cast the
+ * result to the concrete poller type for the protocol this NfcPoller was created
+ * with (e.g. MfDesfirePoller* for NfcProtocolMfDesfire).
+ *
+ * @param[in] instance pointer to the instance to be queried.
+ * @returns pointer to the protocol-specific poller instance.
+ */
+NfcGenericInstance* nfc_poller_get_poller(const NfcPoller* instance);
+
 #ifdef __cplusplus
 }
 #endif

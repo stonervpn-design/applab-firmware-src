@@ -284,3 +284,9 @@ const NfcDeviceData* nfc_poller_get_data(const NfcPoller* instance) {
     NfcPollerListElement* tail_poller = instance->list.tail;
     return tail_poller->poller_api->get_data(tail_poller->poller);
 }
+
+NfcGenericInstance* nfc_poller_get_poller(const NfcPoller* instance) {
+    furi_check(instance);
+
+    return instance->list.tail->poller;
+}

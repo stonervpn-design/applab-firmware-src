@@ -17,9 +17,17 @@ const MfDesfireData* mf_desfire_poller_get_data(MfDesfirePoller* instance) {
     return instance->data;
 }
 
+void mf_desfire_poller_set_mode(MfDesfirePoller* instance, MfDesfirePollerMode mode) {
+    furi_check(instance);
+    // Intentionally does NOT check instance->state: this is called by the scene
+    // right after nfc_poller_alloc(), before the FSM's first run sets the state.
+    instance->mode = mode;
+}
+
 static MfDesfirePoller* mf_desfire_poller_alloc(Iso14443_4aPoller* iso14443_4a_poller) {
     MfDesfirePoller* instance = malloc(sizeof(MfDesfirePoller));
     instance->iso14443_4a_poller = iso14443_4a_poller;
+    instance->mode = MfDesfirePollerModeRead;
     instance->data = mf_desfire_alloc();
     instance->tx_buffer = bit_buffer_alloc(MF_DESFIRE_BUF_SIZE);
     instance->rx_buffer = bit_buffer_alloc(MF_DESFIRE_BUF_SIZE);
@@ -173,18 +181,40 @@ static NfcCommand mf_desfire_poller_handler_read_applications(MfDesfirePoller* i
 
 static NfcCommand mf_desfire_poller_handler_read_fail(MfDesfirePoller* instance) {
     FURI_LOG_D(TAG, "Read Failed");
-    iso14443_4a_poller_halt(instance->iso14443_4a_poller);
-    instance->mf_desfire_event.data->error = instance->error;
-    NfcCommand command = instance->callback(instance->general_event, instance->context);
+    NfcCommand command;
+    if(instance->mode == MfDesfirePollerModeAttack) {
+        // PRIVATE Attack mode: fire the pre-halt hook while the iso14443_4a
+        // poller is still activated (field up, card selected) so the callback
+        // can transceive select/authenticate to a live card, THEN halt.
+        instance->mf_desfire_event.type = MfDesfirePollerEventTypeRequestAttack;
+        command = instance->callback(instance->general_event, instance->context);
+        iso14443_4a_poller_halt(instance->iso14443_4a_poller);
+    } else {
+        // Read mode: unchanged original behavior (halt, then callback).
+        iso14443_4a_poller_halt(instance->iso14443_4a_poller);
+        instance->mf_desfire_event.data->error = instance->error;
+        command = instance->callback(instance->general_event, instance->context);
+    }
     instance->state = MfDesfirePollerStateIdle;
     return command;
 }
 
 static NfcCommand mf_desfire_poller_handler_read_success(MfDesfirePoller* instance) {
     FURI_LOG_D(TAG, "Read success.");
-    iso14443_4a_poller_halt(instance->iso14443_4a_poller);
-    instance->mf_desfire_event.type = MfDesfirePollerEventTypeReadSuccess;
-    NfcCommand command = instance->callback(instance->general_event, instance->context);
+    NfcCommand command;
+    if(instance->mode == MfDesfirePollerModeAttack) {
+        // PRIVATE Attack mode: fire the pre-halt hook while the iso14443_4a
+        // poller is still activated (field up, card selected) and the standard
+        // read (version/app ids/applications) has populated the model, THEN halt.
+        instance->mf_desfire_event.type = MfDesfirePollerEventTypeRequestAttack;
+        command = instance->callback(instance->general_event, instance->context);
+        iso14443_4a_poller_halt(instance->iso14443_4a_poller);
+    } else {
+        // Read mode: unchanged original behavior (halt, then callback).
+        iso14443_4a_poller_halt(instance->iso14443_4a_poller);
+        instance->mf_desfire_event.type = MfDesfirePollerEventTypeReadSuccess;
+        command = instance->callback(instance->general_event, instance->context);
+    }
     return command;
 }
 
