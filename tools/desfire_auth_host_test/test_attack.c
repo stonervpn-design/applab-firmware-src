@@ -1,5 +1,6 @@
 // tools/desfire_auth_host_test/test_attack.c
 #include "mf_desfire_attack.h"
+#include "mf_desfire_audit.h"
 #include <string.h>
 #include <stdio.h>
 extern int g_fail;
@@ -104,4 +105,24 @@ void test_attack_dict_builtin(void) {
     }
     TCHECK(saw_des && saw_2k3des && saw_3k3des && saw_aes,
         "builtin dict covers all four key types");
+}
+
+// Read nibble = bits[15:12] of the 16-bit access-rights word (matches
+// mf_desfire_render.c's `access_rights[i] >> 12 & 0xF` for Read).
+void test_audit_is_free_read(void) {
+    TCHECK(mf_desfire_audit_is_free_read(0xEEEE) == true,
+        "0xEEEE: read nibble 0xE -> free read");
+    TCHECK(mf_desfire_audit_is_free_read(0x0000) == false,
+        "0x0000: read nibble 0x0 -> not free read");
+    // Read nibble is 0x0 even though a DIFFERENT nibble (ReadWrite, bits
+    // [7:4]) is 0xE — proves the predicate reads the correct nibble
+    // position, not just "is any nibble 0xE".
+    TCHECK(mf_desfire_audit_is_free_read(0x0EE0) == false,
+        "0x0EE0: read nibble 0x0 (0xE sits in ReadWrite/Change, not Read) -> not free read");
+    // Read nibble 0xF ("never") must not be mistaken for 0xE ("free").
+    TCHECK(mf_desfire_audit_is_free_read(0xF000) == false,
+        "0xF000: read nibble 0xF (never) -> not free read");
+    // Only the Read nibble set to 0xE, rest deny-all -- still free read.
+    TCHECK(mf_desfire_audit_is_free_read(0xEFFF) == true,
+        "0xEFFF: read nibble 0xE, rest 0xF (never) -> still free read");
 }

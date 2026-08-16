@@ -4,7 +4,7 @@ CRYPTO  := ../../components/nfc/protocols/mf_desfire
 HELPERS := ../../applications/main/nfc/helpers
 CFLAGS  := -std=c11 -Wall -Wextra -Werror -g -I$(CRYPTO) -I$(HELPERS) -DDESFIRE_HOST_TEST
 LDLIBS  := -lmbedcrypto
-SRC     := test_main.c test_attack.c virtual_card.c $(CRYPTO)/mf_desfire_crypto.c $(HELPERS)/mf_desfire_attack.c
+SRC     := test_main.c test_attack.c virtual_card.c $(CRYPTO)/mf_desfire_crypto.c $(HELPERS)/mf_desfire_attack.c $(HELPERS)/mf_desfire_audit.c
 BIN     := desfire_test
 
 test: $(BIN)
