@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define DISPLAY_BATTERY_BAR              0
 #define DISPLAY_BATTERY_PERCENT          1
@@ -41,6 +42,14 @@ typedef struct {
     char name_or_path[128];
 } FavoriteApp;
 
+// Anti-theft: consecutive wrong-PIN counter + wipe threshold. Persisted in
+// this flash-backed saved-struct (NOT furi_hal_rtc) because on this ESP32
+// port furi_hal_rtc's pin_fails/pin_value are plain in-RAM emulation state
+// (components/furi_hal/furi_hal_rtc.c) that resets on every reboot, let
+// alone a battery pull. DesktopSettings is loaded/saved via saved_struct on
+// internal flash (/int/.desktop.settings) and survives full power-off.
+#define SECURITY_WIPE_DEFAULT_FAILS_BEFORE_WIPE (10)
+
 typedef struct {
     uint32_t auto_lock_delay_ms;
     uint8_t usb_inhibit_auto_lock;
@@ -49,6 +58,9 @@ typedef struct {
     uint8_t display_clock;
     FavoriteApp favorite_apps[FavoriteAppNumber];
     FavoriteApp dummy_apps[DummyAppNumber];
+    uint8_t pin_fail_count;
+    uint8_t pin_fails_before_wipe;
+    bool wipe_enabled;
 } DesktopSettings;
 
 void desktop_settings_load(DesktopSettings* settings);

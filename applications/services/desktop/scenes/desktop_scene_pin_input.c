@@ -11,6 +11,8 @@
 #include "../views/desktop_events.h"
 #include "../views/desktop_view_pin_input.h"
 #include "../helpers/pin_code.h"
+#include "../helpers/security_wipe.h"
+#include "../desktop_settings.h"
 #include "desktop_scene.h"
 
 #define WRONG_PIN_HEADER_TIMEOUT 3000
@@ -58,6 +60,17 @@ static void desktop_scene_pin_input_done_callback(const DesktopPinCode* pin_code
     } else {
         uint32_t pin_fails = furi_hal_rtc_get_pin_fails();
         furi_hal_rtc_set_pin_fails(pin_fails + 1);
+
+        // Anti-theft: persisted consecutive-wrong-PIN counter. furi_hal_rtc's
+        // pin_fails (above) is in-RAM emulation on this ESP32 port
+        // (components/furi_hal/furi_hal_rtc.c) and does not survive reboot
+        // or a battery pull, so the wipe trigger uses this DesktopSettings
+        // field instead, which is saved to internal flash.
+        if(desktop->settings.pin_fail_count < 0xFF) {
+            desktop->settings.pin_fail_count++;
+        }
+        desktop_settings_save(&desktop->settings);
+
         view_dispatcher_send_custom_event(
             desktop->view_dispatcher, DesktopPinInputEventUnlockFailed);
     }
@@ -118,6 +131,32 @@ bool desktop_scene_pin_input_on_event(void* context, SceneManagerEvent event) {
     if(event.type == SceneManagerEventTypeCustom) {
         switch(event.event) {
         case DesktopPinInputEventUnlockFailed:
+            // Anti-theft threshold: wipe takes priority over the normal
+            // wrong-pin / escalating-lockout UI below. Guarded on both
+            // wipe_enabled and a PIN actually being set (defense-in-depth;
+            // this scene is only reachable when desktop_pin_code_is_set()
+            // is true, see desktop_scene_locked.c).
+            if(desktop->settings.wipe_enabled && desktop_pin_code_is_set() &&
+               desktop->settings.pin_fail_count >= desktop->settings.pin_fails_before_wipe) {
+                security_wipe_user_data();
+
+                desktop->settings.pin_fail_count = 0;
+                desktop_settings_save(&desktop->settings);
+                furi_hal_rtc_set_pin_fails(0);
+
+                desktop_scene_locked_light_red(false);
+                desktop_view_pin_input_set_label_primary(desktop->pin_input_view, 0, 0, NULL);
+                desktop_view_pin_input_set_label_secondary(
+                    desktop->pin_input_view, 12, 25, "SD DATA WIPED");
+                desktop_view_pin_input_set_label_tertiary(
+                    desktop->pin_input_view, 64, 60, "Enter PIN:");
+                desktop_view_pin_input_reset_pin(desktop->pin_input_view);
+                desktop_pin_lock_error_notify();
+
+                consumed = true;
+                break;
+            }
+
             pin_timeout = desktop_pin_lock_get_fail_timeout();
             if(pin_timeout > 0) {
                 desktop_pin_lock_error_notify();

@@ -7,7 +7,8 @@
 #define TAG "DesktopSettings"
 
 #define DESKTOP_SETTINGS_VER_14 (14)
-#define DESKTOP_SETTINGS_VER    (17)
+#define DESKTOP_SETTINGS_VER_17 (17)
+#define DESKTOP_SETTINGS_VER    (18)
 
 #define DESKTOP_SETTINGS_PATH  INT_PATH(DESKTOP_SETTINGS_FILE_NAME)
 #define DESKTOP_SETTINGS_MAGIC (0x17)
@@ -20,6 +21,20 @@ typedef struct {
     FavoriteApp favorite_apps[FavoriteAppNumber];
     FavoriteApp dummy_apps[DummyAppNumber];
 } DesktopSettingsV14;
+
+// DesktopSettings as it existed at version 17, i.e. before Task 2 added the
+// anti-theft wipe fields (pin_fail_count / pin_fails_before_wipe /
+// wipe_enabled). Needed so pre-existing v17 settings files on already-flashed
+// devices still load instead of being discarded.
+typedef struct {
+    uint32_t auto_lock_delay_ms;
+    uint8_t usb_inhibit_auto_lock;
+    uint8_t displayBatteryPercentage;
+    uint8_t dummy_mode;
+    uint8_t display_clock;
+    FavoriteApp favorite_apps[FavoriteAppNumber];
+    FavoriteApp dummy_apps[DummyAppNumber];
+} DesktopSettingsV17;
 
 // Actual size of DesktopSettings v13
 //static_assert(sizeof(DesktopSettingsV13) == 1234);
@@ -40,6 +55,37 @@ void desktop_settings_load(DesktopSettings* settings) {
                 sizeof(DesktopSettings),
                 DESKTOP_SETTINGS_MAGIC,
                 DESKTOP_SETTINGS_VER);
+
+        } else if(version == DESKTOP_SETTINGS_VER_17) {
+            DesktopSettingsV17* settings_v17 = malloc(sizeof(DesktopSettingsV17));
+
+            success = saved_struct_load(
+                DESKTOP_SETTINGS_PATH,
+                settings_v17,
+                sizeof(DesktopSettingsV17),
+                DESKTOP_SETTINGS_MAGIC,
+                DESKTOP_SETTINGS_VER_17);
+
+            if(success) {
+                settings->auto_lock_delay_ms = settings_v17->auto_lock_delay_ms;
+                settings->usb_inhibit_auto_lock = settings_v17->usb_inhibit_auto_lock;
+                settings->displayBatteryPercentage = settings_v17->displayBatteryPercentage;
+                settings->dummy_mode = settings_v17->dummy_mode;
+                settings->display_clock = settings_v17->display_clock;
+                memcpy(
+                    settings->favorite_apps,
+                    settings_v17->favorite_apps,
+                    sizeof(settings->favorite_apps));
+                memcpy(
+                    settings->dummy_apps, settings_v17->dummy_apps, sizeof(settings->dummy_apps));
+                // New in v18: anti-theft wipe fields. Default them since v17
+                // files predate this feature.
+                settings->pin_fail_count = 0;
+                settings->pin_fails_before_wipe = SECURITY_WIPE_DEFAULT_FAILS_BEFORE_WIPE;
+                settings->wipe_enabled = true;
+            }
+
+            free(settings_v17);
 
         } else if(version == DESKTOP_SETTINGS_VER_14) {
             DesktopSettingsV14* settings_v14 = malloc(sizeof(DesktopSettingsV14));
@@ -63,6 +109,11 @@ void desktop_settings_load(DesktopSettings* settings) {
                     sizeof(settings->favorite_apps));
                 memcpy(
                     settings->dummy_apps, settings_v14->dummy_apps, sizeof(settings->dummy_apps));
+                // New in v18: anti-theft wipe fields. Default them since v14
+                // files predate this feature.
+                settings->pin_fail_count = 0;
+                settings->pin_fails_before_wipe = SECURITY_WIPE_DEFAULT_FAILS_BEFORE_WIPE;
+                settings->wipe_enabled = true;
             }
 
             free(settings_v14);
@@ -76,6 +127,11 @@ void desktop_settings_load(DesktopSettings* settings) {
         // Default the status-bar battery to the numeric percent inside the icon (100/60/..)
         // rather than the plain fill bar. Changeable in Settings > Desktop > Battery view.
         settings->displayBatteryPercentage = DISPLAY_BATTERY_PERCENT;
+        // Anti-theft defaults for a fresh settings file: wipe armed at 10
+        // consecutive wrong PINs.
+        settings->pin_fail_count = 0;
+        settings->pin_fails_before_wipe = SECURITY_WIPE_DEFAULT_FAILS_BEFORE_WIPE;
+        settings->wipe_enabled = true;
         desktop_settings_save(settings);
     }
 }

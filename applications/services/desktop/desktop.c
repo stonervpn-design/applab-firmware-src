@@ -535,6 +535,15 @@ static void desktop_init_settings(Desktop* desktop) {
 static Desktop* desktop_alloc(void) {
     Desktop* desktop = malloc(sizeof(Desktop));
 
+    // Zero settings up front: desktop_init_settings() only loads/defaults
+    // this struct when the SD card is ready (see below), so without that,
+    // desktop->settings would otherwise be uninitialized malloc() garbage.
+    // That garbage would include wipe_enabled/pin_fails_before_wipe, and a
+    // garbage-true/garbage-low value there could arm an unintended SD wipe.
+    // Zeroing gives a fail-safe state (wipe_enabled=false) until real
+    // settings (with sane wipe defaults) are loaded from flash.
+    memset(&desktop->settings, 0, sizeof(desktop->settings));
+
     desktop->animation_semaphore = furi_semaphore_alloc(1, 0);
     desktop->animation_manager = animation_manager_alloc();
     desktop->gui = furi_record_open(RECORD_GUI);
@@ -744,6 +753,13 @@ void desktop_unlock(Desktop* desktop) {
     desktop_auto_lock_arm(desktop);
     furi_hal_rtc_reset_flag(FuriHalRtcFlagLock);
     furi_hal_rtc_set_pin_fails(0);
+
+    // Anti-theft: a correct unlock (via any path -- PIN input, NFC, or the
+    // Global API) resets the persisted consecutive-wrong-PIN counter.
+    if(desktop->settings.pin_fail_count != 0) {
+        desktop->settings.pin_fail_count = 0;
+        desktop_settings_save(&desktop->settings);
+    }
 
     if(desktop_pin_code_is_set()) {
         CliVcp* cli_vcp = furi_record_open(RECORD_CLI_VCP);
