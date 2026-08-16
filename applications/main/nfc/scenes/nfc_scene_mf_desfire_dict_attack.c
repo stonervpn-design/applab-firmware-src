@@ -336,6 +336,13 @@ bool nfc_scene_mf_desfire_dict_attack_on_event(void* context, SceneManagerEvent 
             nfc_scene_mf_desfire_dict_attack_update_view(instance);
             if(instance->mf_desfire_attack.found_count > 0) {
                 notification_message(instance->notifications, &sequence_success);
+                // Award XP: same deed nfc_scene_mf_classic_dict_attack.c uses on a
+                // successful dictionary key recovery (dolphin_deed() is the global
+                // helper in dolphin.h; it opens/closes RECORD_DOLPHIN internally,
+                // so no record handle to manage here). Emitted from the GUI/scene
+                // thread (on_event), not the poller worker callback, matching the
+                // existing pattern.
+                dolphin_deed(DolphinDeedNfcReadSuccess);
             } else {
                 notification_message(instance->notifications, &sequence_semi_success);
             }
