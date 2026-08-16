@@ -5,6 +5,8 @@
 // file unchanged, driven entirely through the injected try_auth callback).
 #include "mf_desfire_attack.h"
 
+#ifndef PUBLIC_BUILD
+
 static const uint8_t k_key_des[8]      = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 static const uint8_t k_key_2k3des[16]  = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -76,3 +78,5 @@ size_t mf_desfire_attack_sweep(
 
     return found < out_max ? found : out_max;
 }
+
+#endif /* !PUBLIC_BUILD — DESFire dict-attack engine is PRIVATE-only */

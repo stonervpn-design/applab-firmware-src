@@ -10,6 +10,9 @@
 // try_auth) and on firmware (Task 8 supplies a real try_auth that calls
 // mf_desfire_poller_authenticate + re-selects the AID).
 #pragma once
+
+#ifndef PUBLIC_BUILD
+
 #include "mf_desfire_crypto.h"
 
 // Attempts a single authentication against the target card/mock.
@@ -55,3 +58,5 @@ size_t mf_desfire_attack_sweep(
     uint8_t keys_per_app, const MfDesfireDictEntry* dict, size_t dict_count,
     MfDesfireFoundKey* out, size_t out_max, void (*progress)(void* p, size_t done, size_t total),
     void* progress_ctx);
+
+#endif /* !PUBLIC_BUILD — DESFire dict-attack engine is PRIVATE-only */

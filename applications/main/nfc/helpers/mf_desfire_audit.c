@@ -1,6 +1,8 @@
 // mf_desfire_audit.c
 #include "mf_desfire_audit.h"
 
+#ifndef PUBLIC_BUILD
+
 bool mf_desfire_audit_is_free_read(MfDesfireFileAccessRights ar) {
     // Read = bits[15:12], ReadWrite = bits[7:4]; 0xE = free (no key
     // needed) on either nibble grants unauthenticated read, matching
@@ -84,3 +86,5 @@ void mf_desfire_audit_key_settings(
 }
 
 #endif // DESFIRE_HOST_TEST
+
+#endif /* !PUBLIC_BUILD — DESFire config-weakness audit is PRIVATE-only */

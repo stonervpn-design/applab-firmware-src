@@ -15,6 +15,8 @@
 // includes) are compiled out of the host build.
 #pragma once
 
+#ifndef PUBLIC_BUILD
+
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -75,3 +77,5 @@ void mf_desfire_audit_key_settings(
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* !PUBLIC_BUILD — DESFire config-weakness audit is PRIVATE-only */
