@@ -45,3 +45,10 @@ bool mf_desfire_auth_begin(
     const uint8_t* enc_rndb, const uint8_t* rnda, uint8_t* out_token);
 bool mf_desfire_auth_finish(
     MfDesfireCryptoCtx* ctx, const uint8_t* key, const uint8_t* enc_rndap);
+
+// CMAC (RFC 4493 subkey generation + CBC-MAC), used to integrity-check
+// MAC-comm file reads after a successful authenticate. Keys off
+// ctx->block_size (the TRUE cipher block: 8 for DES/2K3DES/3K3DES, 16 for
+// AES) for the Rb constant, block iteration/padding, and subkey length.
+void mf_desfire_cmac_init(MfDesfireCryptoCtx* ctx);
+void mf_desfire_cmac(MfDesfireCryptoCtx* ctx, const uint8_t* data, size_t len, uint8_t* mac8);

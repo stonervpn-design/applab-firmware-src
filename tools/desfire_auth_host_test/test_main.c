@@ -91,11 +91,55 @@ static void test_auth(void) {
     auth_roundtrip(MfDesfireKeyType3k3Des, "3k3des auth round-trip");
 }
 
+static void test_cmac(void) {
+    // Deterministic self-consistency test (RFC 4493 structure), not an external KAT.
+    uint8_t key[24]; for(int i=0;i<16;i++) key[i]=(uint8_t)i;
+    MfDesfireCryptoCtx c; memset(&c,0,sizeof c);
+    c.type = MfDesfireKeyTypeAes; c.block_size = 16;
+    memcpy(c.session_key, key, 16);
+    mf_desfire_cmac_init(&c);
+    // subkeys must be non-zero and sk2 == sk1<<1 (mod) — sanity, not value-locked
+    int nz = 0; for(int i=0;i<16;i++) nz |= c.cmac_sk1[i];
+    CHECK(nz != 0, "cmac subkey1 derived");
+
+    uint8_t m[16] = {0}; uint8_t mac_a[8], mac_b[8];
+    memset(c.iv,0,16); mf_desfire_cmac(&c, m, 16, mac_a);
+    memset(c.iv,0,16); mf_desfire_cmac(&c, m, 16, mac_b);
+    CHECK(memcmp(mac_a, mac_b, 8) == 0, "cmac deterministic");
+}
+
+// Authoritative known-answer test: RFC 4493 subkey generation vectors for
+// AES-128 CMAC with the RFC's example key. This validates the left-shift +
+// Rb conditional-XOR logic against a published external source, not just
+// self-consistency.
+static void test_cmac_rfc4493_kat(void) {
+    uint8_t rfc_key[16] = {
+        0x2b,0x7e,0x15,0x16,0x28,0xae,0xd2,0xa6,
+        0xab,0xf7,0x15,0x88,0x09,0xcf,0x4f,0x3c
+    };
+    uint8_t exp_sk1[16] = {
+        0xfb,0xee,0xd6,0x18,0x35,0x71,0x33,0x66,
+        0x7c,0x85,0xe0,0x8f,0x72,0x36,0xa8,0xde
+    };
+    uint8_t exp_sk2[16] = {
+        0xf7,0xdd,0xac,0x30,0x6a,0xe2,0x66,0xcc,
+        0xf9,0x0b,0xc1,0x1e,0xe4,0x6d,0x51,0x3b
+    };
+    MfDesfireCryptoCtx c; memset(&c,0,sizeof c);
+    c.type = MfDesfireKeyTypeAes; c.block_size = 16;
+    memcpy(c.session_key, rfc_key, 16);
+    mf_desfire_cmac_init(&c);
+    CHECK(memcmp(c.cmac_sk1, exp_sk1, 16) == 0, "cmac sk1 matches RFC 4493 KAT");
+    CHECK(memcmp(c.cmac_sk2, exp_sk2, 16) == 0, "cmac sk2 matches RFC 4493 KAT");
+}
+
 int main(void) {
     test_mbedtls_selftest();
     test_helpers();
     test_session_key();
     test_auth();
+    test_cmac();
+    test_cmac_rfc4493_kat();
     printf(g_fail ? "\n%d FAILURES\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }

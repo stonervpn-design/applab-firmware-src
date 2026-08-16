@@ -179,3 +179,54 @@ bool mf_desfire_auth_finish(
     ctx->authenticated = true;
     return true;
 }
+
+// RFC 4493 left-shift-by-1 over n bytes (big-endian bit order), with carry
+// propagated MSB-first across the whole buffer.
+static void lshift1(const uint8_t* in, uint8_t* out, size_t n) {
+    uint8_t carry = 0;
+    for(size_t i = n; i-- > 0;) { out[i] = (uint8_t)((in[i] << 1) | carry); carry = in[i] >> 7; }
+}
+
+// RFC 4493 subkey generation (generalized to an 8-byte block for the DES
+// family): K1 = (0^n encrypted under session_key) << 1, XOR Rb if MSB was
+// set; K2 = K1 << 1, XOR Rb if K1's MSB was set. Rb = 0x87 for a 16-byte
+// (AES) block, 0x1b for an 8-byte (DES/2K3DES/3K3DES) block. Uses
+// ctx->block_size (the TRUE cipher block), never challenge_size.
+void mf_desfire_cmac_init(MfDesfireCryptoCtx* c) {
+    size_t bs = c->block_size;
+    uint8_t z[16] = {0}, l[16], iv[16] = {0};
+    mf_desfire_cbc_encrypt(c->type, c->session_key, iv, z, l, bs);
+    uint8_t rb = (bs == 16) ? 0x87 : 0x1b;
+    lshift1(l, c->cmac_sk1, bs);
+    if(l[0] & 0x80) c->cmac_sk1[bs - 1] ^= rb;
+    lshift1(c->cmac_sk1, c->cmac_sk2, bs);
+    if(c->cmac_sk1[0] & 0x80) c->cmac_sk2[bs - 1] ^= rb;
+}
+
+// Full CMAC over `data`, chaining from ctx->iv (DESFire keeps CMAC state as
+// the comm IV across successive MAC-comm reads). XORs the final block with
+// cmac_sk1 if block-aligned, else pads with 0x80 00.. and uses cmac_sk2.
+// Returns the leading 8 bytes of the final block as the truncated MAC, and
+// updates ctx->iv to that final CBC block.
+void mf_desfire_cmac(MfDesfireCryptoCtx* c, const uint8_t* data, size_t len, uint8_t* mac8) {
+    size_t bs = c->block_size;
+    uint8_t block[16], mac[16];
+    memcpy(mac, c->iv, bs);
+    size_t full = (len == 0) ? 0 : (len - 1) / bs; // number of complete non-final blocks
+    size_t off = 0;
+    for(size_t i = 0; i < full; i++) {
+        for(size_t j=0;j<bs;j++) block[j] = data[off+j] ^ mac[j];
+        uint8_t iv0[16] = {0};
+        mf_desfire_cbc_encrypt(c->type, c->session_key, iv0, block, mac, bs);
+        off += bs;
+    }
+    size_t rem = len - off;
+    uint8_t last[16] = {0};
+    if(rem == bs) { memcpy(last, data + off, bs); for(size_t j=0;j<bs;j++) last[j]^=c->cmac_sk1[j]; }
+    else { memcpy(last, data + off, rem); last[rem] = 0x80; for(size_t j=0;j<bs;j++) last[j]^=c->cmac_sk2[j]; }
+    for(size_t j=0;j<bs;j++) block[j] = last[j] ^ mac[j];
+    uint8_t iv0[16] = {0};
+    mf_desfire_cbc_encrypt(c->type, c->session_key, iv0, block, mac, bs);
+    memcpy(c->iv, mac, bs);
+    memcpy(mac8, mac, 8);
+}
