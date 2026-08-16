@@ -9,7 +9,8 @@
 #define DESKTOP_SETTINGS_VER_14 (14)
 #define DESKTOP_SETTINGS_VER_17 (17)
 #define DESKTOP_SETTINGS_VER_18 (18)
-#define DESKTOP_SETTINGS_VER    (19)
+#define DESKTOP_SETTINGS_VER_19 (19)
+#define DESKTOP_SETTINGS_VER    (20)
 
 #define DESKTOP_SETTINGS_PATH  INT_PATH(DESKTOP_SETTINGS_FILE_NAME)
 #define DESKTOP_SETTINGS_MAGIC (0x17)
@@ -54,6 +55,24 @@ typedef struct {
     bool wipe_enabled;
 } DesktopSettingsV18;
 
+// DesktopSettings as it existed at version 19, i.e. after Task 3 added
+// lock_on_boot but before Task 1 (asset packs) added asset_pack. Needed so
+// pre-existing v19 settings files on already-flashed devices still load
+// instead of being discarded.
+typedef struct {
+    uint32_t auto_lock_delay_ms;
+    uint8_t usb_inhibit_auto_lock;
+    uint8_t displayBatteryPercentage;
+    uint8_t dummy_mode;
+    uint8_t display_clock;
+    FavoriteApp favorite_apps[FavoriteAppNumber];
+    FavoriteApp dummy_apps[DummyAppNumber];
+    uint8_t pin_fail_count;
+    uint8_t pin_fails_before_wipe;
+    bool wipe_enabled;
+    bool lock_on_boot;
+} DesktopSettingsV19;
+
 // Actual size of DesktopSettings v13
 //static_assert(sizeof(DesktopSettingsV13) == 1234);
 
@@ -73,6 +92,39 @@ void desktop_settings_load(DesktopSettings* settings) {
                 sizeof(DesktopSettings),
                 DESKTOP_SETTINGS_MAGIC,
                 DESKTOP_SETTINGS_VER);
+
+        } else if(version == DESKTOP_SETTINGS_VER_19) {
+            DesktopSettingsV19* settings_v19 = malloc(sizeof(DesktopSettingsV19));
+
+            success = saved_struct_load(
+                DESKTOP_SETTINGS_PATH,
+                settings_v19,
+                sizeof(DesktopSettingsV19),
+                DESKTOP_SETTINGS_MAGIC,
+                DESKTOP_SETTINGS_VER_19);
+
+            if(success) {
+                settings->auto_lock_delay_ms = settings_v19->auto_lock_delay_ms;
+                settings->usb_inhibit_auto_lock = settings_v19->usb_inhibit_auto_lock;
+                settings->displayBatteryPercentage = settings_v19->displayBatteryPercentage;
+                settings->dummy_mode = settings_v19->dummy_mode;
+                settings->display_clock = settings_v19->display_clock;
+                memcpy(
+                    settings->favorite_apps,
+                    settings_v19->favorite_apps,
+                    sizeof(settings->favorite_apps));
+                memcpy(
+                    settings->dummy_apps, settings_v19->dummy_apps, sizeof(settings->dummy_apps));
+                settings->pin_fail_count = settings_v19->pin_fail_count;
+                settings->pin_fails_before_wipe = settings_v19->pin_fails_before_wipe;
+                settings->wipe_enabled = settings_v19->wipe_enabled;
+                settings->lock_on_boot = settings_v19->lock_on_boot;
+                // New in v20: selected Asset Pack. Default to "" (built-in
+                // animation set) since v19 files predate this feature.
+                settings->asset_pack[0] = '\0';
+            }
+
+            free(settings_v19);
 
         } else if(version == DESKTOP_SETTINGS_VER_18) {
             DesktopSettingsV18* settings_v18 = malloc(sizeof(DesktopSettingsV18));
@@ -104,6 +156,9 @@ void desktop_settings_load(DesktopSettings* settings) {
                 // that already had a PIN set keep locking on boot (matches
                 // the pre-Task-3 unconditional behavior).
                 settings->lock_on_boot = true;
+                // New in v20: selected Asset Pack. Default to "" (built-in
+                // animation set) since v18 files predate this feature.
+                settings->asset_pack[0] = '\0';
             }
 
             free(settings_v18);
@@ -138,6 +193,9 @@ void desktop_settings_load(DesktopSettings* settings) {
                 // New in v19: lock-on-boot. Default it since v17 files
                 // predate this feature.
                 settings->lock_on_boot = true;
+                // New in v20: selected Asset Pack. Default to "" (built-in
+                // animation set) since v17 files predate this feature.
+                settings->asset_pack[0] = '\0';
             }
 
             free(settings_v17);
@@ -172,6 +230,9 @@ void desktop_settings_load(DesktopSettings* settings) {
                 // New in v19: lock-on-boot. Default it since v14 files
                 // predate this feature.
                 settings->lock_on_boot = true;
+                // New in v20: selected Asset Pack. Default to "" (built-in
+                // animation set) since v14 files predate this feature.
+                settings->asset_pack[0] = '\0';
             }
 
             free(settings_v14);

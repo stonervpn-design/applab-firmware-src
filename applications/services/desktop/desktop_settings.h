@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "helpers/asset_pack.h"
+
 #define DISPLAY_BATTERY_BAR              0
 #define DISPLAY_BATTERY_PERCENT          1
 #define DISPLAY_BATTERY_INVERTED_PERCENT 2
@@ -62,6 +64,9 @@ typedef struct {
     uint8_t pin_fails_before_wipe;
     bool wipe_enabled;
     bool lock_on_boot;
+    // Selected Asset Pack name, or "" for the built-in animation set.
+    // Resolved to an Anims directory via asset_pack_anims_dir().
+    char asset_pack[ASSET_PACK_NAME_LEN];
 } DesktopSettings;
 
 void desktop_settings_load(DesktopSettings* settings);
