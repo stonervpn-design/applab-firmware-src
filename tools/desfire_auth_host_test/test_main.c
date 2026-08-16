@@ -203,6 +203,7 @@ static void test_cmac_des_family_bs8(void) {
 
 extern void test_attack_sweep(void);
 extern void test_attack_dict_builtin(void);
+extern void test_attack_out_max_clamp(void);
 
 int main(void) {
     test_mbedtls_selftest();
@@ -215,6 +216,7 @@ int main(void) {
     test_cmac_des_family_bs8();
     test_attack_sweep();
     test_attack_dict_builtin();
+    test_attack_out_max_clamp();
     printf(g_fail ? "\n%d FAILURES\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }
