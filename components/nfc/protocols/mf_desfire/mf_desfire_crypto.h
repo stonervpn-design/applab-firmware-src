@@ -26,3 +26,21 @@ void    mf_desfire_cbc_encrypt(
 void    mf_desfire_cbc_decrypt(
     MfDesfireKeyType type, const uint8_t* key, uint8_t* iv,
     const uint8_t* in, uint8_t* out, size_t len);
+
+typedef struct {
+    MfDesfireKeyType type;
+    uint8_t session_key[MF_DESFIRE_CRYPTO_KEY_MAX];
+    size_t  block_size;
+    uint8_t iv[MF_DESFIRE_CRYPTO_BLOCK_MAX];
+    uint8_t rnda[MF_DESFIRE_CRYPTO_BLOCK_MAX];
+    uint8_t rndb[MF_DESFIRE_CRYPTO_BLOCK_MAX];
+    uint8_t cmac_sk1[MF_DESFIRE_CRYPTO_BLOCK_MAX]; // filled in Task 5
+    uint8_t cmac_sk2[MF_DESFIRE_CRYPTO_BLOCK_MAX]; // filled in Task 5
+    bool    authenticated;
+} MfDesfireCryptoCtx;
+
+bool mf_desfire_auth_begin(
+    MfDesfireCryptoCtx* ctx, MfDesfireKeyType type, const uint8_t* key,
+    const uint8_t* enc_rndb, const uint8_t* rnda, uint8_t* out_token);
+bool mf_desfire_auth_finish(
+    MfDesfireCryptoCtx* ctx, const uint8_t* key, const uint8_t* enc_rndap);

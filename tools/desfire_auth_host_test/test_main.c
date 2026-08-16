@@ -54,10 +54,40 @@ static void test_session_key(void) {
     CHECK(memcmp(sk, d2_exp, 16) == 0, "2k3des session key layout");
 }
 
+#include "virtual_card.h"
+static void auth_roundtrip(MfDesfireKeyType t, const char* name) {
+    uint8_t key[24]; for(size_t i=0;i<mf_desfire_key_size(t);i++) key[i]=(uint8_t)(0x10+i);
+    uint8_t card_rndb[16]; for(int i=0;i<16;i++) card_rndb[i]=(uint8_t)(0xb0+i);
+    uint8_t rnda[16];      for(int i=0;i<16;i++) rnda[i]=(uint8_t)(0xa0+i);
+
+    vcard_init(t, key, card_rndb);
+    size_t bs = vcard_block();
+    uint8_t enc_rndb[16]; vcard_challenge(enc_rndb);
+
+    MfDesfireCryptoCtx ctx; uint8_t token[32];
+    CHECK(mf_desfire_auth_begin(&ctx, t, key, enc_rndb, rnda, token), name);
+
+    uint8_t enc_rndap[16];
+    CHECK(vcard_respond(token, enc_rndap), name);
+    CHECK(mf_desfire_auth_finish(&ctx, key, enc_rndap), name);
+    CHECK(ctx.authenticated, name);
+
+    uint8_t sk[24]; mf_desfire_derive_session_key(t, rnda, card_rndb, sk);
+    CHECK(memcmp(ctx.session_key, sk, mf_desfire_key_size(t)) == 0, name);
+    (void)bs;
+}
+static void test_auth(void) {
+    auth_roundtrip(MfDesfireKeyTypeAes,    "aes auth round-trip");
+    auth_roundtrip(MfDesfireKeyType2k3Des, "2k3des auth round-trip");
+    auth_roundtrip(MfDesfireKeyTypeDes,    "des auth round-trip");
+    auth_roundtrip(MfDesfireKeyType3k3Des, "3k3des auth round-trip");
+}
+
 int main(void) {
     test_mbedtls_selftest();
     test_helpers();
     test_session_key();
+    test_auth();
     printf(g_fail ? "\n%d FAILURES\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }

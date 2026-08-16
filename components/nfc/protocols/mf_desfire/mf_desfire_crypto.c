@@ -14,7 +14,13 @@ size_t mf_desfire_key_size(MfDesfireKeyType t) {
     }
 }
 size_t mf_desfire_block_size(MfDesfireKeyType t) {
-    return (t == MfDesfireKeyTypeAes) ? 16 : 8;
+    // Challenge (RndA/RndB) length: AES and 3K3DES (AuthenticateISO, 0xAA/0x1A)
+    // use 16-byte challenges even though 3K3DES's underlying cipher still
+    // chains in 8-byte DES sub-blocks internally; legacy DES/2K3DES
+    // (Authenticate, 0x0A) use 8-byte challenges. mf_desfire_derive_session_key's
+    // 3K3DES case already reads offsets up to +12..+15, which only makes sense
+    // against 16-byte RndA/RndB — this is the matching challenge length.
+    return (t == MfDesfireKeyTypeAes || t == MfDesfireKeyType3k3Des) ? 16 : 8;
 }
 uint8_t mf_desfire_auth_cmd(MfDesfireKeyType t) {
     switch(t) {
@@ -94,4 +100,68 @@ void mf_desfire_cbc_decrypt(
         mbedtls_des3_crypt_cbc(&c, MBEDTLS_DES_DECRYPT, len, iv, in, out);
         mbedtls_des3_free(&c);
     }
+}
+
+// AES/3K3DES: reader sends by encrypting. Legacy DES/2K3DES: reader sends by
+// decrypting ("send by decrypting"), and receives by encrypting — the two
+// helpers below encode that swap so auth_begin/auth_finish stay scheme-agnostic.
+static void cbc_send(MfDesfireCryptoCtx* c, const uint8_t* key,
+                     const uint8_t* in, uint8_t* out, size_t len) {
+    if(c->type == MfDesfireKeyTypeAes || c->type == MfDesfireKeyType3k3Des)
+        mf_desfire_cbc_encrypt(c->type, key, c->iv, in, out, len);
+    else
+        mf_desfire_cbc_decrypt(c->type, key, c->iv, in, out, len);
+}
+static void cbc_recv(MfDesfireCryptoCtx* c, const uint8_t* key,
+                     const uint8_t* in, uint8_t* out, size_t len) {
+    if(c->type == MfDesfireKeyTypeAes || c->type == MfDesfireKeyType3k3Des)
+        mf_desfire_cbc_decrypt(c->type, key, c->iv, in, out, len);
+    else
+        mf_desfire_cbc_encrypt(c->type, key, c->iv, in, out, len);
+}
+
+bool mf_desfire_auth_begin(
+    MfDesfireCryptoCtx* ctx, MfDesfireKeyType type, const uint8_t* key,
+    const uint8_t* enc_rndb, const uint8_t* rnda, uint8_t* out_token) {
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->type = type;
+    ctx->block_size = mf_desfire_block_size(type);
+    size_t bs = ctx->block_size;
+
+    uint8_t rndb[16];
+    memset(ctx->iv, 0, 16);
+    // cbc_recv() is passed ctx->iv directly, and mbedtls_{aes,des3}_crypt_cbc
+    // update the iv buffer in place to the correct next-chaining state after
+    // processing `len` bytes (last real cipher sub-block: 16B for AES, 8B for
+    // the DES family regardless of the 8/16-byte challenge length) — so
+    // ctx->iv is already correct after this call. Do NOT re-derive it by
+    // copying `bs` bytes of ciphertext manually: for 3K3DES bs (16, the
+    // challenge length) differs from the cipher's 8-byte chaining granularity,
+    // and re-copying the wrong slice would desync the running IV.
+    cbc_recv(ctx, key, enc_rndb, rndb, bs);   // RndB
+    memcpy(ctx->rndb, rndb, bs);              // stashed for session-key derivation in auth_finish
+
+    memcpy(ctx->rnda, rnda, bs);
+    uint8_t rndb_rot[16]; memcpy(rndb_rot, rndb, bs); mf_desfire_rotate_left(rndb_rot, bs);
+
+    uint8_t plain[32];
+    memcpy(plain, rnda, bs);
+    memcpy(plain + bs, rndb_rot, bs);
+    cbc_send(ctx, key, plain, out_token, bs * 2); // ctx->iv auto-updated (see note above)
+    return true;
+}
+
+bool mf_desfire_auth_finish(
+    MfDesfireCryptoCtx* ctx, const uint8_t* key, const uint8_t* enc_rndap) {
+    size_t bs = ctx->block_size;
+    uint8_t rndap[16];
+    cbc_recv(ctx, key, enc_rndap, rndap, bs); // ctx->iv auto-updated (see auth_begin note)
+
+    uint8_t rnda_rot[16]; memcpy(rnda_rot, ctx->rnda, bs); mf_desfire_rotate_left(rnda_rot, bs);
+    if(memcmp(rndap, rnda_rot, bs) != 0) return false;
+
+    mf_desfire_derive_session_key(ctx->type, ctx->rnda, ctx->rndb, ctx->session_key);
+    memset(ctx->iv, 0, 16);
+    ctx->authenticated = true;
+    return true;
 }
