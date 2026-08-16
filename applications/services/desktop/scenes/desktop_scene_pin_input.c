@@ -137,6 +137,7 @@ bool desktop_scene_pin_input_on_event(void* context, SceneManagerEvent event) {
             // this scene is only reachable when desktop_pin_code_is_set()
             // is true, see desktop_scene_locked.c).
             if(desktop->settings.wipe_enabled && desktop_pin_code_is_set() &&
+               desktop->settings.pin_fails_before_wipe > 0 &&
                desktop->settings.pin_fail_count >= desktop->settings.pin_fails_before_wipe) {
                 security_wipe_user_data();
 

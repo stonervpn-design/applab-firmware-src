@@ -101,6 +101,15 @@ void desktop_settings_load(DesktopSettings* settings) {
                 // this, a later strlen/strcmp/snprintf("%s", asset_pack)
                 // could overread past the field.
                 settings->asset_pack[ASSET_PACK_NAME_LEN - 1] = '\0';
+
+                // Defensive: a migrated/corrupt-but-CRC-valid file could carry
+                // wipe_enabled=true with pin_fails_before_wipe==0, which the
+                // pin-input scene now treats as "wipe disabled" (see
+                // desktop_scene_pin_input.c). Clamp back to the documented
+                // default here so such a combo can't linger silently.
+                if(settings->wipe_enabled && settings->pin_fails_before_wipe == 0) {
+                    settings->pin_fails_before_wipe = SECURITY_WIPE_DEFAULT_FAILS_BEFORE_WIPE;
+                }
             }
 
         } else if(version == DESKTOP_SETTINGS_VER_19) {

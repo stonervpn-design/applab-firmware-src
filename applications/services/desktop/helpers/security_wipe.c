@@ -16,8 +16,12 @@ void security_wipe_user_data(void) {
 
     for(size_t i = 0; i < SECURITY_WIPE_WHITELIST_COUNT; i++) {
         const char* path = security_wipe_whitelist[i];
-        bool ok = storage_simply_remove_recursive(storage, path);
-        FURI_LOG_I(TAG, "wipe %s: %s", path, ok ? "ok" : "failed");
+        if(security_wipe_path_is_eligible(path)) {
+            bool ok = storage_simply_remove_recursive(storage, path);
+            FURI_LOG_I(TAG, "wipe %s: %s", path, ok ? "ok" : "failed");
+        } else {
+            FURI_LOG_W(TAG, "wipe %s: skipped (not eligible)", path);
+        }
     }
 
     furi_record_close(RECORD_STORAGE);
