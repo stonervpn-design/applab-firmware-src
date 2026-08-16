@@ -4,6 +4,9 @@
 
 enum SubmenuIndex {
     SubmenuIndexAppInfo,
+#ifndef PUBLIC_BUILD
+    SubmenuIndexUnlock, // "Unlock / Key Attack" -> NfcSceneMfDesfireUnlockMenu (Task 9, PRIVATE-only)
+#endif
     SubmenuIndexDynamic, // dynamic indexes start here
 };
 
@@ -23,6 +26,14 @@ void nfc_scene_mf_desfire_app_on_enter(void* context) {
         SubmenuIndexAppInfo,
         nfc_scene_mf_desfire_app_submenu_callback,
         nfc);
+#ifndef PUBLIC_BUILD
+    submenu_add_item(
+        nfc->submenu,
+        "Unlock / Key Attack",
+        SubmenuIndexUnlock,
+        nfc_scene_mf_desfire_app_submenu_callback,
+        nfc);
+#endif
 
     const uint32_t app_idx =
         scene_manager_get_scene_state(nfc->scene_manager, NfcSceneMfDesfireApp) >> 1;
@@ -58,6 +69,11 @@ bool nfc_scene_mf_desfire_app_on_event(void* context, SceneManagerEvent event) {
     if(event.type == SceneManagerEventTypeCustom) {
         if(event.event == NfcCustomEventViewExit) {
             consumed = scene_manager_previous_scene(nfc->scene_manager);
+#ifndef PUBLIC_BUILD
+        } else if(event.event == SubmenuIndexUnlock) {
+            scene_manager_next_scene(nfc->scene_manager, NfcSceneMfDesfireUnlockMenu);
+            consumed = true;
+#endif
         } else {
             const MfDesfireData* data = nfc_device_get_data(nfc->nfc_device, NfcProtocolMfDesfire);
 

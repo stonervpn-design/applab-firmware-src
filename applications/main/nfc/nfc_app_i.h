@@ -37,6 +37,10 @@
 #include "helpers/nfc_supported_cards.h"
 #include "helpers/felica_auth.h"
 #include "helpers/slix_unlock.h"
+#ifndef PUBLIC_BUILD
+#include "helpers/mf_desfire_attack.h"
+#include "helpers/mf_desfire_audit.h"
+#endif
 
 #include <flipper_application/plugins/composite_resolver.h>
 #include <loader/loader.h>
@@ -164,6 +168,38 @@ typedef struct {
     NfcMfUltralightCWriteDictState dict_state; /**< Which dict is open for write-phase auth. */
 } NfcMfUltralightCWriteContext;
 
+#ifndef PUBLIC_BUILD
+// DESFire dictionary/key-sweep attack (Task 9, PRIVATE-only). Sweeps either
+// the built-in factory-default dictionary (mf_desfire_dict_builtin) or a
+// single manually entered key (manual_mode) against every discovered AID's
+// key slots via mf_desfire_attack_sweep, then re-authenticates and dumps
+// Standard/Backup files for each recovered key. See
+// scenes/nfc_scene_mf_desfire_dict_attack.c and
+// scenes/nfc_scene_mf_desfire_unlock_menu.c.
+#define NFC_MF_DESFIRE_ATTACK_MAX_FOUND (16)
+
+typedef struct {
+    // Set by the unlock menu's "Enter key manually" byte input before
+    // entering the dict-attack scene; otherwise the built-in dictionary is
+    // swept instead.
+    bool manual_mode;
+    MfDesfireKeyType manual_key_type;
+    uint8_t manual_key[MF_DESFIRE_CRYPTO_KEY_MAX];
+
+    // Live progress, updated from the poller worker callback and read back
+    // by the scene's event handler on NfcCustomEventDesfireAttackUpdate.
+    size_t attempts_done;
+    size_t attempts_total;
+    bool sweep_started;
+    bool sweep_complete;
+
+    // Results, valid once sweep_complete is true.
+    MfDesfireFoundKey found[NFC_MF_DESFIRE_ATTACK_MAX_FOUND];
+    size_t found_count;
+    size_t files_dumped;
+} NfcMfDesfireAttackContext;
+#endif
+
 struct NfcApp {
     DialogsApp* dialogs;
     Storage* storage;
@@ -204,6 +240,9 @@ struct NfcApp {
     NfcMfClassicDictAttackContext nfc_dict_context;
     NfcMfUltralightCDictContext mf_ultralight_c_dict_context;
     NfcMfUltralightCWriteContext mf_ultralight_c_write_context;
+#ifndef PUBLIC_BUILD
+    NfcMfDesfireAttackContext mf_desfire_attack;
+#endif
     Mfkey32Logger* mfkey32_logger;
     NfcMfkeyRecoverContext mfkey_recover;
     MfUserDict* mf_user_dict;

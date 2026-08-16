@@ -39,4 +39,10 @@ typedef enum {
     NfcCustomEventChameleonConnected,
     NfcCustomEventChameleonFailed,
     NfcCustomEventChameleonCardRead,
+
+#ifndef PUBLIC_BUILD
+    // MfDesfire dictionary/key-sweep attack (Task 9, PRIVATE-only)
+    NfcCustomEventDesfireAttackUpdate,
+    NfcCustomEventDesfireAttackComplete,
+#endif
 } NfcCustomEvent;

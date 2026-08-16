@@ -37,6 +37,11 @@ ADD_SCENE(nfc, des_auth_unlock_warn, DesAuthUnlockWarn)
 ADD_SCENE(nfc, mf_desfire_more_info, MfDesfireMoreInfo)
 ADD_SCENE(nfc, mf_desfire_app, MfDesfireApp)
 
+#ifndef PUBLIC_BUILD
+ADD_SCENE(nfc, mf_desfire_unlock_menu, MfDesfireUnlockMenu)
+ADD_SCENE(nfc, mf_desfire_dict_attack, MfDesfireDictAttack)
+#endif
+
 ADD_SCENE(nfc, emv_transactions, EmvTransactions)
 
 ADD_SCENE(nfc, mf_classic_dict_attack, MfClassicDictAttack)
