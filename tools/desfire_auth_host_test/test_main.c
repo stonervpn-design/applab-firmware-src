@@ -21,6 +21,14 @@ static void test_helpers(void) {
     CHECK(mf_desfire_key_size(MfDesfireKeyTypeAes) == 16, "aes key size");
     CHECK(mf_desfire_block_size(MfDesfireKeyTypeAes) == 16, "aes block");
     CHECK(mf_desfire_block_size(MfDesfireKeyTypeDes) == 8, "des block");
+    // block_size is the TRUE cipher block (Task 5's CMAC keys off this to pick
+    // the Rb constant / iterate in cipher-block units); challenge_size is the
+    // RndA/RndB length for the 3-pass auth handshake. These differ only for
+    // 3K3DES: true cipher block 8 (3DES), but a 16-byte AuthenticateISO challenge.
+    CHECK(mf_desfire_block_size(MfDesfireKeyType3k3Des) == 8, "3k3des block (true cipher block)");
+    CHECK(mf_desfire_challenge_size(MfDesfireKeyType3k3Des) == 16, "3k3des challenge (RndA/RndB len)");
+    CHECK(mf_desfire_challenge_size(MfDesfireKeyTypeDes) == 8, "des challenge (RndA/RndB len)");
+    CHECK(mf_desfire_challenge_size(MfDesfireKeyTypeAes) == 16, "aes challenge (RndA/RndB len)");
     CHECK(mf_desfire_auth_cmd(MfDesfireKeyTypeAes) == 0xaa, "aes cmd");
     CHECK(mf_desfire_auth_cmd(MfDesfireKeyTypeDes) == 0x0a, "des cmd");
 

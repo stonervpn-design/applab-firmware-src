@@ -14,12 +14,26 @@ size_t mf_desfire_key_size(MfDesfireKeyType t) {
     }
 }
 size_t mf_desfire_block_size(MfDesfireKeyType t) {
-    // Challenge (RndA/RndB) length: AES and 3K3DES (AuthenticateISO, 0xAA/0x1A)
-    // use 16-byte challenges even though 3K3DES's underlying cipher still
-    // chains in 8-byte DES sub-blocks internally; legacy DES/2K3DES
-    // (Authenticate, 0x0A) use 8-byte challenges. mf_desfire_derive_session_key's
-    // 3K3DES case already reads offsets up to +12..+15, which only makes sense
-    // against 16-byte RndA/RndB — this is the matching challenge length.
+    // TRUE underlying CBC cipher block: AES = 16, all DES-family (DES/2K3DES/
+    // 3K3DES) = 8, since 3K3DES is still 3DES (a 64-bit-block cipher) even
+    // though its AuthenticateISO challenge is 16 bytes (see
+    // mf_desfire_challenge_size). Task 5's CMAC keys off this field via
+    // ctx->block_size to pick the Rb constant (0x1b for 8-byte block, 0x87
+    // for 16) and to iterate/pad in cipher-block units — it must stay the
+    // true cipher block, not the challenge length.
+    return (t == MfDesfireKeyTypeAes) ? 16 : 8;
+}
+size_t mf_desfire_challenge_size(MfDesfireKeyType t) {
+    // RndA/RndB (and thus token) length for the 3-pass authentication
+    // handshake: AES and 3K3DES (AuthenticateISO, 0xAA/0x1A) use 16-byte
+    // challenges; legacy DES/2K3DES (Authenticate, 0x0A) use 8-byte
+    // challenges. For 3K3DES this differs from the true cipher block
+    // (mf_desfire_block_size == 8): CBC still chains internally in 8-byte
+    // DES sub-blocks (mbedtls handles this transparently for any length
+    // that's a multiple of 8), but RndA/RndB/token/rotate/session-key
+    // math all operate on the full 16 bytes. mf_desfire_derive_session_key's
+    // 3K3DES case already reads offsets up to +12..+15, which only makes
+    // sense against 16-byte RndA/RndB — this is the matching challenge length.
     return (t == MfDesfireKeyTypeAes || t == MfDesfireKeyType3k3Des) ? 16 : 8;
 }
 uint8_t mf_desfire_auth_cmd(MfDesfireKeyType t) {
@@ -125,8 +139,8 @@ bool mf_desfire_auth_begin(
     const uint8_t* enc_rndb, const uint8_t* rnda, uint8_t* out_token) {
     memset(ctx, 0, sizeof(*ctx));
     ctx->type = type;
-    ctx->block_size = mf_desfire_block_size(type);
-    size_t bs = ctx->block_size;
+    ctx->block_size = mf_desfire_block_size(type); // TRUE cipher block (Task 5 CMAC reads this)
+    size_t bs = mf_desfire_challenge_size(type);    // RndA/RndB/token sizing for THIS handshake
 
     uint8_t rndb[16];
     memset(ctx->iv, 0, 16);
@@ -153,7 +167,7 @@ bool mf_desfire_auth_begin(
 
 bool mf_desfire_auth_finish(
     MfDesfireCryptoCtx* ctx, const uint8_t* key, const uint8_t* enc_rndap) {
-    size_t bs = ctx->block_size;
+    size_t bs = mf_desfire_challenge_size(ctx->type); // RndA''/rotate sizing, not ctx->block_size
     uint8_t rndap[16];
     cbc_recv(ctx, key, enc_rndap, rndap, bs); // ctx->iv auto-updated (see auth_begin note)
 

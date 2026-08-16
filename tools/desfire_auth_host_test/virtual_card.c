@@ -4,7 +4,11 @@
 static MfDesfireKeyType s_t; static uint8_t s_key[24]; static uint8_t s_rndb[16]; static size_t s_bs;
 static uint8_t s_iv[16];
 void vcard_init(MfDesfireKeyType t, const uint8_t* key, const uint8_t* rndb) {
-    s_t = t; s_bs = mf_desfire_block_size(t);
+    // s_bs is the RndA/RndB *challenge* length (mf_desfire_challenge_size), not
+    // the true CBC cipher block (mf_desfire_block_size) — for 3K3DES these
+    // differ (16 vs 8); the CBC helpers still chain correctly in 8-byte DES
+    // sub-blocks internally for any length that's a multiple of 8.
+    s_t = t; s_bs = mf_desfire_challenge_size(t);
     memcpy(s_key, key, mf_desfire_key_size(t));
     memcpy(s_rndb, rndb, s_bs);
 }

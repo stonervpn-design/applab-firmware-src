@@ -16,6 +16,7 @@ typedef enum {
 
 size_t  mf_desfire_key_size(MfDesfireKeyType type);
 size_t  mf_desfire_block_size(MfDesfireKeyType type);
+size_t  mf_desfire_challenge_size(MfDesfireKeyType type);
 uint8_t mf_desfire_auth_cmd(MfDesfireKeyType type);
 void    mf_desfire_rotate_left(uint8_t* data, size_t len);
 void    mf_desfire_derive_session_key(
