@@ -855,7 +855,12 @@ int32_t desktop_srv(void* p) {
 
     scene_manager_next_scene(desktop->scene_manager, DesktopSceneMain);
 
-    if(desktop_pin_code_is_set()) {
+    // Lock-on-boot: bring the device up locked whenever a PIN is set, unless
+    // the user has explicitly disabled lock_on_boot in settings. The
+    // desktop_pin_code_is_set() conjunct is load-bearing -- never lock a
+    // PIN-less device on boot, or the user would be soft-locked out with no
+    // way to unlock.
+    if(desktop->settings.lock_on_boot && desktop_pin_code_is_set()) {
         desktop_lock(desktop);
     } else {
         CliVcp* cli_vcp = furi_record_open(RECORD_CLI_VCP);

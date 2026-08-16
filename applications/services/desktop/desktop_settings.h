@@ -61,6 +61,7 @@ typedef struct {
     uint8_t pin_fail_count;
     uint8_t pin_fails_before_wipe;
     bool wipe_enabled;
+    bool lock_on_boot;
 } DesktopSettings;
 
 void desktop_settings_load(DesktopSettings* settings);
