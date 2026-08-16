@@ -210,7 +210,7 @@ void mf_desfire_cmac_init(MfDesfireCryptoCtx* c) {
 // updates ctx->iv to that final CBC block.
 void mf_desfire_cmac(MfDesfireCryptoCtx* c, const uint8_t* data, size_t len, uint8_t* mac8) {
     size_t bs = c->block_size;
-    uint8_t block[16], mac[16];
+    uint8_t block[16] = {0}, mac[16] = {0};
     memcpy(mac, c->iv, bs);
     size_t full = (len == 0) ? 0 : (len - 1) / bs; // number of complete non-final blocks
     size_t off = 0;

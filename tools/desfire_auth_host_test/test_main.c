@@ -133,6 +133,74 @@ static void test_cmac_rfc4493_kat(void) {
     CHECK(memcmp(c.cmac_sk2, exp_sk2, 16) == 0, "cmac sk2 matches RFC 4493 KAT");
 }
 
+// Authoritative known-answer test: RFC 4493 §4 full-message CMAC vectors for
+// AES-128, using the RFC's example key and 64-byte message M, sliced to each
+// example's length. These exercise every branch of mf_desfire_cmac's
+// full/rem block logic that the single-block determinism test above cannot:
+// empty message (padded final block, sk2, zero data blocks), a single
+// block-aligned message (sk1, no padding), a multi-block non-aligned message
+// (padded final block, sk2, >=1 full prior block), and a multi-block
+// block-aligned message (sk1, >=1 full prior block). mf_desfire_cmac returns
+// only the leading 8 bytes, so we check against the first 8 bytes of each
+// RFC-published 16-byte CMAC.
+static void test_cmac_rfc4493_messages(void) {
+    uint8_t rfc_key[16] = {
+        0x2b,0x7e,0x15,0x16,0x28,0xae,0xd2,0xa6,
+        0xab,0xf7,0x15,0x88,0x09,0xcf,0x4f,0x3c
+    };
+    uint8_t M[64] = {
+        0x6b,0xc1,0xbe,0xe2,0x2e,0x40,0x9f,0x96,0xe9,0x3d,0x7e,0x11,0x73,0x93,0x17,0x2a,
+        0xae,0x2d,0x8a,0x57,0x1e,0x03,0xac,0x9c,0x9e,0xb7,0x6f,0xac,0x45,0xaf,0x8e,0x51,
+        0x30,0xc8,0x1c,0x46,0xa3,0x5c,0xe4,0x11,0xe5,0xfb,0xc1,0x19,0x1a,0x0a,0x52,0xef,
+        0xf6,0x9f,0x24,0x45,0xdf,0x4f,0x9b,0x17,0xad,0x2b,0x41,0x7b,0xe6,0x6c,0x37,0x10
+    };
+
+    MfDesfireCryptoCtx c; memset(&c,0,sizeof c);
+    c.type = MfDesfireKeyTypeAes; c.block_size = 16;
+    memcpy(c.session_key, rfc_key, 16);
+    mf_desfire_cmac_init(&c);
+
+    uint8_t mac8[8];
+
+    // Example 1: len=0 (empty) — padded final block, sk2, zero full blocks.
+    uint8_t exp1[8] = {0xbb,0x1d,0x69,0x29,0xe9,0x59,0x37,0x28};
+    memset(c.iv,0,16); mf_desfire_cmac(&c, M, 0, mac8);
+    CHECK(memcmp(mac8, exp1, 8) == 0, "cmac RFC 4493 message KAT: empty");
+
+    // Example 2: len=16 — single block, aligned, sk1.
+    uint8_t exp2[8] = {0x07,0x0a,0x16,0xb4,0x6b,0x4d,0x41,0x44};
+    memset(c.iv,0,16); mf_desfire_cmac(&c, M, 16, mac8);
+    CHECK(memcmp(mac8, exp2, 8) == 0, "cmac RFC 4493 message KAT: 16 bytes");
+
+    // Example 3: len=40 — multi-block, non-aligned, padded final block, sk2.
+    uint8_t exp3[8] = {0xdf,0xa6,0x67,0x47,0xde,0x9a,0xe6,0x30};
+    memset(c.iv,0,16); mf_desfire_cmac(&c, M, 40, mac8);
+    CHECK(memcmp(mac8, exp3, 8) == 0, "cmac RFC 4493 message KAT: 40 bytes");
+
+    // Example 4: len=64 — multi-block, aligned, sk1.
+    uint8_t exp4[8] = {0x51,0xf0,0xbe,0xbf,0x7e,0x3b,0x9d,0x92};
+    memset(c.iv,0,16); mf_desfire_cmac(&c, M, 64, mac8);
+    CHECK(memcmp(mac8, exp4, 8) == 0, "cmac RFC 4493 message KAT: 64 bytes");
+}
+
+// DES-family (bs=8) exercise: no cheap authoritative KAT available for
+// 2K3DES CMAC, so this proves the bs=8 code path runs without overflowing
+// the 16-byte scratch buffers and is deterministic, mirroring test_cmac's
+// approach but for the DES-family block size instead of AES's.
+static void test_cmac_des_family_bs8(void) {
+    uint8_t key[16]; for(int i=0;i<16;i++) key[i]=(uint8_t)(0x40+i);
+    MfDesfireCryptoCtx c2; memset(&c2,0,sizeof c2);
+    c2.type = MfDesfireKeyType2k3Des; c2.block_size = 8;
+    memcpy(c2.session_key, key, 16);
+    mf_desfire_cmac_init(&c2);
+
+    uint8_t m[20]; for(int i=0;i<20;i++) m[i]=(uint8_t)i;
+    uint8_t mac_a[8], mac_b[8];
+    memset(c2.iv,0,8); mf_desfire_cmac(&c2, m, 20, mac_a);
+    memset(c2.iv,0,8); mf_desfire_cmac(&c2, m, 20, mac_b);
+    CHECK(memcmp(mac_a, mac_b, 8) == 0, "cmac 2k3des (bs=8) deterministic, no overflow");
+}
+
 int main(void) {
     test_mbedtls_selftest();
     test_helpers();
@@ -140,6 +208,8 @@ int main(void) {
     test_auth();
     test_cmac();
     test_cmac_rfc4493_kat();
+    test_cmac_rfc4493_messages();
+    test_cmac_des_family_bs8();
     printf(g_fail ? "\n%d FAILURES\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }
