@@ -583,12 +583,17 @@ static void animation_manager_switch_to_one_shot_view(AnimationManager* animatio
     View* next_view = one_shot_view_get_view(animation_manager->one_shot_view);
     view_stack_remove_view(animation_manager->view_stack, prev_view);
     view_stack_add_view(animation_manager->view_stack, next_view);
+    // Only two level-up art assets exist (A_Levelup1: leaving level 1 for
+    // the first time, A_Levelup2: every subsequent level-up). `stats.level`
+    // here is the level *before* dolphin_upgrade_level() runs (see caller),
+    // so it ranges 1..DOLPHIN_LEVEL_COUNT-1. Previously this was an
+    // if/else-if/crash valid only for the stock 3-level system (from-level
+    // 1 or 2); with up to 30 levels every from-level >= 2 must fall through
+    // to the generic "leveled up" animation instead of crashing.
     if(stats.level == 1) {
         one_shot_view_start_animation(animation_manager->one_shot_view, &A_Levelup1_128x64);
-    } else if(stats.level == 2) {
-        one_shot_view_start_animation(animation_manager->one_shot_view, &A_Levelup2_128x64);
     } else {
-        furi_crash();
+        one_shot_view_start_animation(animation_manager->one_shot_view, &A_Levelup2_128x64);
     }
 }
 

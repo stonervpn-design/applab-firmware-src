@@ -55,7 +55,10 @@ static void render_callback(Canvas* canvas, void* ctx) {
     uint32_t xp_to_levelup = dolphin_state_xp_to_levelup(stats->icounter);
     uint32_t xp_for_current_level =
         xp_to_levelup + dolphin_state_xp_above_last_levelup(stats->icounter);
-    if(stats->level == 3) {
+    // xp_for_current_level is 0 only right at a level-up boundary (including
+    // the moment the max level, DOLPHIN_LEVEL_COUNT, is first reached) --
+    // guard the divide directly instead of hardcoding the old 3-level cap.
+    if(xp_for_current_level == 0) {
         xp_progress = 0;
     } else {
         xp_progress = xp_to_levelup * 64 / xp_for_current_level;
@@ -68,9 +71,16 @@ static void render_callback(Canvas* canvas, void* ctx) {
     canvas_draw_line(canvas, 127, 2, 127, 47);
     canvas_draw_dot(canvas, 126, 1);
 
-    // portrait
-    furi_assert((stats->level > 0) && (stats->level <= 3));
-    canvas_draw_icon(canvas, 9, 5, portraits[mood][stats->level - 1]);
+    // portrait -- only MOODS_TOTAL (3) portrait art variants exist per mood,
+    // but level now ranges 1..DOLPHIN_LEVEL_COUNT (30). Scale the level down
+    // into the available art range instead of indexing by level directly
+    // (which would read out of bounds past level 3).
+    furi_assert((stats->level > 0) && (stats->level <= DOLPHIN_LEVEL_COUNT));
+    uint8_t portrait_index = (uint8_t)((stats->level - 1) * BUTTHURT_MAX / DOLPHIN_LEVEL_COUNT);
+    if(portrait_index >= BUTTHURT_MAX) {
+        portrait_index = BUTTHURT_MAX - 1;
+    }
+    canvas_draw_icon(canvas, 9, 5, portraits[mood][portrait_index]);
     canvas_draw_line(canvas, 58, 16, 123, 16);
     canvas_draw_line(canvas, 58, 30, 123, 30);
     canvas_draw_line(canvas, 58, 44, 123, 44);
