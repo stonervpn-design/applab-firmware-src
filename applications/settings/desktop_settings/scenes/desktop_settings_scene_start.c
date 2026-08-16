@@ -106,6 +106,17 @@ const char* const pin_fails_before_wipe_text[PIN_FAILS_BEFORE_WIPE_COUNT] = {
 
 const uint32_t pin_fails_before_wipe_value[PIN_FAILS_BEFORE_WIPE_COUNT] = {0, 3, 5, 10, 15};
 
+// Asset Pack selector. Unlike the compile-time text/value tables above, the
+// pack list is discovered at runtime from the SD card (asset_pack_enumerate),
+// so it can't be a `const` array. These are file-scope statics rather than
+// DesktopSettingsApp fields because their lifetime only needs to span
+// on_enter -> the VariableItem "changed" callback -> on_exit of THIS scene
+// (repopulated fresh every time the scene is entered), matching how the
+// VariableItemList itself is torn down/rebuilt per scene visit.
+#define ASSET_PACK_SETTINGS_MAX_PACKS 16
+static char asset_pack_settings_names[ASSET_PACK_SETTINGS_MAX_PACKS][ASSET_PACK_NAME_LEN];
+static uint8_t asset_pack_settings_count = 0;
+
 static void desktop_settings_scene_start_var_list_enter_callback(void* context, uint32_t index) {
     DesktopSettingsApp* app = context;
     view_dispatcher_send_custom_event(app->view_dispatcher, index);
@@ -181,6 +192,37 @@ static void desktop_settings_scene_start_usb_inhibit_auto_lock_delay_changed(Var
 
     variable_item_set_current_value_text(item, usb_inhibit_auto_lock_delay_text[index]);
     app->settings.usb_inhibit_auto_lock = usb_inhibit_auto_lock_delay_value[index];
+}
+
+// index 0 == "Default" (built-in animations, settings.asset_pack == "").
+// index 1..asset_pack_settings_count map to asset_pack_settings_names[index-1].
+// Applies on the NEXT desktop (re)load, not live (Phase 1 scope, see task-3
+// brief step 3) — the animation loader only reads settings.asset_pack at
+// load time (Task 2).
+static void desktop_settings_scene_start_asset_pack_changed(VariableItem* item) {
+    DesktopSettingsApp* app = variable_item_get_context(item);
+    uint8_t index = variable_item_get_current_value_index(item);
+
+    if(index == 0) {
+        variable_item_set_current_value_text(item, "Default");
+        app->settings.asset_pack[0] = '\0';
+        return;
+    }
+
+    const char* name = asset_pack_settings_names[index - 1];
+    // Defense-in-depth: asset_pack_enumerate() only ever returns names that
+    // already passed this same check, but never store an unvalidated name
+    // (task-3 brief step 2).
+    if(asset_pack_name_is_valid(name)) {
+        variable_item_set_current_value_text(item, name);
+        strlcpy(app->settings.asset_pack, name, ASSET_PACK_NAME_LEN);
+    } else {
+        // Shouldn't happen; fall back to Default rather than storing a name
+        // that failed validation.
+        variable_item_set_current_value_index(item, 0);
+        variable_item_set_current_value_text(item, "Default");
+        app->settings.asset_pack[0] = '\0';
+    }
 }
 
 void desktop_settings_scene_start_on_enter(void* context) {
@@ -315,6 +357,45 @@ void desktop_settings_scene_start_on_enter(void* context) {
     variable_item_list_add(variable_item_list, "DummyMode - Down Long", 1, NULL, NULL);
     variable_item_list_add(variable_item_list, "DummyMode - Ok", 1, NULL, NULL);
     variable_item_list_add(variable_item_list, "DummyMode - Ok Long", 1, NULL, NULL);
+
+    // Asset Pack selector. Appended LAST (rather than grouped near the other
+    // display settings above) so it doesn't shift the list index of any item
+    // earlier in this function -- desktop_settings_scene_start_on_event's
+    // switch matches on the item's position in this list (see
+    // DesktopSettingsEntry / DesktopSettingsChangeName et al above), so
+    // inserting a new item anywhere but the end would silently desync those
+    // case labels from the items they're meant to handle.
+    asset_pack_settings_count =
+        asset_pack_enumerate(asset_pack_settings_names, ASSET_PACK_SETTINGS_MAX_PACKS);
+
+    item = variable_item_list_add(
+        variable_item_list,
+        "Asset Pack",
+        1 + asset_pack_settings_count,
+        desktop_settings_scene_start_asset_pack_changed,
+        app);
+
+    // index 0 ("Default") unless the stored pack name matches one currently
+    // enumerated from the SD card. If the stored pack is missing (SD swapped,
+    // pack folder deleted/renamed, etc.) this falls back to displaying
+    // "Default" WITHOUT touching app->settings.asset_pack -- the stored name
+    // is left alone unless the user actively picks a different value below,
+    // so it isn't silently overwritten (e.g. if the SD is later restored).
+    value_index = 0;
+    if(app->settings.asset_pack[0] != '\0') {
+        for(uint8_t i = 0; i < asset_pack_settings_count; i++) {
+            if(strncmp(
+                   app->settings.asset_pack,
+                   asset_pack_settings_names[i],
+                   ASSET_PACK_NAME_LEN) == 0) {
+                value_index = i + 1;
+                break;
+            }
+        }
+    }
+    variable_item_set_current_value_index(item, value_index);
+    variable_item_set_current_value_text(
+        item, value_index == 0 ? "Default" : asset_pack_settings_names[value_index - 1]);
 
     variable_item_list_set_enter_callback(
         variable_item_list, desktop_settings_scene_start_var_list_enter_callback, app);

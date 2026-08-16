@@ -93,6 +93,16 @@ void desktop_settings_load(DesktopSettings* settings) {
                 DESKTOP_SETTINGS_MAGIC,
                 DESKTOP_SETTINGS_VER);
 
+            if(success) {
+                // Defensive: a corrupt-but-CRC-valid saved struct could carry
+                // a non-NUL-terminated 32-byte asset_pack field (the
+                // migration branches below zero-init it explicitly, but this
+                // direct-load path reads it verbatim off flash). Without
+                // this, a later strlen/strcmp/snprintf("%s", asset_pack)
+                // could overread past the field.
+                settings->asset_pack[ASSET_PACK_NAME_LEN - 1] = '\0';
+            }
+
         } else if(version == DESKTOP_SETTINGS_VER_19) {
             DesktopSettingsV19* settings_v19 = malloc(sizeof(DesktopSettingsV19));
 
