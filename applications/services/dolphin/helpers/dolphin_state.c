@@ -1,5 +1,6 @@
 #include "dolphin_state.h"
 #include "dolphin_state_filename.h"
+#include "dolphin_level.h"
 
 #include <furi.h>
 #include <furi_hal.h>
@@ -12,8 +13,6 @@
 #define DOLPHIN_STATE_PATH           INT_PATH(DOLPHIN_STATE_FILE_NAME)
 #define DOLPHIN_STATE_HEADER_MAGIC   0xD0
 #define DOLPHIN_STATE_HEADER_VERSION 0x01
-#define LEVEL2_THRESHOLD             300
-#define LEVEL3_THRESHOLD             1800
 #define BUTTHURT_MAX                 14
 #define BUTTHURT_MIN                 0
 
@@ -76,43 +75,10 @@ uint64_t dolphin_state_timestamp(void) {
     return datetime_datetime_to_timestamp(&datetime);
 }
 
-bool dolphin_state_is_levelup(uint32_t icounter) {
-    return (icounter == LEVEL2_THRESHOLD) || (icounter == LEVEL3_THRESHOLD);
-}
-
-uint8_t dolphin_get_level(uint32_t icounter) {
-    if(icounter <= LEVEL2_THRESHOLD) {
-        return 1;
-    } else if(icounter <= LEVEL3_THRESHOLD) {
-        return 2;
-    } else {
-        return 3;
-    }
-}
-
-uint32_t dolphin_state_xp_above_last_levelup(uint32_t icounter) {
-    uint32_t threshold = 0;
-    if(icounter <= LEVEL2_THRESHOLD) {
-        threshold = 0;
-    } else if(icounter <= LEVEL3_THRESHOLD) {
-        threshold = LEVEL2_THRESHOLD + 1;
-    } else {
-        threshold = LEVEL3_THRESHOLD + 1;
-    }
-    return icounter - threshold;
-}
-
-uint32_t dolphin_state_xp_to_levelup(uint32_t icounter) {
-    uint32_t threshold = 0;
-    if(icounter <= LEVEL2_THRESHOLD) {
-        threshold = LEVEL2_THRESHOLD;
-    } else if(icounter <= LEVEL3_THRESHOLD) {
-        threshold = LEVEL3_THRESHOLD;
-    } else {
-        threshold = (uint32_t)-1;
-    }
-    return threshold - icounter;
-}
+// dolphin_get_level / dolphin_state_is_levelup / dolphin_state_xp_above_last_levelup /
+// dolphin_state_xp_to_levelup live in dolphin_level.c (pure, host-testable; see
+// tools/dolphin_level_host_test/). Declared in dolphin_level.h, delegated here under
+// the same external symbol names so dolphin.c/passport callers are unaffected.
 
 void dolphin_state_on_deed(DolphinState* dolphin_state, DolphinDeed deed) {
     // Special case for testing
