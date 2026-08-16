@@ -2,9 +2,12 @@
 #include "mf_desfire_audit.h"
 
 bool mf_desfire_audit_is_free_read(MfDesfireFileAccessRights ar) {
-    // Read = bits[15:12]; 0xE = free (no key needed). See mf_desfire_audit.h
-    // for the full nibble layout and the render.c cross-check.
-    return ((ar >> 12) & 0x0F) == 0x0E;
+    // Read = bits[15:12], ReadWrite = bits[7:4]; 0xE = free (no key
+    // needed) on either nibble grants unauthenticated read, matching
+    // mf_desfire_render.c's read_rights == 0x0e || read_write_rights ==
+    // 0x0e. See mf_desfire_audit.h for the full nibble layout and the
+    // render.c cross-check.
+    return (((ar >> 12) & 0x0F) == 0x0E) || (((ar >> 4) & 0x0F) == 0x0E);
 }
 
 #ifndef DESFIRE_HOST_TEST

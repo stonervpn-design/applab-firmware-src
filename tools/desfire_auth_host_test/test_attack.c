@@ -107,21 +107,35 @@ void test_attack_dict_builtin(void) {
         "builtin dict covers all four key types");
 }
 
-// Read nibble = bits[15:12] of the 16-bit access-rights word (matches
-// mf_desfire_render.c's `access_rights[i] >> 12 & 0xF` for Read).
+// Free read = Read nibble (bits[15:12]) == 0xE OR ReadWrite nibble
+// (bits[7:4]) == 0xE (matches mf_desfire_render.c's
+// `read_rights == 0x0e || read_write_rights == 0x0e`).
 void test_audit_is_free_read(void) {
     TCHECK(mf_desfire_audit_is_free_read(0xEEEE) == true,
         "0xEEEE: read nibble 0xE -> free read");
     TCHECK(mf_desfire_audit_is_free_read(0x0000) == false,
-        "0x0000: read nibble 0x0 -> not free read");
-    // Read nibble is 0x0 even though a DIFFERENT nibble (ReadWrite, bits
-    // [7:4]) is 0xE — proves the predicate reads the correct nibble
-    // position, not just "is any nibble 0xE".
-    TCHECK(mf_desfire_audit_is_free_read(0x0EE0) == false,
-        "0x0EE0: read nibble 0x0 (0xE sits in ReadWrite/Change, not Read) -> not free read");
-    // Read nibble 0xF ("never") must not be mistaken for 0xE ("free").
+        "0x0000: read nibble 0x0, read_write nibble 0x0 -> not free read");
+    // Read nibble is 0x0 but ReadWrite nibble (bits[7:4]) is 0xE, and Write
+    // (bits[11:8], irrelevant to read access) is also 0xE — proves the OR
+    // branch fires via ReadWrite even with Read denied and a red-herring
+    // Write nibble set, and that the Write nibble alone is correctly
+    // ignored (only Read/ReadWrite gate read access).
+    TCHECK(mf_desfire_audit_is_free_read(0x0EE0) == true,
+        "0x0EE0: read nibble 0x0, read_write nibble 0xE (Write noise ignored) -> free read");
+    // Same ReadWrite-only case as above but without the Write-nibble noise,
+    // isolating exactly the case the coordinator's fix targets: free read
+    // granted via ReadWrite alone, Read nibble != 0xE.
+    TCHECK(mf_desfire_audit_is_free_read(0x00E0) == true,
+        "0x00E0: read nibble 0x0, read_write nibble 0xE -> free read (via ReadWrite branch)");
+    // Write nibble (bits[11:8]) set to 0xE, Read and ReadWrite both 0x0 —
+    // proves free WRITE does not imply free READ (Write nibble must stay
+    // excluded from the predicate).
+    TCHECK(mf_desfire_audit_is_free_read(0x0E00) == false,
+        "0x0E00: write nibble 0xE, read/read_write nibbles 0x0 -> not free read (write-free != read-free)");
+    // Read nibble 0xF ("never") must not be mistaken for 0xE ("free"), and
+    // ReadWrite nibble is also 0x0 (not free) here.
     TCHECK(mf_desfire_audit_is_free_read(0xF000) == false,
-        "0xF000: read nibble 0xF (never) -> not free read");
+        "0xF000: read nibble 0xF (never), read_write nibble 0x0 -> not free read");
     // Only the Read nibble set to 0xE, rest deny-all -- still free read.
     TCHECK(mf_desfire_audit_is_free_read(0xEFFF) == true,
         "0xEFFF: read nibble 0xE, rest 0xF (never) -> still free read");

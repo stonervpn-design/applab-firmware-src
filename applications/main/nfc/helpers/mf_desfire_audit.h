@@ -37,14 +37,22 @@ extern "C" {
 // Per DESFire spec, a file's 16-bit access-rights word packs four 4-bit
 // fields: bits[15:12]=Read, [11:8]=Write, [7:4]=ReadWrite, [3:0]=Change. A
 // nibble value of 0xE means "free" (no authentication required); 0xF means
-// "never" (denied to every key). This matches the interpretation already
-// used by the in-tree renderer,
-// applications/main/nfc/helpers/protocol_support/mf_desfire/mf_desfire_render.c
-// (`settings->access_rights[i] >> 12 & 0xF` for Read, `>> 4 & 0xF` for
-// ReadWrite, etc. — see nfc_render_mf_desfire_file_settings_data).
+// "never" (denied to every key).
 //
-// Returns true if the READ nibble (bits[15:12]) of `ar` is 0xE, i.e. the
-// file can be read without authenticating.
+// This mirrors the read-auth logic already used by the in-tree renderer,
+// applications/main/nfc/helpers/protocol_support/mf_desfire/mf_desfire_render.c,
+// nfc_render_mf_desfire_file_settings_data():
+//   uint8_t read_rights       = (settings->access_rights[i] >> 12) & 0x0f;
+//   uint8_t read_write_rights = (settings->access_rights[i] >> 4)  & 0x0f;
+//   if((read_rights == 0x0e) || (read_write_rights == 0x0e)) { ... free ... }
+// i.e. a file is freely readable if EITHER the Read nibble OR the
+// ReadWrite nibble is 0xE — the ReadWrite right also grants read access
+// (it's "read and write", not a separate read gate), so a card can be
+// configured free-read via either field.
+//
+// Returns true if the READ nibble (bits[15:12]) OR the READWRITE nibble
+// (bits[7:4]) of `ar` is 0xE, i.e. the file can be read without
+// authenticating via either right.
 bool mf_desfire_audit_is_free_read(MfDesfireFileAccessRights ar);
 
 #ifndef DESFIRE_HOST_TEST
