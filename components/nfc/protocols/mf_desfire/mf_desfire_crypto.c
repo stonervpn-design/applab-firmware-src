@@ -30,6 +30,28 @@ void mf_desfire_rotate_left(uint8_t* d, size_t n) {
     d[n - 1] = first;
 }
 
+void mf_desfire_derive_session_key(
+    MfDesfireKeyType t, const uint8_t* a, const uint8_t* b, uint8_t* sk) {
+    switch(t) {
+    case MfDesfireKeyTypeDes:
+        memcpy(sk + 0, a, 4); memcpy(sk + 4, b, 4);
+        break;
+    case MfDesfireKeyType2k3Des:
+        memcpy(sk + 0, a, 4);  memcpy(sk + 4, b, 4);
+        memcpy(sk + 8, a + 4, 4); memcpy(sk + 12, b + 4, 4);
+        break;
+    case MfDesfireKeyType3k3Des:
+        memcpy(sk + 0,  a, 4);      memcpy(sk + 4,  b, 4);
+        memcpy(sk + 8,  a + 6, 4);  memcpy(sk + 12, b + 6, 4);
+        memcpy(sk + 16, a + 12, 4); memcpy(sk + 20, b + 12, 4);
+        break;
+    case MfDesfireKeyTypeAes:
+        memcpy(sk + 0, a, 4);       memcpy(sk + 4, b, 4);
+        memcpy(sk + 8, a + 12, 4);  memcpy(sk + 12, b + 12, 4);
+        break;
+    }
+}
+
 // Expand DESFire key material into a 24-byte 3DES key for mbedtls_des3_set3key.
 static void des_expand(MfDesfireKeyType t, const uint8_t* key, uint8_t out[24]) {
     if(t == MfDesfireKeyTypeDes) {           // K1=K2=K3

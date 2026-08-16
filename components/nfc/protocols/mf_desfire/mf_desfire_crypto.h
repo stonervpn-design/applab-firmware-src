@@ -18,6 +18,8 @@ size_t  mf_desfire_key_size(MfDesfireKeyType type);
 size_t  mf_desfire_block_size(MfDesfireKeyType type);
 uint8_t mf_desfire_auth_cmd(MfDesfireKeyType type);
 void    mf_desfire_rotate_left(uint8_t* data, size_t len);
+void    mf_desfire_derive_session_key(
+    MfDesfireKeyType type, const uint8_t* rnda, const uint8_t* rndb, uint8_t* out_sk);
 void    mf_desfire_cbc_encrypt(
     MfDesfireKeyType type, const uint8_t* key, uint8_t* iv,
     const uint8_t* in, uint8_t* out, size_t len);

@@ -38,9 +38,26 @@ static void test_helpers(void) {
     CHECK(memcmp(pt, in, 16) == 0, "aes cbc round-trip");
 }
 
+static void test_session_key(void) {
+    uint8_t a[16], b[16];
+    for(int i=0;i<16;i++){ a[i]=(uint8_t)(0xa0+i); b[i]=(uint8_t)(0xb0+i); }
+
+    uint8_t sk[24];
+    mf_desfire_derive_session_key(MfDesfireKeyTypeAes, a, b, sk);
+    uint8_t aes_exp[16] = {0xa0,0xa1,0xa2,0xa3, 0xb0,0xb1,0xb2,0xb3,
+                           0xac,0xad,0xae,0xaf, 0xbc,0xbd,0xbe,0xbf};
+    CHECK(memcmp(sk, aes_exp, 16) == 0, "aes session key layout");
+
+    mf_desfire_derive_session_key(MfDesfireKeyType2k3Des, a, b, sk);
+    uint8_t d2_exp[16] = {0xa0,0xa1,0xa2,0xa3, 0xb0,0xb1,0xb2,0xb3,
+                          0xa4,0xa5,0xa6,0xa7, 0xb4,0xb5,0xb6,0xb7};
+    CHECK(memcmp(sk, d2_exp, 16) == 0, "2k3des session key layout");
+}
+
 int main(void) {
     test_mbedtls_selftest();
     test_helpers();
+    test_session_key();
     printf(g_fail ? "\n%d FAILURES\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }
