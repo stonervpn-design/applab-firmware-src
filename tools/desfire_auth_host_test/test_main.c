@@ -3,7 +3,7 @@
 #include <mbedtls/des.h>
 #include <stdio.h>
 
-static int g_fail = 0;
+int g_fail = 0;
 #define CHECK(cond, msg) do { if(!(cond)) { printf("FAIL: %s\n", msg); g_fail++; } \
                               else { printf("ok: %s\n", msg); } } while(0)
 
@@ -201,6 +201,9 @@ static void test_cmac_des_family_bs8(void) {
     CHECK(memcmp(mac_a, mac_b, 8) == 0, "cmac 2k3des (bs=8) deterministic, no overflow");
 }
 
+extern void test_attack_sweep(void);
+extern void test_attack_dict_builtin(void);
+
 int main(void) {
     test_mbedtls_selftest();
     test_helpers();
@@ -210,6 +213,8 @@ int main(void) {
     test_cmac_rfc4493_kat();
     test_cmac_rfc4493_messages();
     test_cmac_des_family_bs8();
+    test_attack_sweep();
+    test_attack_dict_builtin();
     printf(g_fail ? "\n%d FAILURES\n" : "\nALL PASS\n", g_fail);
     return g_fail ? 1 : 0;
 }
