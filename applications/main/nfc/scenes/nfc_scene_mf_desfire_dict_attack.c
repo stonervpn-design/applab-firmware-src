@@ -91,7 +91,11 @@ static const char* nfc_desfire_attack_key_type_name(MfDesfireKeyType type) {
 // poller worker callback (poller must be a live MfDesfirePoller* for this
 // session). Populates instance->mf_desfire_attack with results.
 static void nfc_scene_mf_desfire_dict_attack_run(NfcApp* instance, MfDesfirePoller* poller) {
-    const MfDesfireData* data = mf_desfire_poller_get_data(poller);
+    // Use the generic NfcPoller wrapper's get_data accessor (same pattern as
+    // nfc_scene_mf_classic_dict_attack.c) rather than the protocol-internal
+    // mf_desfire_poller_get_data (declared in mf_desfire_poller_i.h, not the
+    // public mf_desfire_poller.h this file includes).
+    const MfDesfireData* data = nfc_poller_get_data(instance->poller);
 
     // Persist the poller's standard-read data (version/app ids/applications)
     // into the device model now, so the results view (running later, on the
