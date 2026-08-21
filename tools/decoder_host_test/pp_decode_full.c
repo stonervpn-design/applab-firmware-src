@@ -175,6 +175,24 @@ static void rx_cb(SubGhzProtocolDecoderBase* base, void* ctx) {
     ((HitFlag*)ctx)->hit++;
 }
 
+static void flatten(const char* c, char* out, size_t cap);
+// FRAMEDUMP: on every decoded frame, print its get_string so we can see the
+// per-press counter SEQUENCE inside a multi-press capture (repeats vs rolling).
+static const SubGhzProtocol* g_fd_proto;
+static void* g_fd_dec;
+static void rx_cb_dump(SubGhzProtocolDecoderBase* base, void* ctx) {
+    (void)base;
+    ((HitFlag*)ctx)->hit++;
+    if(g_fd_proto && g_fd_dec && g_fd_proto->decoder->get_string) {
+        FuriString* s = furi_string_alloc();
+        g_fd_proto->decoder->get_string(g_fd_dec, s);
+        char flat[512];
+        flatten(furi_string_get_cstr(s), flat, sizeof(flat));
+        fprintf(stderr, "  [frame %d] %s\n", ((HitFlag*)ctx)->hit, flat);
+        furi_string_free(s);
+    }
+}
+
 static void flatten(const char* c, char* out, size_t cap) {
     size_t j = 0;
     for(; c && *c && j < cap - 1; c++) out[j++] = (*c == '\n') ? '|' : *c;
@@ -340,6 +358,186 @@ static const char* synthcheck(const SubGhzProtocol* proto, void* dec) {
     return r;
 }
 
+// Extract the token value after a "Label:" marker in a flattened get_string.
+static void extract_after(const char* flat, const char* label, char* out, size_t cap) {
+    out[0] = 0;
+    const char* p = strstr(flat, label);
+    if(!p) return;
+    p += strlen(label);
+    size_t j = 0;
+    while(*p && *p != ' ' && *p != '|' && j < cap - 1) out[j++] = *p++;
+    out[j] = 0;
+}
+
+// Decode a duration buffer through one protocol; return hit count and, on a hit,
+// fill the flattened get_string and read back the rolling counter via serialize.
+static int decode_probe(
+    const SubGhzProtocol* proto, const int* durs, size_t nn,
+    char* flat, size_t flatcap, uint32_t* cnt_out, int* has_cnt) {
+    static char de;
+    void* dec = proto->decoder->alloc((SubGhzEnvironment*)&de);
+    SubGhzProtocolDecoderBase* base = (SubGhzProtocolDecoderBase*)dec;
+    HitFlag hf = {0};
+    subghz_protocol_decoder_base_set_decoder_callback(base, rx_cb, &hf);
+    for(size_t s = 0; s < nn; s++) {
+        int v = durs[s];
+        proto->decoder->feed(dec, v > 0, (uint32_t)(v < 0 ? -v : v));
+    }
+    flat[0] = 0;
+    *has_cnt = 0;
+    if(hf.hit) {
+        FuriString* out = furi_string_alloc();
+        if(proto->decoder->get_string) proto->decoder->get_string(dec, out);
+        flatten(furi_string_get_cstr(out), flat, flatcap);
+        furi_string_free(out);
+        if(proto->decoder->serialize) {
+            FuriString* pn = furi_string_alloc();
+            furi_string_cat_str(pn, "AM650");
+            SubGhzRadioPreset preset = {
+                .name = pn, .frequency = 433920000, .data = NULL, .data_size = 0};
+            FlipperFormat* ff = flipper_format_string_alloc();
+            if(proto->decoder->serialize(dec, ff, &preset) == SubGhzProtocolStatusOk) {
+                static const char* CF[] = {"Cnt", "Rolling", "RollingCode", "Counter"};
+                for(unsigned i = 0; i < 4; i++) {
+                    flipper_format_rewind(ff);
+                    if(flipper_format_read_uint32(ff, CF[i], cnt_out, 1)) {
+                        *has_cnt = 1;
+                        break;
+                    }
+                }
+            }
+            flipper_format_free(ff);
+            furi_string_free(pn);
+        }
+    }
+    int h = hf.hit;
+    if(proto->decoder->free) proto->decoder->free(dec);
+    return h;
+}
+
+// MONOTONIC LOCKSTEP CHECK (desync-safety proof): for a decoded capture at counter
+// c0, synthesize frames at c0+1..c0+5 and verify each (a) re-decodes, (b) carries
+// EXACTLY the requested counter, (c) keeps the SAME serial (Sn) — identity
+// preserved, and (d) all frames are pairwise DISTINCT. If all hold, the synthesized
+// 2nd fob emits precisely the codes the real fob would at those counters => perfect
+// lockstep => no avoidable desync of the original.
+static void synthmono(const SubGhzProtocol* proto, void* dec, char* outbuf, size_t outcap) {
+    FuriString* pn = furi_string_alloc();
+    furi_string_cat_str(pn, "AM650");
+    SubGhzRadioPreset preset = {
+        .name = pn, .frequency = 433920000, .data = NULL, .data_size = 0};
+    FlipperFormat* ff = flipper_format_string_alloc();
+    snprintf(outbuf, outcap, "\tMONO:fail-ser");
+    if(!(proto->decoder->serialize &&
+         proto->decoder->serialize(dec, ff, &preset) == SubGhzProtocolStatusOk))
+        goto done;
+    // Pick the LOAD-BEARING counter field: the CF[] field that is present AND whose
+    // +1 bump actually changes the yielded frame. (Some protocols carry a vestigial
+    // "Cnt" plus the real rolling field, e.g. HondaV8 uses "RollingCode".)
+    static const char* CF[] = {"Cnt", "Rolling", "RollingCode", "Counter"};
+    const char* cf = NULL;
+    uint32_t c0 = 0;
+    static int probeA[16384], probeB[16384];
+    for(unsigned i = 0; i < 4; i++) {
+        uint32_t v = 0;
+        flipper_format_rewind(ff);
+        if(!flipper_format_read_uint32(ff, CF[i], &v, 1)) continue;
+        size_t na = 0, nb = 0;
+        uint32_t v1 = v;
+        flipper_format_rewind(ff);
+        flipper_format_update_uint32(ff, CF[i], &v1, 1);
+        synth_yield(proto, ff, probeA, &na, 16384);
+        uint32_t v2 = v + 1;
+        flipper_format_rewind(ff);
+        flipper_format_update_uint32(ff, CF[i], &v2, 1);
+        synth_yield(proto, ff, probeB, &nb, 16384);
+        // restore
+        flipper_format_rewind(ff);
+        flipper_format_update_uint32(ff, CF[i], &v, 1);
+        if(na && nb && !(na == nb && memcmp(probeA, probeB, na * sizeof(int)) == 0)) {
+            cf = CF[i];
+            c0 = v;
+            break;
+        }
+    }
+    if(!cf) {
+        snprintf(outbuf, outcap, "\tMONO:no-cnt/clone-only");
+        goto done;
+    }
+    // Desync-safety invariant (offset-agnostic): synthesizing counter c0+0..c0+5
+    // must give frames that (a) all re-decode, (b) have STRICTLY MONOTONIC decoded
+    // counters with a CONSTANT step (the encoder may pre-increment/self-advance, so
+    // absolute value need not equal the request — only clean per-press progression
+    // matters), (c) keep the same Sn, (d) are pairwise distinct. That == the exact
+    // ordered code sequence a real fob emits => the car's window only ever advances.
+    static int frames[6][16384];
+    size_t fn[6];
+    char flats[6][512];
+    uint32_t cks[6];
+    int hasc[6];
+    int ok = 1;
+    char detail[128] = "";
+    char sn0[64] = "";
+    for(int k = 0; k <= 5 && ok; k++) {
+        uint32_t ck = c0 + (uint32_t)k;
+        flipper_format_rewind(ff);
+        flipper_format_update_uint32(ff, cf, &ck, 1);
+        synth_yield(proto, ff, frames[k], &fn[k], 16384);
+        if(fn[k] == 0) {
+            ok = 0;
+            snprintf(detail, sizeof(detail), "noupload@+%d", k);
+            break;
+        }
+        if(!decode_probe(proto, frames[k], fn[k], flats[k], 512, &cks[k], &hasc[k]) ||
+           !hasc[k]) {
+            ok = 0;
+            snprintf(detail, sizeof(detail), "nodecode@+%d", k);
+            break;
+        }
+        char snk[64];
+        extract_after(flats[k], "Sn:", snk, sizeof(snk));
+        if(k == 0) {
+            snprintf(sn0, sizeof(sn0), "%s", snk);
+        } else if(sn0[0] && strcmp(sn0, snk) != 0) {
+            ok = 0;
+            snprintf(detail, sizeof(detail), "Sn %s!=%s@+%d", snk, sn0, k);
+            break;
+        }
+    }
+    long step = 0;
+    if(ok) {
+        step = (long)cks[1] - (long)cks[0];
+        for(int k = 1; k <= 5 && ok; k++) {
+            long s = (long)cks[k] - (long)cks[k - 1];
+            if(s <= 0 || s != step) {
+                ok = 0;
+                snprintf(
+                    detail, sizeof(detail), "nonmono cnt=[%lu,%lu,%lu,%lu,%lu,%lu]",
+                    (unsigned long)cks[0], (unsigned long)cks[1], (unsigned long)cks[2],
+                    (unsigned long)cks[3], (unsigned long)cks[4], (unsigned long)cks[5]);
+            }
+        }
+    }
+    if(ok) {
+        for(int a = 0; a < 6 && ok; a++)
+            for(int b = a + 1; b < 6 && ok; b++)
+                if(fn[a] == fn[b] &&
+                   memcmp(frames[a], frames[b], fn[a] * sizeof(int)) == 0) {
+                    ok = 0;
+                    snprintf(detail, sizeof(detail), "dup@+%d,+%d", a, b);
+                }
+    }
+    if(ok)
+        snprintf(
+            outbuf, outcap, "\tMONO:ok fld=%s step=%ld +5-lockstep Sn=%s", cf, step,
+            sn0[0] ? sn0 : "?");
+    else
+        snprintf(outbuf, outcap, "\tMONO:FAIL(%s) %s", cf, detail);
+done:
+    flipper_format_free(ff);
+    furi_string_free(pn);
+}
+
 int main(int argc, char** argv) {
     if(argc < 2) {
         fprintf(stderr, "usage: %s <capture.sub>\n", argv[0]);
@@ -363,7 +561,15 @@ int main(int argc, char** argv) {
         void* dec = proto->decoder->alloc((SubGhzEnvironment*)&dummy_env);
         SubGhzProtocolDecoderBase* base = (SubGhzProtocolDecoderBase*)dec;
         HitFlag hf = {0};
-        subghz_protocol_decoder_base_set_decoder_callback(base, rx_cb, &hf);
+        const char* fd = getenv("FRAMEDUMP");
+        int dumping = fd && strcmp(fd, proto->name) == 0;
+        if(dumping) {
+            g_fd_proto = proto;
+            g_fd_dec = dec;
+            subghz_protocol_decoder_base_set_decoder_callback(base, rx_cb_dump, &hf);
+        } else {
+            subghz_protocol_decoder_base_set_decoder_callback(base, rx_cb, &hf);
+        }
 
         for(size_t s = 0; s < n; s++) {
             int v = raw[s];
@@ -390,9 +596,14 @@ int main(int argc, char** argv) {
                proto->encoder->deserialize && proto->encoder->yield) {
                 snprintf(scbuf, sizeof(scbuf), "\t%s", synthcheck(proto, dec));
             }
+            char mnbuf[96] = "";
+            if(getenv("SYNTHMONO") && proto->encoder && proto->encoder->alloc &&
+               proto->encoder->deserialize && proto->encoder->yield) {
+                synthmono(proto, dec, mnbuf, sizeof(mnbuf));
+            }
             printf(
-                "%s\tDECODED\t%s\thits=%d\t%s\t%s%s\n",
-                path, proto->name, hf.hit, rt, flat, scbuf);
+                "%s\tDECODED\t%s\thits=%d\t%s\t%s%s%s\n",
+                path, proto->name, hf.hit, rt, flat, scbuf, mnbuf);
             furi_string_free(out);
         }
         if(proto->decoder->free) proto->decoder->free(dec);

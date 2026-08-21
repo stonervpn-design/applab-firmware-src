@@ -64,6 +64,11 @@ typedef struct SubGhzProtocolEncoderKiaV3V4 {
     uint32_t encrypted;
     uint32_t decrypted;
 
+    // The KIA_KEY1 key the CAPTURED hop decrypts under (decoder tries all; encoder
+    // must re-encrypt under the SAME one, not last-wins get_kia_mf_key()). 0 => none.
+    uint64_t matched_mf_key;
+    uint32_t plain_captured; // captured plaintext; roll only the 16-bit counter.
+
     uint8_t crc_iter;
     uint8_t bursts_sent;
 } SubGhzProtocolEncoderKiaV3V4;
@@ -137,11 +142,21 @@ static bool kia_v3_v4_process_buffer(SubGhzProtocolDecoderKiaV3V4* instance) {
     uint8_t btn = (pp_reverse_bits8(b[7]) & 0xF0) >> 4;
     uint8_t our_serial_lsb = serial & 0xFF;
 
-    uint32_t decrypted = subghz_protocol_keeloq_common_decrypt(encrypted, get_kia_mf_key());
-    uint8_t dec_btn = (decrypted >> 28) & 0x0F;
-    uint8_t dec_serial_lsb = (decrypted >> 16) & 0xFF;
-
-    if(dec_btn != btn || dec_serial_lsb != our_serial_lsb) {
+    // Try every provisioned KIA_KEY1 manufacturer key; accept the first whose
+    // KeeLoq decrypt is self-consistent (top nibble == button, disc byte ==
+    // serial LSB). A single last-wins key would shadow all the others.
+    uint32_t decrypted = 0;
+    bool key_ok = false;
+    uint8_t nkeys = get_kia_mf_key_count();
+    for(uint8_t ki = 0; ki < nkeys; ki++) {
+        uint32_t d = subghz_protocol_keeloq_common_decrypt(encrypted, get_kia_mf_key_at(ki));
+        if(((d >> 28) & 0x0F) == btn && ((d >> 16) & 0xFF) == our_serial_lsb) {
+            decrypted = d;
+            key_ok = true;
+            break;
+        }
+    }
+    if(!key_ok) {
         return false;
     }
 
@@ -251,13 +266,21 @@ void* kia_protocol_encoder_v3_v4_alloc(SubGhzEnvironment* environment) {
 static void kia_protocol_encoder_v3_v4_build_packet(
     SubGhzProtocolEncoderKiaV3V4* instance,
     uint8_t* raw_bytes) {
-    uint32_t plaintext = (uint32_t)(instance->cnt & 0xFFFFU) |
-                         ((uint32_t)(instance->serial & 0x3FFU) << 16) |
-                         ((uint32_t)(instance->btn & 0x0FU) << 28);
+    uint32_t plaintext;
+    uint64_t use_key;
+    if(instance->matched_mf_key) {
+        plaintext = (instance->plain_captured & 0xFFFF0000U) | (uint32_t)(instance->cnt & 0xFFFFU);
+        use_key = instance->matched_mf_key;
+    } else {
+        plaintext = (uint32_t)(instance->cnt & 0xFFFFU) |
+                    ((uint32_t)(instance->serial & 0x3FFU) << 16) |
+                    ((uint32_t)(instance->btn & 0x0FU) << 28);
+        use_key = get_kia_mf_key();
+    }
 
     instance->decrypted = plaintext;
 
-    uint32_t encrypted = subghz_protocol_keeloq_common_encrypt(plaintext, get_kia_mf_key());
+    uint32_t encrypted = subghz_protocol_keeloq_common_encrypt(plaintext, use_key);
     instance->encrypted = encrypted;
 
     FURI_LOG_I(
@@ -448,6 +471,34 @@ SubGhzProtocolStatus
         instance->generic.serial = instance->serial;
         instance->generic.btn = instance->btn;
         instance->generic.cnt = instance->cnt;
+
+        // Identify the fob's actual KIA_KEY1 key from the captured hop (mirror the
+        // decoder's try-all) and keep the full captured plaintext, so re-encryption
+        // is bit-faithful under the RIGHT key instead of last-wins get_kia_mf_key().
+        {
+            uint8_t cb0 = (uint8_t)(instance->generic.data >> 56);
+            uint8_t cb1 = (uint8_t)(instance->generic.data >> 48);
+            uint8_t cb2 = (uint8_t)(instance->generic.data >> 40);
+            uint8_t cb3 = (uint8_t)(instance->generic.data >> 32);
+            uint32_t cap_enc = ((uint32_t)pp_reverse_bits8(cb3) << 24) |
+                               ((uint32_t)pp_reverse_bits8(cb2) << 16) |
+                               ((uint32_t)pp_reverse_bits8(cb1) << 8) |
+                               (uint32_t)pp_reverse_bits8(cb0);
+            uint8_t ser_lsb = (uint8_t)(instance->serial & 0xFF);
+            instance->matched_mf_key = 0;
+            instance->plain_captured = 0;
+            uint8_t nk = get_kia_mf_key_count();
+            for(uint8_t ki = 0; ki < nk; ki++) {
+                uint64_t k = get_kia_mf_key_at(ki);
+                uint32_t d = subghz_protocol_keeloq_common_decrypt(cap_enc, k);
+                if(((d >> 28) & 0x0F) == (instance->btn & 0x0F) &&
+                   ((d >> 16) & 0xFF) == ser_lsb) {
+                    instance->matched_mf_key = k;
+                    instance->plain_captured = d;
+                    break;
+                }
+            }
+        }
 
         // Auto-advance the rolling counter by 1 per logical send so a resend
         // doesn't replay an already-used counter (matches vag.c and other

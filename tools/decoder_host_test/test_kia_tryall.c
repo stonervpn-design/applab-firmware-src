@@ -23,7 +23,10 @@
 #include <stdint.h>
 
 #include <lib/subghz/protocols/base.h>
+#include <lib/subghz/types.h>
 #include <core/furi_string.h>
+#include <flipper_format/flipper_format.h>
+#include <toolbox/level_duration.h>
 
 extern const SubGhzProtocol kia_protocol_v3_v4;
 
@@ -38,6 +41,7 @@ extern uint64_t get_kia_mf_key_at(uint8_t index);
 
 // KeeLoq + bit helper from the real firmware
 extern uint32_t subghz_protocol_keeloq_common_encrypt(const uint32_t data, const uint64_t key);
+extern uint32_t subghz_protocol_keeloq_common_decrypt(const uint32_t data, const uint64_t key);
 extern uint8_t pp_reverse_bits8(uint8_t v);
 
 #define KEY_CANON 0xA8F5DFFC8DAA5CDBULL // canonical Kia/Hyundai V3&4 (keystore line 175)
@@ -152,6 +156,83 @@ int main(void) {
         printf("[decode] PASS: A8F5DFFC-keyed frame decoded via try-all\n");
     }
     furi_string_free(out);
+
+    // ---- (3) ENCODER re-encrypts under the MATCHED (non-last) key -----------
+    // The decoder tries all keys; the encoder historically hard-used the last-wins
+    // get_kia_mf_key() (== CB72B957, the WRONG key for this A8F5DFFC-keyed fob), so
+    // the synthesized frame was rejected by the car. The fix identifies the fob's
+    // real key from the captured hop and re-encrypts under it. Prove it end-to-end:
+    // decode -> serialize -> encoder deserialize (bumps cnt +1) -> yield -> re-decode
+    // must recover Serial/Btn unchanged and Cnt == CNT+1 (only possible if the
+    // synthesized hop decrypts self-consistently, i.e. the right key was used).
+#ifdef ENABLE_EMULATE_FEATURE
+    if(hf.hit >= 1 && kia_protocol_v3_v4.encoder && kia_protocol_v3_v4.encoder->deserialize &&
+       kia_protocol_v3_v4.encoder->yield) {
+        FuriString* pn = furi_string_alloc();
+        furi_string_cat_str(pn, "AM650");
+        SubGhzRadioPreset preset = {
+            .name = pn, .frequency = 433920000, .data = NULL, .data_size = 0};
+        FlipperFormat* ff = flipper_format_string_alloc();
+        if(kia_protocol_v3_v4.decoder->serialize(dec, ff, &preset) == SubGhzProtocolStatusOk) {
+            flipper_format_rewind(ff);
+            void* enc = kia_protocol_v3_v4.encoder->alloc((SubGhzEnvironment*)0x1);
+            if(kia_protocol_v3_v4.encoder->deserialize(enc, ff) == SubGhzProtocolStatusOk) {
+                static int edurs[8192];
+                int en = 0;
+                for(int guard = 0; guard < 8192; guard++) {
+                    LevelDuration ld = kia_protocol_v3_v4.encoder->yield(enc);
+                    if(level_duration_is_reset(ld)) break;
+                    edurs[en++] = level_duration_get_level(ld) ?
+                                      (int)level_duration_get_duration(ld) :
+                                      -(int)level_duration_get_duration(ld);
+                }
+                HitFlag hf2 = {0};
+                void* dec2 = kia_protocol_v3_v4.decoder->alloc((SubGhzEnvironment*)0x1);
+                subghz_protocol_decoder_base_set_decoder_callback(
+                    (SubGhzProtocolDecoderBase*)dec2, rx_cb, &hf2);
+                for(int i = 0; i < en; i++)
+                    kia_protocol_v3_v4.decoder->feed(
+                        dec2, edurs[i] > 0, (uint32_t)(edurs[i] < 0 ? -edurs[i] : edurs[i]));
+                FuriString* o2 = furi_string_alloc();
+                kia_protocol_v3_v4.decoder->get_string(dec2, o2);
+                printf("[encode] synthesized-frame re-decode (expect Cnt=%04lX, Serial=%07lX, Btn=%lX):\n%s\n",
+                       (unsigned long)(CNT + 1), (unsigned long)SERIAL, (unsigned long)BTN,
+                       furi_string_get_cstr(o2));
+                const char* s = furi_string_get_cstr(o2);
+                char needcnt[32], needser[32];
+                snprintf(needcnt, sizeof(needcnt), "%04lX", (unsigned long)(CNT + 1));
+                snprintf(needser, sizeof(needser), "%07lX", (unsigned long)SERIAL);
+                if(hf2.hit < 1) {
+                    fprintf(stderr, "FAIL: synthesized 2nd-fob frame did not decode\n");
+                    fails++;
+                } else if(!strstr(s, needcnt)) {
+                    fprintf(stderr, "FAIL: synthesized frame Cnt != CNT+1 (%s)\n", needcnt);
+                    fails++;
+                } else if(!strstr(s, needser)) {
+                    fprintf(stderr, "FAIL: synthesized frame Serial drifted (want %s)\n", needser);
+                    fails++;
+                } else {
+                    printf("[encode] PASS: 2nd fob synthesized under the MATCHED key "
+                           "(A8F5DFFC), Serial preserved, Cnt rolled +1 -> car-acceptable, "
+                           "no desync\n");
+                }
+                furi_string_free(o2);
+                kia_protocol_v3_v4.decoder->free(dec2);
+            } else {
+                fprintf(stderr, "FAIL: encoder deserialize failed\n");
+                fails++;
+            }
+            if(kia_protocol_v3_v4.encoder->free) kia_protocol_v3_v4.encoder->free(enc);
+        }
+        flipper_format_free(ff);
+        furi_string_free(pn);
+    } else {
+        printf("[encode] SKIP: encoder not available in this build\n");
+    }
+#else
+    printf("[encode] SKIP: ENABLE_EMULATE_FEATURE not defined\n");
+#endif
+
     kia_protocol_v3_v4.decoder->free(dec);
 
     printf(fails ? "\n=== RESULT: FAIL (%d) ===\n" : "\n=== RESULT: PASS ===\n", fails);

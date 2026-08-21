@@ -13,7 +13,7 @@ INC="-I$HT/shim -I. \
   -Icomponents/flipper_format -Icomponents/toolbox -Icomponents/toolbox/stream \
   -Icomponents/furi -Icomponents/furi/core -Icomponents/mlib -Icomponents \
   -Ilib -Iapplications/main/subghz/helpers"
-DEFS="-D_ATTRIBUTE(x)=__attribute__(x)"
+DEFS="-D_ATTRIBUTE(x)=__attribute__(x) -DENABLE_EMULATE_FEATURE"
 
 SRC="$HT/test_kia_tryall.c \
   $LP/kia_v3_v4.c $LP/keys.c $LP/keeloq_common.c $LP/protocols_common.c"
