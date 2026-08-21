@@ -129,6 +129,11 @@ void* subghz_protocol_encoder_keeloq_alloc(SubGhzEnvironment* environment) {
     instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
     instance->encoder.is_running = false;
 
+    // Init so gen_data's `manufacture_name == 0x0` guard reliably catches the unset
+    // case (e.g. a no-desync clone .sub with no Manufacture field). Without this the
+    // malloc'd instance leaves a garbage pointer that the NULL check misses -> strcmp crash.
+    instance->manufacture_name = NULL;
+
     instance->manufacture_from_file = furi_string_alloc();
 
     instance->clone_active = false;
