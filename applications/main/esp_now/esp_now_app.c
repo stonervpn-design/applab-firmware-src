@@ -43,10 +43,11 @@ static EspNowApp* esp_now_app_alloc(void) {
     // Packet storage
     app->packet_capacity = ESP_NOW_PACKETS_MAX;
     app->packets = malloc(sizeof(EspNowPacket) * app->packet_capacity);
-    if(!app->packets) {
-        free(app);
-        return NULL;
-    }
+    /* OOM here previously freed only `app`, leaking the GUI record + scene_manager
+     * + view_dispatcher + submenu + widget, and returned NULL that esp_now_app()
+     * immediately dereferences. Fail as a clean panic instead, matching
+     * furi_check(app) above. */
+    furi_check(app->packets);
     app->packet_count = 0;
     app->last_displayed_count = 0;
     app->mutex = furi_mutex_alloc(FuriMutexTypeNormal);

@@ -517,7 +517,15 @@ bool ble_walk_hal_start(void) {
 
 void ble_walk_hal_stop(void) {
     if(!s_hal_started) {
-        return; // nothing to tear down (idempotent)
+        // Host never came up, but a prior start() may have allocated the device /
+        // characteristic tables before failing controller/host init and returning
+        // early. Release them here so a failed start the user backs out of doesn't
+        // leak until reboot. free(NULL) is safe, so this stays idempotent.
+        free(s_devices);
+        s_devices = NULL;
+        free(s_chars);
+        s_chars = NULL;
+        return; // nothing else to tear down
     }
     ESP_LOGI(TAG, "Stopping BLE Walk HAL...");
 

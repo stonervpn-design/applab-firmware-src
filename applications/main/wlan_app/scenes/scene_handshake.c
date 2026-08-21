@@ -497,9 +497,22 @@ static void hs_rx_callback_channel(void* buf, wifi_promiscuous_pkt_type_t type) 
         if(s_hsc_target_count >= HSC_MAX_TARGETS) {
             const uint8_t* bssid = &payload[16];
             bool known = false;
-            for(int i = 0; i < s_hsc_target_count; i++) {
-                if(memcmp(s_hsc_targets[i].bssid, bssid, 6) == 0) { known = true; break; }
+            /* Read the target table under the SAME lock on_exit uses to NULL + free
+             * it (the s_hs_pool_mux block in on_exit); the plain !s_hsc_targets check
+             * at the top of this callback is racy against teardown. Otherwise this
+             * in-flight promiscuous-RX callback can dereference a freed / NULL
+             * s_hsc_targets during scene exit. Compute `known` under the lock, then
+             * act on it AFTER releasing -- never return while holding the spinlock. */
+            portENTER_CRITICAL(&s_hs_pool_mux);
+            if(s_hsc_targets) {
+                for(int i = 0; i < s_hsc_target_count; i++) {
+                    if(memcmp(s_hsc_targets[i].bssid, bssid, 6) == 0) {
+                        known = true;
+                        break;
+                    }
+                }
             }
+            portEXIT_CRITICAL(&s_hs_pool_mux);
             if(!known) return;
         }
     } else if(frame_type == 2) {

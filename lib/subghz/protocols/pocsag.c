@@ -409,6 +409,7 @@ SubGhzProtocolStatus
         flipper_format_read_uint32(flipper_format, "PocsagVer", &instance->version, 1);
 
         buf = malloc(msg_len);
+        if(!buf) break; // OOM (e.g. crafted huge MsgLen) -> don't write into NULL
         if(!flipper_format_read_hex(flipper_format, "Msg", buf, msg_len)) {
             FURI_LOG_E(TAG, "Missing Msg");
             free(buf);
@@ -683,6 +684,7 @@ SubGhzProtocolStatus
         flipper_format_read_uint32(flipper_format, "PocsagVer", &version, 1); // optional
 
         buf = malloc(msg_len ? msg_len : 1);
+        if(!buf) break; // OOM (e.g. crafted huge MsgLen) -> don't write into NULL
         if(msg_len > 0) {
             flipper_format_rewind(flipper_format);
             if(!flipper_format_read_hex(flipper_format, "Msg", buf, msg_len)) {

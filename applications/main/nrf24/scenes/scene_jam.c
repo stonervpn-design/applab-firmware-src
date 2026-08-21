@@ -237,6 +237,11 @@ void nrf24_app_scene_jam_on_enter(void* context) {
     uint8_t saved_mode = 0, saved_pa = PA_MAX;
     uint16_t saved_dwell = 250;
     nrf24_settings_load(&saved_mode, &saved_dwell, &saved_pa);
+    /* Clamp the persisted mode to the count compiled into THIS build: the
+     * validator (nrf24_export.c) can't know the per-build ceiling, and a config
+     * carried from a PRIVATE build (or a hand-edited rflab.conf) can hold a mode
+     * that indexes past the smaller PUBLIC chans[] array in the jam worker. */
+    if(saved_mode >= NRF24_JAM_MODE_COUNT) saved_mode = 0;
     ctx->mode = saved_mode;
     ctx->saved_dwell = saved_dwell;
     ctx->pa_level = saved_pa;

@@ -885,7 +885,11 @@ SubGhzProtocolStatus
             instance->decrypted = temp;
         }
         if(flipper_format_read_uint32(flipper_format, "KIAVersion", &temp, 1)) {
-            instance->version = (uint8_t)temp;
+            /* Clamp the attacker-controlled .sub field to {0,1}: version indexes
+             * the 2-element kia_version_names[] in get_string(). Mirrors the
+             * encoder guard so a crafted "KIAVersion: 200" can't drive an
+             * out-of-bounds read. */
+            instance->version = ((uint8_t)temp <= 1) ? (uint8_t)temp : 0;
         }
         if(flipper_format_read_uint32(flipper_format, "CRC", &temp, 1)) {
             instance->crc = (uint8_t)temp;
@@ -920,7 +924,7 @@ void kia_protocol_decoder_v3_v4_get_string(void* context, FuriString* output) {
         "Yek:%08lX%08lX\r\n"
         "Serial:%07lX Btn:%01X\r\n"
         "Cnt:%04lX CRC:%01X\r\n",
-        kia_version_names[instance->version],
+        kia_version_names[instance->version & 1], /* defense-in-depth: bound to 2-elem array */
         instance->generic.data_count_bit,
         key_hi,
         key_lo,
