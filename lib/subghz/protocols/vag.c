@@ -189,6 +189,25 @@ typedef struct SubGhzProtocolDecoderVAG {
     uint8_t check_byte;
     uint8_t key_idx;
     bool decrypted;
+
+    // Snapshot of the last SUCCESSFULLY-DECRYPTED frame. In a multi-frame capture
+    // the live registers keep mutating after a good decode -- in particular
+    // vag_type is reset to 0 the moment the next frame's preamble begins, and a
+    // trailing partial frame can overwrite key1/key2 -- so a serialize()/
+    // get_string() that read the live state could emit an inconsistent frame
+    // (e.g. Type=0 with a real Key1/Key2), which then re-encodes to the wrong
+    // framing and cannot be emulated. Committing at decrypt time and reading the
+    // snapshot keeps save + emulate consistent with what was actually decoded.
+    bool committed;
+    uint8_t committed_type;
+    uint8_t committed_key_idx;
+    uint32_t committed_key1_low;
+    uint32_t committed_key1_high;
+    uint32_t committed_key2_low;
+    uint16_t committed_data_count_bit;
+    uint32_t committed_serial;
+    uint32_t committed_cnt;
+    uint8_t committed_btn;
 } SubGhzProtocolDecoderVAG;
 
 typedef enum {
@@ -533,6 +552,39 @@ static void vag_parse_data(SubGhzProtocolDecoderVAG* instance) {
     FURI_LOG_W(TAG, "VAG decryption failed for type %d", instance->vag_type);
 }
 
+// Freeze the just-decrypted frame so later frames in the same capture can't
+// corrupt what gets displayed/saved. Call ONLY when instance->decrypted is true.
+static void vag_commit_snapshot(SubGhzProtocolDecoderVAG* instance) {
+    instance->committed = true;
+    instance->committed_type = instance->vag_type;
+    instance->committed_key_idx = instance->key_idx;
+    instance->committed_key1_low = instance->key1_low;
+    instance->committed_key1_high = instance->key1_high;
+    instance->committed_key2_low = instance->key2_low;
+    instance->committed_data_count_bit = instance->data_count_bit;
+    instance->committed_serial = instance->serial;
+    instance->committed_cnt = instance->cnt;
+    instance->committed_btn = instance->btn;
+}
+
+// Restore the committed snapshot into the live fields so serialize()/get_string()
+// operate on a consistent, re-encodable frame. No-op if nothing was committed
+// (e.g. a freshly-deserialized instance, which already holds file-loaded values).
+static void vag_restore_committed(SubGhzProtocolDecoderVAG* instance) {
+    if(!instance->committed) return;
+    instance->vag_type = instance->committed_type;
+    instance->key_idx = instance->committed_key_idx;
+    instance->key1_low = instance->committed_key1_low;
+    instance->key1_high = instance->committed_key1_high;
+    instance->key2_low = instance->committed_key2_low;
+    instance->key2_high = 0;
+    instance->data_count_bit = instance->committed_data_count_bit;
+    instance->serial = instance->committed_serial;
+    instance->cnt = instance->committed_cnt;
+    instance->btn = instance->committed_btn;
+    instance->decrypted = true;
+}
+
 const SubGhzProtocolDecoder subghz_protocol_vag_decoder = {
     .alloc = subghz_protocol_decoder_vag_alloc,
     .free = pp_decoder_free_default,
@@ -589,6 +641,7 @@ void subghz_protocol_decoder_vag_reset(void* context) {
     SubGhzProtocolDecoderVAG* instance = context;
     instance->decoder.parser_step = VAGDecoderStepReset;
     instance->decrypted = false;
+    instance->committed = false;
 
     /* Reset decoder state to avoid stale parsing after external resets */
     instance->data_low = 0;
@@ -715,6 +768,7 @@ void subghz_protocol_decoder_vag_feed(void* context, bool level, uint32_t durati
                 (unsigned int)(instance->key2_low & 0xFFFF),
                 instance->vag_type);
             vag_parse_data(instance);
+            if(instance->decrypted) vag_commit_snapshot(instance);
             // Only surface a cryptographically-valid decode. A non-decrypted
             // (noisy/mis-aligned) frame previously still fired the callback and
             // got saved with a corrupt Key2 -- that is the "second key comes
@@ -831,6 +885,7 @@ void subghz_protocol_decoder_vag_feed(void* context, bool level, uint32_t durati
             (unsigned int)(instance->key2_low & 0xFFFF),
             instance->vag_type);
         vag_parse_data(instance);
+        if(instance->decrypted) vag_commit_snapshot(instance);
         // Only surface a cryptographically-valid decode (see note above).
         if(instance->decrypted && instance->base.callback) {
             instance->base.callback(&instance->base, instance->base.context);
@@ -869,6 +924,11 @@ SubGhzProtocolStatus subghz_protocol_decoder_vag_serialize(
     SubGhzRadioPreset* preset) {
     furi_check(context);
     SubGhzProtocolDecoderVAG* instance = context;
+
+    // Serialize the committed frame, not the possibly-mutated live decoder state:
+    // vag_type in particular is reset to 0 once the next frame's preamble starts,
+    // which would otherwise save Type=0 and make the frame un-emulatable.
+    vag_restore_committed(instance);
 
     FURI_LOG_I(TAG, "=== VAG SERIALIZE START ===");
     FURI_LOG_I(
@@ -1270,6 +1330,9 @@ static void vag_encoder_build_type_3_4(SubGhzProtocolEncoderVAG* instance) {
 void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderVAG* instance = context;
+
+    // Show the committed frame so the displayed fields match what will be saved.
+    vag_restore_committed(instance);
 
     if(!instance->decrypted && instance->data_count_bit >= 80) {
         vag_parse_data(instance);
