@@ -13,9 +13,9 @@ set -e
 # ESP-IDF xtensa toolchain would be "not found". If it isn't already on PATH,
 # auto-locate the standard ESP-IDF install under ~/.espressif (pure-bash paths,
 # avoiding the MSYS env-var path-conversion that mangles an injected Windows path).
-if ! command -v xtensa-esp32s3-elf-gcc >/dev/null 2>&1; then
+if ! command -v xtensa-esp-elf-gcc >/dev/null 2>&1; then
     for _tc in "$HOME/.espressif/tools/xtensa-esp-elf"/*/xtensa-esp-elf/bin; do
-        [ -x "$_tc/xtensa-esp32s3-elf-gcc.exe" ] && { export PATH="$_tc:$PATH"; break; }
+        [ -x "$_tc/xtensa-esp-elf-gcc.exe" ] && { export PATH="$_tc:$PATH"; break; }
     done
 fi
 
@@ -81,9 +81,9 @@ FAP_FILENAME="${APP_ID}.fap"
 # ── Target definitions ──────────────────────────────────────────────
 #           BOARD_NAME              IDF_TARGET  TOOLCHAIN_PREFIX        BUILD_DIR
 TARGETS=(
-    "m5stack_cardputer_adv      esp32s3     xtensa-esp32s3-elf      build_cardputer_adv"
-    "lilygo_t_embed_cc1101      esp32s3     xtensa-esp32s3-elf      build_t_embed"
-    "m5stick_s3                 esp32s3     xtensa-esp32s3-elf      build_m5stick_s3_public"
+    "m5stack_cardputer_adv      esp32s3     xtensa-esp-elf      build_cardputer_adv"
+    "lilygo_t_embed_cc1101      esp32s3     xtensa-esp-elf      build_t_embed"
+    "m5stick_s3                 esp32s3     xtensa-esp-elf      build_m5stick_s3_public"
 #    "waveshare_c6_1.9           esp32c6     riscv32-esp-elf         build_waveshare_c6"
 )
 
