@@ -50,6 +50,7 @@
 #include <furi_hal_display.h>
 #include <furi_hal_spi_bus.h>
 #include <gui/gui.h>
+#include <gui/canvas.h>
 #include <input/input.h>
 
 #include <esp_lcd_panel_ops.h>
@@ -325,9 +326,14 @@ void nrf24_app_scene_fusion_spectrum_on_enter(void* context) {
     if(!ctx->wf_backing) goto fail;
     nrf24_wf_init(&ctx->wf, ctx->wf_backing, NRF24_FUSION_CH, WF_ROWS);
 
-    /* display takeover */
-    gui_direct_draw_acquire(app->gui);
+    /* display takeover. Clear the whole panel ONCE through the proven canvas
+     * commit path (it handles the ST7789 gap/swap/margins that our raw esp_lcd
+     * draws do not), so no stale content from the previous mono scene is left
+     * in any region the raw color render never paints (was: garbled strip). */
+    Canvas* dd_canvas = gui_direct_draw_acquire(app->gui);
     dd_acquired = true;
+    canvas_reset(dd_canvas);
+    canvas_commit(dd_canvas);
     ctx->panel = furi_hal_display_get_panel_handle();
     ctx->h_res = furi_hal_display_get_h_res();
     ctx->v_res = furi_hal_display_get_v_res();

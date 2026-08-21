@@ -13,6 +13,7 @@ typedef struct {
     volatile bool stop;
     volatile uint16_t dwell_us;
     uint8_t saved_mode; /* jam mode as loaded from shared settings; passed back unchanged on save */
+    uint8_t saved_pa; /* PA level as loaded from shared settings; passed back unchanged on save */
 } Nrf24SpectrumCtx;
 
 static Nrf24SpectrumCtx* g_ctx = NULL;
@@ -95,11 +96,12 @@ void nrf24_app_scene_spectrum_on_enter(void* context) {
     if(!ctx) return;
     ctx->app = app;
     ctx->stop = false;
-    uint8_t saved_mode = 0;
+    uint8_t saved_mode = 0, saved_pa = 3;
     uint16_t saved_dwell = 250;
-    nrf24_settings_load(&saved_mode, &saved_dwell);
+    nrf24_settings_load(&saved_mode, &saved_dwell, &saved_pa);
     ctx->dwell_us = saved_dwell;
     ctx->saved_mode = saved_mode;
+    ctx->saved_pa = saved_pa;
     g_ctx = ctx;
 
     with_view_model(
@@ -192,7 +194,7 @@ void nrf24_app_scene_spectrum_on_exit(void* context) {
     g_ctx->stop = true;
     furi_thread_join(g_ctx->worker);
     furi_thread_free(g_ctx->worker);
-    nrf24_settings_save(g_ctx->saved_mode, g_ctx->dwell_us);
+    nrf24_settings_save(g_ctx->saved_mode, g_ctx->dwell_us, g_ctx->saved_pa);
     free(g_ctx);
     g_ctx = NULL;
 }

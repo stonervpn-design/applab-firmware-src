@@ -53,12 +53,12 @@ bool nrf24_export_scan(const uint8_t* levels, uint8_t n) {
     return ok;
 }
 
-bool nrf24_settings_load(uint8_t* jam_mode, uint16_t* dwell_us) {
+bool nrf24_settings_load(uint8_t* jam_mode, uint16_t* dwell_us, uint8_t* pa_level) {
     Storage* st = furi_record_open(RECORD_STORAGE);
     FlipperFormat* ff = flipper_format_file_alloc(st);
     FuriString* t = furi_string_alloc();
     bool ok = false;
-    uint32_t ver = 0, mode = 0, dwell = 0;
+    uint32_t ver = 0, mode = 0, dwell = 0, pa = 3; /* pa default Max */
     do {
         if(!flipper_format_file_open_existing(ff, NRF24_CONF)) break;
         if(!flipper_format_read_header(ff, t, &ver)) break;
@@ -66,15 +66,19 @@ bool nrf24_settings_load(uint8_t* jam_mode, uint16_t* dwell_us) {
         if(!flipper_format_read_uint32(ff, "Mode", &mode, 1)) break;
         if(!flipper_format_read_uint32(ff, "Dwell", &dwell, 1)) break;
         ok = nrf24_settings_validate(mode, dwell, jam_mode, dwell_us);
+        /* PaLevel is optional (older configs lack it): on a missing key or an
+         * out-of-range value, fall back to Max. Does not affect `ok`. */
+        if(!flipper_format_read_uint32(ff, "PaLevel", &pa, 1) || pa > 3) pa = 3;
     } while(0);
     if(!ok) { *jam_mode = 0; *dwell_us = 250; }
+    *pa_level = (uint8_t)pa;
     furi_string_free(t);
     flipper_format_free(ff);
     furi_record_close(RECORD_STORAGE);
     return ok;
 }
 
-bool nrf24_settings_save(uint8_t jam_mode, uint16_t dwell_us) {
+bool nrf24_settings_save(uint8_t jam_mode, uint16_t dwell_us, uint8_t pa_level) {
     Storage* st = furi_record_open(RECORD_STORAGE);
     storage_simply_mkdir(st, NRF24_DIR);
     FlipperFormat* ff = flipper_format_file_alloc(st);
@@ -85,6 +89,8 @@ bool nrf24_settings_save(uint8_t jam_mode, uint16_t dwell_us) {
         if(!flipper_format_write_header_cstr(ff, NRF24_FILETYPE, 1)) break;
         v = jam_mode; if(!flipper_format_write_uint32(ff, "Mode", &v, 1)) break;
         v = dwell_us; if(!flipper_format_write_uint32(ff, "Dwell", &v, 1)) break;
+        v = (pa_level > 3) ? 3 : pa_level;
+        if(!flipper_format_write_uint32(ff, "PaLevel", &v, 1)) break;
         ok = true;
     } while(0);
     flipper_format_free(ff);

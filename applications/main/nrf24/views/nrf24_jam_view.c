@@ -25,6 +25,11 @@ const char* nrf24_jam_mode_name(int mode) {
     return MODE_NAMES[(mode >= 0 && mode < NRF24_JAM_MODE_COUNT) ? mode : 0];
 }
 
+const char* nrf24_jam_pa_name(uint8_t pa_level) {
+    static const char* const N[4] = {"Min", "Low", "High", "Max"};
+    return N[pa_level & 0x03];
+}
+
 bool nrf24_jam_mode_is_flood(int mode) {
     return mode == 0 || mode == 4; /* WiFi (OFDM), Zigbee (DSSS) -> noise flood */
 }
@@ -47,6 +52,11 @@ static void nrf24_jam_draw_callback(Canvas* canvas, void* _model) {
     canvas_set_font(canvas, FontPrimary);
     canvas_draw_str(canvas, 2, 10, "nRF24 Jammer");
     canvas_set_font(canvas, FontSecondary);
+
+    /* Current PA level, top-right, always visible. */
+    char pa[16];
+    snprintf(pa, sizeof(pa), "PA:%s", nrf24_jam_pa_name(model->pa_level));
+    canvas_draw_str_aligned(canvas, 126, 10, AlignRight, AlignBottom, pa);
 
     if(!model->hardware_ok) {
         canvas_draw_str(canvas, 2, 34, "NO nRF24 MODULE!");
@@ -76,7 +86,7 @@ static void nrf24_jam_draw_callback(Canvas* canvas, void* _model) {
     }
 
     canvas_draw_str(
-        canvas, 2, 63, model->running ? "* JAMMING   OK:stop" : "Down:pick   OK:jam");
+        canvas, 2, 63, model->running ? "*JAM OK:stop  L/R:PA" : "Dn:mode OK:jam L/R:PA");
 }
 
 static bool nrf24_jam_input_callback(InputEvent* event, void* context) {
@@ -92,6 +102,12 @@ static bool nrf24_jam_input_callback(InputEvent* event, void* context) {
         return true;
     case InputKeyUp:
         view_dispatcher_send_custom_event(vd, Nrf24JamEventPrev);
+        return true;
+    case InputKeyLeft:
+        view_dispatcher_send_custom_event(vd, Nrf24JamEventPaDown);
+        return true;
+    case InputKeyRight:
+        view_dispatcher_send_custom_event(vd, Nrf24JamEventPaUp);
         return true;
     default:
         return false; /* Back falls through to view_dispatcher nav (pops scene) */

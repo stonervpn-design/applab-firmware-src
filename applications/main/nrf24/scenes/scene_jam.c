@@ -43,6 +43,7 @@ typedef struct {
     volatile bool stop;
     volatile bool desired_running;
     volatile int mode;
+    volatile uint8_t pa_level; /* nRF24 RF_PWR 0..3 (Min/Low/High/Max), live-adjustable */
     uint16_t saved_dwell; /* dwell as loaded from shared settings; passed back unchanged on save */
 } JamCtx;
 
@@ -115,6 +116,7 @@ static int32_t jam_worker(void* context) {
     uint32_t hz = furi_kernel_get_tick_frequency();
     bool active = false, cur_flood = false, cur_reactive = false;
     int cur = -1;
+    uint8_t cur_pa = 0xFF; /* forces a (re)start when pa_level is first applied or changed live */
     size_t i = 0;
 
     while(!ctx->stop) {
@@ -124,7 +126,7 @@ static int32_t jam_worker(void* context) {
         bool flood = nrf24_jam_mode_is_flood(mi);
         bool reactive = nrf24_jam_mode_is_reactive(mi);
 
-        if(want && (!active || mi != cur)) {
+        if(want && (!active || mi != cur || ctx->pa_level != cur_pa)) {
             nrf24_hw_acquire();
             if(active) {
                 if(cur_reactive) {
@@ -142,14 +144,31 @@ static int32_t jam_worker(void* context) {
                  * don't key a stray carrier before the reactive loop takes over. */
             } else {
                 uint8_t ch0 = m->count ? m->list[0] : 0;
-                if(flood) nrf24_hw_flood_start_ex(ch0, RATE_2M, PA_MAX);
-                else nrf24_hw_jammer_start_ex(ch0, PA_MAX);
+                uint8_t pa = ctx->pa_level; /* live-selected PA level */
+                if(flood) nrf24_hw_flood_start_ex(ch0, RATE_2M, pa);
+                else nrf24_hw_jammer_start_ex(ch0, pa);
+                /* --- TEMP DIAGNOSTIC (weak-RF debug) — remove after root cause.
+                 * Dumps what the TX path actually programmed. Expected for a
+                 * genuine nRF24L01+ CW jammer: Pvar=1 RF_SETUP=0x9F (CONT_WAVE|
+                 * PLL|2M|PA_MAX|LNA) CONFIG has PWR_UP(0x02). A wrong Pvar or an
+                 * RF_SETUP missing CONT_WAVE(0x80)/PA_MAX(0x06) => the bug. */
+                FURI_LOG_I(
+                    TAG,
+                    "JAMDIAG mode=%d flood=%d Pvar=%d rate=%u RF_SETUP=0x%02X CONFIG=0x%02X ch0=%u",
+                    mi,
+                    (int)flood,
+                    (int)nrf24_hw_is_p_variant(),
+                    nrf24_hw_last_data_rate(),
+                    nrf24_hw_read_rf_setup(),
+                    nrf24_hw_read_config(),
+                    (unsigned)ch0);
             }
             nrf24_hw_release();
             active = true;
             cur = mi;
             cur_flood = flood;
             cur_reactive = reactive;
+            cur_pa = ctx->pa_level;
             i = 0;
         } else if(!want && active) {
             nrf24_hw_acquire();
@@ -215,11 +234,12 @@ void nrf24_app_scene_jam_on_enter(void* context) {
     ctx->app = app;
     ctx->stop = false;
     ctx->desired_running = false;
-    uint8_t saved_mode = 0;
+    uint8_t saved_mode = 0, saved_pa = PA_MAX;
     uint16_t saved_dwell = 250;
-    nrf24_settings_load(&saved_mode, &saved_dwell);
+    nrf24_settings_load(&saved_mode, &saved_dwell, &saved_pa);
     ctx->mode = saved_mode;
     ctx->saved_dwell = saved_dwell;
+    ctx->pa_level = saved_pa;
     g_ctx = ctx;
 
     with_view_model(
@@ -229,6 +249,7 @@ void nrf24_app_scene_jam_on_enter(void* context) {
             model->mode = saved_mode;
             model->running = false;
             model->hardware_ok = true;
+            model->pa_level = saved_pa;
         },
         true);
 
@@ -263,6 +284,18 @@ bool nrf24_app_scene_jam_on_event(void* context, SceneManagerEvent event) {
         with_view_model(app->jam_view, Nrf24JamModel * m, { m->mode = nm; }, true);
         return true;
     }
+    case Nrf24JamEventPaDown: {
+        uint8_t pa = g_ctx->pa_level ? (uint8_t)(g_ctx->pa_level - 1) : 0;
+        g_ctx->pa_level = pa; /* worker re-keys the carrier at the new level (live) */
+        with_view_model(app->jam_view, Nrf24JamModel * m, { m->pa_level = pa; }, true);
+        return true;
+    }
+    case Nrf24JamEventPaUp: {
+        uint8_t pa = (g_ctx->pa_level < 3) ? (uint8_t)(g_ctx->pa_level + 1) : 3;
+        g_ctx->pa_level = pa; /* worker re-keys the carrier at the new level (live) */
+        with_view_model(app->jam_view, Nrf24JamModel * m, { m->pa_level = pa; }, true);
+        return true;
+    }
     default:
         return false;
     }
@@ -275,7 +308,7 @@ void nrf24_app_scene_jam_on_exit(void* context) {
     g_ctx->stop = true;
     furi_thread_join(g_ctx->worker);
     furi_thread_free(g_ctx->worker);
-    nrf24_settings_save((uint8_t)g_ctx->mode, g_ctx->saved_dwell);
+    nrf24_settings_save((uint8_t)g_ctx->mode, g_ctx->saved_dwell, g_ctx->pa_level);
     free(g_ctx);
     g_ctx = NULL;
 }

@@ -15,13 +15,19 @@ typedef struct {
     int mode; /* 0..NRF24_JAM_MODE_COUNT-1, selected/active mode */
     bool running; /* currently jamming */
     bool hardware_ok;
+    uint8_t pa_level; /* nRF24 RF_PWR 0..3 (Min/Low/High/Max) */
 } Nrf24JamModel;
 
 typedef enum {
     Nrf24JamEventToggle = 1, /* OK: start / stop */
     Nrf24JamEventNext, /* Down: next mode (live) */
     Nrf24JamEventPrev, /* Up: previous mode (Cardputer only; StickS3 has no Up) */
+    Nrf24JamEventPaDown, /* Left: lower PA level (live) */
+    Nrf24JamEventPaUp, /* Right: raise PA level (live) */
 } Nrf24JamEvent;
+
+/* PA level label (0..3 -> Min/Low/High/Max). */
+const char* nrf24_jam_pa_name(uint8_t pa_level);
 
 /* Shared mode metadata (single source of truth for view + worker). */
 const char* nrf24_jam_mode_name(int mode);
