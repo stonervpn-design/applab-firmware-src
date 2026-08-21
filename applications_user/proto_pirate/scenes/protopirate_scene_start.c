@@ -10,6 +10,7 @@ typedef enum {
     SubmenuIndexProtoPirateReceiver,
     SubmenuIndexProtoPirateSaved,
     SubmenuIndexProtoPirateReceiverConfig,
+    SubmenuIndexProtoPirateCarPicker,
 #ifdef ENABLE_SUB_DECODE_SCENE
     SubmenuIndexProtoPirateSubDecode,
 #endif
@@ -49,6 +50,13 @@ void protopirate_scene_start_on_enter(void* context) {
         app->submenu,
         "Configuration",
         SubmenuIndexProtoPirateReceiverConfig,
+        protopirate_scene_start_submenu_callback,
+        app);
+
+    submenu_add_item(
+        app->submenu,
+        "Car Presets",
+        SubmenuIndexProtoPirateCarPicker,
         protopirate_scene_start_submenu_callback,
         app);
 #ifdef ENABLE_SUB_DECODE_SCENE
@@ -98,6 +106,9 @@ bool protopirate_scene_start_on_event(void* context, SceneManagerEvent event) {
             consumed = true;
         } else if(event.event == SubmenuIndexProtoPirateReceiverConfig) {
             scene_manager_next_scene(app->scene_manager, ProtoPirateSceneReceiverConfig);
+            consumed = true;
+        } else if(event.event == SubmenuIndexProtoPirateCarPicker) {
+            scene_manager_next_scene(app->scene_manager, ProtoPirateSceneCarPicker);
             consumed = true;
         }
 #ifdef ENABLE_SUB_DECODE_SCENE
