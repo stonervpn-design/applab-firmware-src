@@ -207,6 +207,13 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
             SubGhzViewIdFrequencyAnalyzer,
             subghz_frequency_analyzer_get_view(subghz->subghz_frequency_analyzer));
 
+        // Fob Analyzer (frequency + modulation + TE)
+        subghz->subghz_fob_analyzer = subghz_fob_analyzer_alloc(subghz->txrx);
+        view_dispatcher_add_view(
+            subghz->view_dispatcher,
+            SubGhzViewIdFobAnalyzer,
+            subghz_fob_analyzer_get_view(subghz->subghz_fob_analyzer));
+
         // KeeLoq Fob
         subghz->subghz_keeloq_fob = subghz_keeloq_fob_alloc();
         view_dispatcher_add_view(
@@ -408,6 +415,9 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
         // Frequency Analyzer
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFrequencyAnalyzer);
         subghz_frequency_analyzer_free(subghz->subghz_frequency_analyzer);
+
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFobAnalyzer);
+        subghz_fob_analyzer_free(subghz->subghz_fob_analyzer);
 
         // KeeLoq Fob
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdKeeloqFob);

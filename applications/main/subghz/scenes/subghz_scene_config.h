@@ -12,6 +12,7 @@ ADD_SCENE(subghz, psa_bruteforce, PsaBruteforce)
 ADD_SCENE(subghz, rollback_capture, RollbackCapture)
 ADD_SCENE(subghz, rollback_replay, RollbackReplay)
 ADD_SCENE(subghz, hitag2_forge, Hitag2Forge)
+ADD_SCENE(subghz, keeloq_instant, KeeloqInstant)
 #endif
 ADD_SCENE(subghz, protoview, Protoview)
 ADD_SCENE(subghz, save_name, SaveName)
@@ -39,6 +40,7 @@ ADD_SCENE(subghz, keeloq_console, KeeloqConsole)
 #endif
 ADD_SCENE(subghz, set_seed, SetSeed)
 ADD_SCENE(subghz, frequency_analyzer, FrequencyAnalyzer)
+ADD_SCENE(subghz, fob_analyzer, FobAnalyzer)
 #ifndef PUBLIC_BUILD
 ADD_SCENE(subghz, spectrum, Spectrum)
 #endif

@@ -75,6 +75,9 @@ typedef enum {
     SubGhzCustomEventSceneRollingAnalyzerNext, /* keyless-predictable fob -> synthesize next code */
     SubGhzCustomEventSceneRollingAnalyzerBurst, /* -> next N consecutive codes in one action */
     SubGhzCustomEventSceneRollingAnalyzerForge, /* Hitag2 -> known-key counter-recovery + forge */
+    SubGhzCustomEventSceneHitag2ForgeDone, /* Hitag2 forge: off-thread counter recovery finished */
+    SubGhzCustomEventSceneRollingAnalyzerInstant, /* KeeLoq known-key -> instant-unlock next code */
+    SubGhzCustomEventSceneKeeloqInstantSend, /* KeeLoq instant-unlock preview -> TX next code */
 
     SubGhzCustomEventSceneRollbackUpdate,
     SubGhzCustomEventSceneRollbackDone,

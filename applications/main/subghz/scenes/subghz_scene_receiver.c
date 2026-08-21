@@ -6,6 +6,7 @@
 #endif
 #include <dolphin/dolphin.h>
 #include <lib/subghz/protocols/bin_raw.h>
+#include <lib/subghz/protocols/base.h>
 #include "../helpers/subghz_capture_quality.h"
 
 #define TAG "SubGhzSceneReceiver"
@@ -130,13 +131,21 @@ static void subghz_scene_add_to_history_callback(
         FuriString* item_name = furi_string_alloc();
         FuriString* item_time = furi_string_alloc();
 
-        // --- dedup: score this decode and decide keep/replace/suppress ---
+        // --- dedup: identify this decode by protocol + payload, decide keep/replace/suppress ---
         const char* proto_name = decoder_base->protocol->name;
         uint16_t bit_count = 0; // no generic bit-count accessor; tier handles disambiguation
         uint16_t score = subghz_decode_dedup_score(proto_name, bit_count);
         uint32_t now = furi_get_tick();
-        SubGhzDedupAction act =
-            subghz_decode_dedup_decide(&subghz->dedup, proto_name, score, now);
+        // Payload identity: serialize the decoded frame to text and hash it. A rolling code
+        // or a different button yields different text (different hash); a fob resending one
+        // frame yields the same hash. This is the primary dedup key; score is only a fallback.
+        FuriString* payload_str = furi_string_alloc();
+        bool hash_valid = subghz_protocol_decoder_base_get_string(decoder_base, payload_str);
+        uint32_t payload_hash =
+            hash_valid ? subghz_decode_dedup_hash(furi_string_get_cstr(payload_str)) : 0;
+        furi_string_free(payload_str);
+        SubGhzDedupAction act = subghz_decode_dedup_decide(
+            &subghz->dedup, proto_name, score, payload_hash, hash_valid, now);
 
         if(act == SubGhzDedupSuppress) {
             subghz_receiver_reset(receiver);
@@ -203,8 +212,9 @@ static void subghz_scene_add_to_history_callback(
             }
 #endif
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateAddKey);
-            // record what we committed so the next in-window decode can compare
-            subghz_decode_dedup_commit(&subghz->dedup, proto_name, score, now, idx);
+            // record what we committed so the next decode can compare payload identity
+            subghz_decode_dedup_commit(
+                &subghz->dedup, proto_name, score, payload_hash, hash_valid, now, idx);
         } else {
             // add failed (low heap / history full): drop dedup state so a later
             // Replace can never reuse a now-stale last_history_idx.

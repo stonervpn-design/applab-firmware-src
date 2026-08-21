@@ -27,6 +27,21 @@ void subghz_decode_dedup_reset(SubGhzDecodeDedup* d) {
     d->last_score = 0;
     d->last_tick = 0;
     d->last_history_idx = -1;
+    d->last_hash = 0;
+    d->last_hash_valid = false;
+}
+
+uint32_t subghz_decode_dedup_hash(const char* s) {
+    // FNV-1a 32-bit. Only used to compare a decode against the immediately-previous
+    // one, so collision resistance is a non-issue; identical payload text -> identical hash.
+    uint32_t h = 2166136261u;
+    if(s) {
+        for(; *s; s++) {
+            h ^= (uint8_t)*s;
+            h *= 16777619u;
+        }
+    }
+    return h;
 }
 
 uint16_t subghz_decode_dedup_score(const char* protocol_name, uint16_t bit_count) {
@@ -38,14 +53,38 @@ uint16_t subghz_decode_dedup_score(const char* protocol_name, uint16_t bit_count
 }
 
 SubGhzDedupAction subghz_decode_dedup_decide(
-    SubGhzDecodeDedup* d, const char* protocol_name, uint16_t score, uint32_t now_tick) {
-    if(d->last_history_idx >= 0 && (now_tick - d->last_tick) <= SUBGHZ_DEDUP_WINDOW_MS) {
+    SubGhzDecodeDedup* d, const char* protocol_name, uint16_t score,
+    uint32_t payload_hash, bool hash_valid, uint32_t now_tick) {
+    if(d->last_history_idx < 0) return SubGhzDedupAdd; // nothing to compare against
+
+    bool same_protocol = protocol_name && d->last_protocol &&
+                         strcmp(protocol_name, d->last_protocol) == 0;
+
+    // PRIMARY key: payload identity. A new item is a duplicate only when it is the same
+    // protocol AND the same decoded payload as the immediately-previous accepted item.
+    // A rolling code advances its counter every press, so its payload hash differs —
+    // that is a genuinely different press and is always kept.
+    if(hash_valid && d->last_hash_valid) {
+        if(same_protocol && payload_hash == d->last_hash) {
+            // Identical frame. A fob resends one frame several times per press: inside the
+            // guard window that is the same press repeating -> suppress. Past the window a
+            // repeat of an identical fixed code is a deliberate new press -> keep it.
+            return ((now_tick - d->last_tick) <= SUBGHZ_DEDUP_SAME_PAYLOAD_WINDOW_MS)
+                       ? SubGhzDedupSuppress
+                       : SubGhzDedupAdd;
+        }
+        // Payload differs -> a new / rolling press. Keep both regardless of the window.
+        return SubGhzDedupAdd;
+    }
+
+    // SECONDARY fallback: payload identity unavailable (a decoder without get_string).
+    // Fall back to the original score-tier heuristic within the short burst window so a
+    // loose low-tier re-decode of one signal still collapses into the better result.
+    if((now_tick - d->last_tick) <= SUBGHZ_DEDUP_WINDOW_MS) {
         // Two DIFFERENT high-confidence protocols (score >= 3000 == the specific/rolling/
         // checksum-validated k_high tier) inside the burst window are almost certainly two
-        // distinct transmissions, not one signal double-decoded — keep both. A loose
-        // (lower-tier) decoder grabbing the same signal still collapses via the score check.
-        if(protocol_name && d->last_protocol && strcmp(protocol_name, d->last_protocol) != 0 &&
-           score >= 3000 && d->last_score >= 3000) {
+        // distinct transmissions, not one signal double-decoded — keep both.
+        if(!same_protocol && score >= 3000 && d->last_score >= 3000) {
             return SubGhzDedupAdd;
         }
         return (score > d->last_score) ? SubGhzDedupReplace : SubGhzDedupSuppress;
@@ -55,9 +94,11 @@ SubGhzDedupAction subghz_decode_dedup_decide(
 
 void subghz_decode_dedup_commit(
     SubGhzDecodeDedup* d, const char* protocol_name, uint16_t score,
-    uint32_t now_tick, int32_t history_idx) {
+    uint32_t payload_hash, bool hash_valid, uint32_t now_tick, int32_t history_idx) {
     d->last_protocol = protocol_name;
     d->last_score = score;
     d->last_tick = now_tick;
     d->last_history_idx = history_idx;
+    d->last_hash = payload_hash;
+    d->last_hash_valid = hash_valid;
 }

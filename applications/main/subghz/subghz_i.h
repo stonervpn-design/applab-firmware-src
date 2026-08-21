@@ -7,6 +7,7 @@
 #include "views/receiver.h"
 #include "views/transmitter.h"
 #include "views/subghz_frequency_analyzer.h"
+#include "views/subghz_fob_analyzer.h"
 #include "views/subghz_read_raw.h"
 #include "views/subghz_jammer.h"
 #include "views/subghz_playlist.h"
@@ -92,6 +93,7 @@ struct SubGhz {
     VariableItemList* variable_item_list;
 
     SubGhzFrequencyAnalyzer* subghz_frequency_analyzer;
+    SubGhzFobAnalyzer* subghz_fob_analyzer;
     SubGhzReadRAW* subghz_read_raw;
     SubGhzJammer* subghz_jammer;
     SubGhzKeeloqFob* subghz_keeloq_fob;

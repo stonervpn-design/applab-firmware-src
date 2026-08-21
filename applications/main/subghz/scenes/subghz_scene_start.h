@@ -6,6 +6,7 @@ enum SubmenuIndex {
     SubmenuIndexAddManually,
     SubmenuIndexAddManuallyAdvanced,
     SubmenuIndexFrequencyAnalyzer,
+    SubmenuIndexFobAnalyzer,
     SubmenuIndexReadRAW,
     SubmenuIndexJammer,
     SubmenuIndexBruteforce,

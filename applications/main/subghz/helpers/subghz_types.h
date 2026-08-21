@@ -76,6 +76,7 @@ typedef enum {
     SubGhzViewIdTransmitter,
     SubGhzViewIdVariableItemList,
     SubGhzViewIdFrequencyAnalyzer,
+    SubGhzViewIdFobAnalyzer,
     SubGhzViewIdReadRAW,
     SubGhzViewIdJammer,
     SubGhzViewIdPlaylist,

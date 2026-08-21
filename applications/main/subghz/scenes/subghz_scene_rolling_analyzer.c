@@ -186,6 +186,21 @@ static void subghz_scene_rolling_analyzer_hitag2_button_callback(
     }
 }
 
+// KeeLoq "Unlock" button (Left): route to the known-key instant-unlock scene. Kept
+// on the Left slot so it co-exists with the KeeLoq clone callback's Center "Clone"
+// and Right "Save" on the same capture.
+static void subghz_scene_rolling_analyzer_instant_button_callback(
+    GuiButtonType result,
+    InputType type,
+    void* context) {
+    furi_assert(context);
+    SubGhz* subghz = context;
+    if((result == GuiButtonTypeLeft) && (type == InputTypeShort)) {
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventSceneRollingAnalyzerInstant);
+    }
+}
+
 void subghz_scene_rolling_analyzer_on_enter(void* context) {
     SubGhz* subghz = context;
 
@@ -282,6 +297,16 @@ void subghz_scene_rolling_analyzer_on_enter(void* context) {
     // no collision risk (unlike receiver-info's widget, whose Left/Center/Right
     // are already spoken for by ID/Send/Save on every KeeLoq capture).
     if(subghz_scene_rolling_analyzer_can_clone(protocol_name, decoded_text)) {
+        // Left "Unlock" = one-tap next-code (cnt+1) instant unlock. Available for the
+        // WHOLE clonable set — every KeeLoq whose key matched the keystore, including
+        // the secure BFT/Erreka makes when a seed was captured (the scene picks the
+        // seed-aware encoder). The Left slot is otherwise free here, alongside Clone/Save.
+        widget_add_button_element(
+            subghz->widget,
+            GuiButtonTypeLeft,
+            "Unlock",
+            subghz_scene_rolling_analyzer_instant_button_callback,
+            subghz);
         widget_add_button_element(
             subghz->widget,
             GuiButtonTypeCenter,
@@ -370,6 +395,18 @@ bool subghz_scene_rolling_analyzer_on_event(void* context, SceneManagerEvent eve
         subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
         subghz_txrx_stop(subghz->txrx);
         scene_manager_next_scene(subghz->scene_manager, SubGhzSceneHitag2Forge);
+        return true;
+    }
+
+    // KeeLoq known-key instant unlock: stop RX/hopper (the instant scene re-loads the
+    // capture, previews counter+1 and TXes it via the real encoder), then open the
+    // dedicated preview/confirm scene.
+    if(event.type == SceneManagerEventTypeCustom &&
+       event.event == SubGhzCustomEventSceneRollingAnalyzerInstant) {
+        subghz->state_notifications = SubGhzNotificationStateIDLE;
+        subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
+        subghz_txrx_stop(subghz->txrx);
+        scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqInstant);
         return true;
     }
 

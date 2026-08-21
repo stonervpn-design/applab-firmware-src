@@ -44,11 +44,36 @@ static struct {
     uint32_t ks; // full 32-bit captured keystream ("Hop:")
     bool valid; // a real Hitag2 capture was parsed
     uint8_t key[6]; // 48-bit key, MSB-first (byte-input target + "Hitag2Key" bytes)
+    uint64_t key64; // key[] reassembled MSB-first, computed once before the worker runs
+    FuriThread* thread; // off-UI recovery worker; NULL when idle (see on_event/on_exit)
+    uint32_t counter; // recovered full 28-bit counter (worker output)
+    bool recovered; // whether the worker found a matching counter (worker output)
 } s_ht2_forge;
 
 void subghz_scene_hitag2_forge_byte_input_callback(void* context) {
     SubGhz* subghz = context;
     view_dispatcher_send_custom_event(subghz->view_dispatcher, SubGhzCustomEventByteInputDone);
+}
+
+// Off-UI counter recovery. hitag2_recover_counter() brute-forces the 18 unknown
+// high counter bits (~2^18 = 262144 cipher runs); running it inline in on_event
+// blocked the view_dispatcher/GUI thread long enough to trip the watchdog and
+// reboot. Mirroring subbrute_worker.c, the heavy loop runs on its own FuriThread
+// and signals completion with a custom event; the fast file-save/hand-off stays
+// on the GUI thread in the Done handler. Reads/writes only the file-static scalar
+// fields (single in-flight worker, gated by the popup switch), so no lock needed.
+static int32_t subghz_scene_hitag2_forge_worker(void* context) {
+    SubGhz* subghz = context;
+    s_ht2_forge.recovered = hitag2_recover_counter(
+        s_ht2_forge.key64,
+        s_ht2_forge.uid,
+        s_ht2_forge.lctr,
+        s_ht2_forge.btn,
+        s_ht2_forge.ks,
+        &s_ht2_forge.counter);
+    view_dispatcher_send_custom_event(
+        subghz->view_dispatcher, SubGhzCustomEventSceneHitag2ForgeDone);
+    return 0;
 }
 
 void subghz_scene_hitag2_forge_on_enter(void* context) {
@@ -113,18 +138,44 @@ bool subghz_scene_hitag2_forge_on_event(void* context, SceneManagerEvent event) 
 
         // Reassemble the 48-bit on-air key MSB-first (key[0] = MS byte), matching
         // hitag2_rke_ks()/hitag2_recover_counter() and the stored "Hitag2Key" bytes.
-        uint64_t key = 0;
+        s_ht2_forge.key64 = 0;
         for(size_t i = 0; i < sizeof(s_ht2_forge.key); i++) {
-            key = (key << 8) | s_ht2_forge.key[i];
+            s_ht2_forge.key64 = (s_ht2_forge.key64 << 8) | s_ht2_forge.key[i];
         }
 
-        // Brute-force the 18 unknown high counter bits (~2^18 cipher runs). A hit
-        // yields the full 28-bit counter AND proves the key is correct for this fob.
-        uint32_t counter = 0;
-        bool recovered = hitag2_recover_counter(
-            key, s_ht2_forge.uid, s_ht2_forge.lctr, s_ht2_forge.btn, s_ht2_forge.ks, &counter);
+        // The 2^18-run counter brute-force is too heavy for the GUI thread (it
+        // tripped the watchdog). Show a wait popup — which also switches away from
+        // the byte input, preventing a second ByteInputDone from launching a
+        // parallel worker — and run the recovery on its own thread. Completion
+        // routes to SubGhzCustomEventSceneHitag2ForgeDone below.
+        Popup* popup = subghz->popup;
+        popup_reset(popup);
+        popup_set_header(popup, "Recovering", 63, 6, AlignCenter, AlignTop);
+        popup_set_text(
+            popup, "Counter...\n2^18 keys", 63, 30, AlignCenter, AlignCenter);
+        view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdPopup);
 
-        if(!recovered) {
+        s_ht2_forge.thread = furi_thread_alloc();
+        furi_thread_set_name(s_ht2_forge.thread, "Hitag2ForgeWorker");
+        furi_thread_set_stack_size(s_ht2_forge.thread, 2048);
+        furi_thread_set_context(s_ht2_forge.thread, subghz);
+        furi_thread_set_callback(s_ht2_forge.thread, subghz_scene_hitag2_forge_worker);
+        furi_thread_start(s_ht2_forge.thread);
+        return consumed;
+    }
+
+    if(event.type == SceneManagerEventTypeCustom &&
+       event.event == SubGhzCustomEventSceneHitag2ForgeDone) {
+        consumed = true;
+
+        // Reap the recovery worker before reading its results.
+        if(s_ht2_forge.thread) {
+            furi_thread_join(s_ht2_forge.thread);
+            furi_thread_free(s_ht2_forge.thread);
+            s_ht2_forge.thread = NULL;
+        }
+
+        if(!s_ht2_forge.recovered) {
             FURI_LOG_I(
                 TAG,
                 "Hitag2 forge: no counter match for UID=%08lX (wrong key?)",
@@ -140,12 +191,12 @@ bool subghz_scene_hitag2_forge_on_event(void* context, SceneManagerEvent event) 
             TAG,
             "Hitag2 forge: UID=%08lX counter=%07lX recovered",
             (unsigned long)s_ht2_forge.uid,
-            (unsigned long)counter);
+            (unsigned long)s_ht2_forge.counter);
 
         // Forge the NEXT frame, not the captured one: the receiver already accepted
         // counter N (this very capture), so a frame forged at N is a replay it rejects.
         // N+1 lands in the receiver's forward resync window (28-bit counter wraps).
-        uint32_t forge_counter = (counter + 1u) & 0x0FFFFFFFu;
+        uint32_t forge_counter = (s_ht2_forge.counter + 1u) & 0x0FFFFFFFu;
 
         // Re-load the capture fresh and serialize it (Protocol/Key/Bit/Ks/Preset),
         // then append the forge fields: "Hitag2Key" (48b, key[0]=MSB) + the recovered
@@ -206,6 +257,16 @@ bool subghz_scene_hitag2_forge_on_event(void* context, SceneManagerEvent event) 
 
 void subghz_scene_hitag2_forge_on_exit(void* context) {
     SubGhz* subghz = context;
+    // If the scene is left while the recovery worker is still in flight (e.g. Back
+    // on the wait popup), join it before tearing down. hitag2_recover_counter has
+    // no cancel hook, so this blocks for the tail of the 2^18 loop — bounded and
+    // brief. The custom event it may have already queued targets no other scene.
+    if(s_ht2_forge.thread) {
+        furi_thread_join(s_ht2_forge.thread);
+        furi_thread_free(s_ht2_forge.thread);
+        s_ht2_forge.thread = NULL;
+    }
+    popup_reset(subghz->popup);
     byte_input_set_result_callback(subghz->byte_input, NULL, NULL, NULL, NULL, 0);
     byte_input_set_header_text(subghz->byte_input, "");
 }
