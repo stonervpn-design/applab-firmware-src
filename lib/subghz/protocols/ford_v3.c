@@ -96,8 +96,31 @@ static void ford_v3_emit_if_ready(SubGhzProtocolDecoderFordV3* instance) {
         return;
     }
 
+    /* False-positive gate (confirmed VW-OOK -> FordV3). (a) Reject degenerate
+     * all-0x00 / all-0xFF frames that a non-Ford OOK burst decodes into. */
+    const uint8_t* rb = instance->raw_bytes;
+    bool all_zero = true;
+    bool all_ff = true;
+    for(uint8_t i = 0; i < FORD_V3_DATA_BYTES; i++) {
+        if(rb[i] != 0x00U) all_zero = false;
+        if(rb[i] != 0xFFU) all_ff = false;
+    }
+    if(all_zero || all_ff) {
+        return;
+    }
+
     instance->generic.data_count_bit = FORD_V3_DATA_BITS;
     ford_v3_parse_fields(instance);
+
+    /* (b) Require a known Lock/Unlock button and (c) a plausible non-zero
+     * serial before reporting a decode. */
+    if(instance->generic.btn != FORD_V3_BTN_LOCK &&
+       instance->generic.btn != FORD_V3_BTN_UNLOCK) {
+        return;
+    }
+    if(instance->generic.serial == 0) {
+        return;
+    }
 
     if(instance->base.callback) {
         instance->base.callback(&instance->base, instance->base.context);

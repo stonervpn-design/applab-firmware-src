@@ -264,6 +264,27 @@ void subghz_protocol_decoder_jeep_v0_feed(void* context, bool level, uint32_t du
 
                 jeep_v0_extract_fields(instance);
 
+                /* False-positive gate: a genuine Jeep V0 frame has B6==0x07 and
+                 * a button code in the known set. Reject anything else instead
+                 * of reporting a phantom decode. */
+                {
+                    uint8_t b6 = (uint8_t)((instance->generic.data >> 8) & 0xFF);
+                    uint16_t btn_code =
+                        (uint16_t)((instance->generic.data >> 16) & 0xFFFF);
+                    bool btn_ok = btn_code == JEEP_V0_BTN_UNLOCK ||
+                                  btn_code == JEEP_V0_BTN_LOCK ||
+                                  btn_code == JEEP_V0_BTN_RS ||
+                                  btn_code == JEEP_V0_BTN_PANIC;
+                    if(b6 != 0x07 || !btn_ok) {
+                        instance->decoder.decode_data = 0;
+                        instance->decoder.decode_count_bit = 0;
+                        instance->data_32 = 0;
+                        instance->preamble_count = 0;
+                        instance->decoder.parser_step = JeepV0DecoderStepReset;
+                        break;
+                    }
+                }
+
                 FURI_LOG_I(TAG, "Decoded: Sn:%08lX Btn:%04X Cnt:%lu",
                     (unsigned long)instance->generic.serial,
                     (unsigned)((instance->generic.btn << 8) | instance->generic.type),

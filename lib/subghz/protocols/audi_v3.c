@@ -243,6 +243,12 @@ static void audi_v3_process_frame(SubGhzProtocolDecoderAudiV3* instance) {
         return;
     }
 
+    // Reject unknown buttons: real frames carry only Unlock(0x0C) / Lock(0x0D)
+    if(button != AUDI_V3_BTN_UNLOCK && button != AUDI_V3_BTN_LOCK) {
+        FURI_LOG_D(TAG, "Rejected frame (unknown button 0x%02X)", button);
+        return;
+    }
+
     instance->button = button;
     for(int b = 0; b < AUDI_V3_HOP_BYTES; b++) instance->hop[b] = hop[b];
     instance->counter = counter;

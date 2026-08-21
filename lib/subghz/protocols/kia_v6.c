@@ -455,7 +455,7 @@ static bool kia_v6_decrypt(SubGhzProtocolDecoderKiaV6* instance) {
 
     instance->crc2_field = decrypted[15];
 
-    return (calculated_crc ^ stored_crc) < 2;
+    return calculated_crc == stored_crc;
 }
 
 void* kia_protocol_decoder_v6_alloc(SubGhzEnvironment* environment) {
@@ -732,8 +732,10 @@ SubGhzProtocolStatus
 
     SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
     do {
-        if(!subghz_block_generic_deserialize_check_count_bit(
-               &instance->generic, flipper_format, kia_protocol_v6_const.min_count_bit_for_found)) {
+        if(subghz_block_generic_deserialize_check_count_bit(
+               &instance->generic,
+               flipper_format,
+               kia_protocol_v6_const.min_count_bit_for_found) != SubGhzProtocolStatusOk) {
             break;
         }
 

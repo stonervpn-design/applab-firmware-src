@@ -935,8 +935,12 @@ static void fiat_process_frame(SubGhzProtocolDecoderFiat* instance) {
         // button extracted from hop must match frame button field
         uint8_t hop_btn = fiat_v3_hop_btn_extract(hop);
         if(hop_btn != btn) return;
+        /* Require the hop invariants to hold before emitting, and only then
+         * mark crc_check — previously a frame with failing invariants still
+         * surfaced as a decode with crc_check=ERR. */
+        if(!fiat_v3_hop_invariants_check(hop)) return;
         instance->generic.extra_check = true;
-        instance->generic.crc_check = fiat_v3_hop_invariants_check(hop);
+        instance->generic.crc_check = true;
     } break;
 
     case FiatVariantV5: {

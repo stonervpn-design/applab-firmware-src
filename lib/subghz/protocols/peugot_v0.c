@@ -159,57 +159,52 @@ void subghz_protocol_decoder_peugot_v0_reset(void* context) {
 static void peugot_v0_process_frame(SubGhzProtocolDecoderPeugotV0* instance) {
     if(instance->bit_count < (PEUGOT_V0_SYNC_LEN + PEUGOT_V0_MIN_DATA_BITS)) return;
 
-    // Search for full FEFFAD pattern (24 bits) for robust detection
-    // Data starts at sync_pos + 8 (after FE), so constraint is:
-    // sync_pos + SYNC_LEN + MIN_DATA_BITS <= bit_count AND sync_pos + SYNC_SEARCH_LEN <= bit_count
-    int max_pos_data = instance->bit_count - PEUGOT_V0_SYNC_LEN - PEUGOT_V0_MIN_DATA_BITS;
-    int max_pos_pattern = instance->bit_count - PEUGOT_V0_SYNC_SEARCH_LEN;
-    int max_pos = (max_pos_data < max_pos_pattern) ? max_pos_data : max_pos_pattern;
+    // Anchor the FE FF AD marker to the end of a >=30-bit preamble run instead
+    // of a free scan of the whole 256-bit buffer. FE = 1111_1110, so the run of
+    // preamble 1-bits flows into the marker's 7 leading ones and terminates at
+    // FE's low 0 bit; that transition is the only place a genuine marker starts.
+    // Rejects coincidental FEFFAD patterns buried in noise/payload.
     int sync_pos = -1;
-
-    for(int i = 0; i <= max_pos; i++) {
-        bool match = true;
-        for(int j = 0; j < PEUGOT_V0_SYNC_SEARCH_LEN; j++) {
-            if(instance->all_bits[i + j] != peugot_v0_sync_pattern_full[j]) {
-                match = false;
+    int run = 0;
+    for(int i = 0; i + PEUGOT_V0_SYNC_SEARCH_LEN <= (int)instance->bit_count; i++) {
+        if(instance->all_bits[i] == 1) {
+            run++;
+            continue;
+        }
+        // 'i' is the first 0 after a run of 1s. Require >=30 preamble ones plus
+        // FE's 7 leading ones, then match FE FF AD starting 7 bits back.
+        if(run >= (PEUGOT_V0_MIN_PREAMBLE_BITS + 7) && i >= 7) {
+            int cand = i - 7;  // start of FE
+            bool match = true;
+            for(int j = 0; j < PEUGOT_V0_SYNC_SEARCH_LEN; j++) {
+                if(instance->all_bits[cand + j] != peugot_v0_sync_pattern_full[j]) {
+                    match = false;
+                    break;
+                }
+            }
+            if(match) {
+                sync_pos = cand;
                 break;
             }
         }
-        if(match) {
-            sync_pos = i;
-            break;
-        }
+        run = 0;
     }
 
     if(sync_pos < 0) {
-        FURI_LOG_D(TAG, "No sync found in %u bits", instance->bit_count);
+        FURI_LOG_D(TAG, "No preamble-anchored sync in %u bits", instance->bit_count);
         return;
     }
 
-    // Verify preamble: count consecutive 1-bits before sync
-    int preamble_ones = 0;
-    for(int i = sync_pos - 1; i >= 0; i--) {
-        if(instance->all_bits[i] == 1) {
-            preamble_ones++;
-        } else {
-            break;
-        }
-    }
+    int preamble_ones = run - 7;  // ones counted before the FE marker
 
-    if(preamble_ones < PEUGOT_V0_MIN_PREAMBLE_BITS) {
-        FURI_LOG_D(TAG, "Preamble too short: %d (need %d)", preamble_ones, PEUGOT_V0_MIN_PREAMBLE_BITS);
-        return;
-    }
-
-    // Data starts after FE (8 bits into the sync match), includes FFAD + payload
+    // Require exactly the full 80-bit data field after FE (FFAD + 64b payload).
     int data_start = sync_pos + PEUGOT_V0_SYNC_LEN;  // +8 = after FE
     int data_available = instance->bit_count - data_start;
-    int data_bits = (data_available > PEUGOT_V0_DATA_BITS) ? PEUGOT_V0_DATA_BITS : data_available;
-
-    if(data_bits < PEUGOT_V0_MIN_DATA_BITS) {
-        FURI_LOG_D(TAG, "Data too short: %d bits (need %d)", data_bits, PEUGOT_V0_MIN_DATA_BITS);
+    if(data_available < PEUGOT_V0_DATA_BITS) {
+        FURI_LOG_D(TAG, "Data too short: %d bits (need %d)", data_available, PEUGOT_V0_DATA_BITS);
         return;
     }
+    int data_bits = PEUGOT_V0_DATA_BITS;  // exactly 80
 
     // Extract first 64 bits → generic.data
     uint64_t data = 0;
@@ -232,6 +227,13 @@ static void peugot_v0_process_frame(SubGhzProtocolDecoderPeugotV0* instance) {
         if(extra_bits < 16) {
             data_16 <<= (16 - extra_bits);
         }
+    }
+
+    // Reject degenerate all-zero / all-one payloads (observed false positive).
+    if((data == 0 && data_16 == 0) ||
+       (data == 0xFFFFFFFFFFFFFFFFULL && data_16 == 0xFFFF)) {
+        FURI_LOG_D(TAG, "Degenerate payload rejected");
+        return;
     }
 
     instance->generic.data = data;

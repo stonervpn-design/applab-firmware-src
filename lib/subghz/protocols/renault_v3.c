@@ -163,20 +163,22 @@ static void renault_v3_process_frame(SubGhzProtocolDecoderRenaultV3* instance) {
     // Sync pattern B: CB 2D = 1100 1011 0010 1101
     static const uint8_t sync_b[16] = {1,1,0,0,1,0,1,1, 0,0,1,0,1,1,0,1};
 
-    // Search for either sync pattern
+    // Fixed-position sync: V3 resets the bit buffer at the data boundary, so the
+    // 16-bit sync (either variant) sits at the very start of the collected NRZ
+    // data. Pin BOTH syncs to offset 0 (tolerating up to 2 bits of NRZ boundary
+    // quantization jitter) instead of scanning every offset across the buffer —
+    // a free scan of a 16-bit pattern over ~160 NRZ bits is the false-positive
+    // source.
     int sync_pos = -1;
-    int search_end = instance->all_bit_count - RENAULT_V3_MIN_DATA_BITS;
-    if(search_end < 0) search_end = 0;
-
-    for(int i = 0; i <= search_end; i++) {
+    for(int off = 0; off <= 2; off++) {
         bool match_a = true, match_b = true;
         for(int j = 0; j < 16; j++) {
-            if(instance->all_bits[i + j] != sync_a[j]) match_a = false;
-            if(instance->all_bits[i + j] != sync_b[j]) match_b = false;
+            if(instance->all_bits[off + j] != sync_a[j]) match_a = false;
+            if(instance->all_bits[off + j] != sync_b[j]) match_b = false;
             if(!match_a && !match_b) break;
         }
         if(match_a || match_b) {
-            sync_pos = i;
+            sync_pos = off;
             break;
         }
     }
@@ -212,6 +214,17 @@ static void renault_v3_process_frame(SubGhzProtocolDecoderRenaultV3* instance) {
     }
     if(data_len > 64 && data_len - 64 < 32) {
         instance->data_32 <<= (32 - (data_len - 64));
+    }
+
+    // Payload invariant: the bits after the sync are an encrypted rolling code,
+    // never all-zero or all-one. Reject degenerate buffers that satisfy a sync by
+    // chance. (Sync bits live in the high 16 of generic.data, so mask them off.)
+    {
+        uint64_t payload = instance->generic.data & 0xFFFFFFFFFFFFULL; // bits 16..63
+        if((payload == 0 && instance->data_32 == 0) ||
+           (payload == 0xFFFFFFFFFFFFULL && instance->data_32 == 0xFFFFFFFFUL)) {
+            return;
+        }
     }
 
     instance->generic.data_count_bit = data_len;

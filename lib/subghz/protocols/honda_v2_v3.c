@@ -472,7 +472,7 @@ static void honda_v3_pack_generic(
     generic->btn = btn_byte;
     generic->cnt = counter >> 2;
     generic->crc = crc;
-    generic->crc_check = true;
+    /* crc_check is set by the caller only after a real CRC match, not here. */
 }
 
 static void honda_v3_unpack_generic(
@@ -624,6 +624,7 @@ static void honda_process_frame(SubGhzProtocolDecoderHondaV2V3* instance) {
         instance->extra.v3.is_fixed = is_fixed;
 
         honda_v3_pack_generic(&instance->generic, serial, counter, btn_byte, crc);
+        instance->generic.crc_check = true; // CRC validated above
     } break;
 
     default:
@@ -1509,6 +1510,7 @@ SubGhzProtocolStatus
                 enc->extra.v3.counter,
                 enc->extra.v3.btn_byte,
                 enc->extra.v3.crc);
+            enc->generic.crc_check = true; // frame rebuilt with computed CRC
         } break;
         }
 

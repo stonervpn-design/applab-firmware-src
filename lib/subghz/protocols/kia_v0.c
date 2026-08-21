@@ -988,12 +988,12 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
 
     const char* sn_fmt =
         (instance->type == KIA_V0_TYPE_HONDA) ?
-            "%s %dbit\r\nKey:%016llX\r\nSn:%06lX Btn:%01X [%s]\r\nCnt:%04X CRC:%02X [%s]\r\n" :
-            "%s %dbit\r\nKey:%016llX\r\nSn:%07lX Btn:%01X [%s]\r\nCnt:%04X CRC:%02X [%s]\r\n";
+            "%s %dbit\r\nKey:%016llX\r\nSn:%06lX Btn:%01X [%s]\r\nCnt:%04X CRC:%02X [%s]\r\nVariant:%s\r\n" :
+            "%s %dbit\r\nKey:%016llX\r\nSn:%07lX Btn:%01X [%s]\r\nCnt:%04X CRC:%02X [%s]\r\nVariant:%s\r\n";
     furi_string_cat_printf(
         output,
         sn_fmt,
-        kia_v0_protocol_name(instance->type),
+        instance->base.protocol->name,
         instance->packet_bit_count,
         (unsigned long long)instance->generic.data,
         fields.serial,
@@ -1001,7 +1001,8 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
         kia_v0_button_name(fields.button, instance->type),
         fields.counter,
         fields.crc,
-        fields.crc_valid ? "OK" : "ERR");
+        fields.crc_valid ? "OK" : "ERR",
+        kia_v0_protocol_name(instance->type));
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_kia_serialize(

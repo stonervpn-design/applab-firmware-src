@@ -95,9 +95,14 @@ static void mitsubishi_publish_frame(SubGhzProtocolDecoderMitsubishi* instance) 
     memcpy(payload, instance->decode_data, sizeof(payload));
     mitsubishi_unscramble_payload(payload);
 
+    uint32_t serial = ((uint32_t)payload[0] << 24) | ((uint32_t)payload[1] << 16) |
+                      ((uint32_t)payload[2] << 8) | payload[3];
+    // Plausibility gate (no CRC exists): a real remote never has serial 0, so a
+    // zero serial is a framing artefact — drop it instead of publishing.
+    if(serial == 0) return;
+
     instance->generic.data_count_bit = instance->bit_count;
-    instance->generic.serial = ((uint32_t)payload[0] << 24) | ((uint32_t)payload[1] << 16) |
-                               ((uint32_t)payload[2] << 8) | payload[3];
+    instance->generic.serial = serial;
     instance->generic.cnt = ((uint16_t)payload[4] << 8) | payload[5];
     instance->generic.btn = payload[6];
 
@@ -172,7 +177,13 @@ void subghz_protocol_decoder_mitsubishi_feed(void* context, bool level, uint32_t
 
     switch(instance->decoder_state) {
     case MitsubishiDecoderStepReset:
-        if(level) {
+        // Sync hardening: only start on a plausible bit-pulse (te_short or
+        // te_long), never on an arbitrary high pulse. A genuine Mitsubishi frame
+        // — and the encoder's own output — always opens with a valid te high
+        // pulse, so noise bursts of arbitrary width are dropped at the first edge.
+        if(level &&
+           (pp_is_short(duration, &subghz_protocol_mitsubishi_const) ||
+            pp_is_long(duration, &subghz_protocol_mitsubishi_const))) {
             instance->decoder.te_last = duration;
             instance->decoder_state = MitsubishiDecoderStepDataCheck;
         }

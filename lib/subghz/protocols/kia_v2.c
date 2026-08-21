@@ -359,7 +359,9 @@ void kia_protocol_decoder_v2_feed(void* context, bool level, uint32_t duration) 
                 uint16_t raw_count = (uint16_t)((instance->generic.data >> 4) & 0xFFF);
                 instance->generic.cnt = ((raw_count >> 4) | (raw_count << 8)) & 0xFFF;
 
-                if(instance->base.callback)
+                uint8_t crc = (uint8_t)(instance->generic.data & 0x0F);
+                if(crc == kia_v2_calculate_crc(instance->generic.data) &&
+                   instance->base.callback)
                     instance->base.callback(&instance->base, instance->base.context);
 
                 instance->decoder.decode_data = 0;

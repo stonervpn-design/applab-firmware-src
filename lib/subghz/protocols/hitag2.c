@@ -130,22 +130,16 @@ static bool subghz_protocol_decoder_hitag2_find_and_emit(
         // (1) require the fixed '0' bit between ks and chk (Figure 11)
         if(b[cs + 79] != 0) continue;
 
-        // (2) require the carrier preamble + 0x0001 marker (Figure 11) right
-        //     before the frame: HITAG2_PREAMBLE_MIN constant bits ending two bits
-        //     before cs (the last two bits before the UID are the marker tail).
-        //     This rejects ±1-bit shift aliases of the real frame whose XOR-parity
-        //     matches by chance (1/256). Polarity-agnostic: the preamble carrier
-        //     is a constant run (value-independent).
-        if(cs < HITAG2_PREAMBLE_MIN + 1) continue;
-        uint8_t pv = b[cs - HITAG2_PREAMBLE_MIN - 1];
-        bool preamble_ok = true;
-        for(int i = cs - HITAG2_PREAMBLE_MIN - 1; i < cs - 1; i++) {
-            if(b[i] != pv) {
-                preamble_ok = false;
-                break;
-            }
-        }
-        if(!preamble_ok) continue;
+        // (2) verify the actual 16-bit marker WORD = 0x0001 (Figure 11) ending at
+        //     cs (bits[cs-15..cs]), not merely a 14-equal-bit run. cs is the last
+        //     pre-UID bit; UID starts at cs+1. The carrier preamble demods to the
+        //     marker's leading zeros, and the frame is checksum-valid in exactly
+        //     one polarity — the same polarity in which the marker reads 0x0001
+        //     (the inverted polarity yields 0xFFFE). Pins polarity and removes the
+        //     ±1-bit XOR-parity aliases the value-agnostic run check let through.
+        if(cs < 15) continue;
+        uint16_t marker = (uint16_t)hitag2_bits_to_int(b, cs - 15, 16);
+        if(marker != 0x0001) continue;
 
         // (3) XOR-parity checksum over the 10 bytes preceding chk
         uint8_t x = 0;
@@ -166,6 +160,14 @@ static bool subghz_protocol_decoder_hitag2_find_and_emit(
         instance->lctr = (uint16_t)hitag2_bits_to_int(b, cs + 37, 10);
         instance->ks = hitag2_bits_to_int(b, cs + 47, 32);
         instance->chk = chk;
+
+        // (5) lctr/keystream plausibility bound: a genuine rolling frame never
+        //     carries an all-zero or all-one counter+keystream (a demod artefact,
+        //     not a real remote). Keep scanning for a valid frame if it fails.
+        if((instance->lctr == 0 && instance->ks == 0) ||
+           (instance->lctr == 0x3FF && instance->ks == 0xFFFFFFFF)) {
+            continue;
+        }
 
         // generic.data = first 64 bits from UID (UID:32 | btn:4 | lctr:10 | ks_hi:18)
         instance->generic.data = ((uint64_t)instance->uid << 32) |

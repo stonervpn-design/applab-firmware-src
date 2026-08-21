@@ -70,6 +70,8 @@
 #include "tpms_renault.h"
 #include "tpms_citroen.h"
 #include "tpms_pmv107j.h"
+#include "tpms_hyundai_vdo.h"
+#include "genie.h"
 
 // ProtoPirate automotive decoders (ported)
 #include "fiat_v1.h"

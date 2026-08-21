@@ -64,6 +64,14 @@ typedef struct SubGhzProtocolEncoderKiaV3V4 {
     uint32_t encrypted;
     uint32_t decrypted;
 
+    // The KIA_KEY1 manufacturer key the CAPTURED hop actually decrypts under
+    // (the decoder tries all provisioned keys; the encoder must re-encrypt under
+    // the SAME one, not the last-wins get_kia_mf_key()). 0 => no match (fallback).
+    uint64_t matched_mf_key;
+    // Captured decrypted plaintext: re-encryption preserves all discrimination
+    // bits and rolls ONLY the 16-bit counter (same faithful-clone scheme as V5).
+    uint32_t plain_captured;
+
     uint8_t crc_iter;
     uint8_t bursts_sent;
 } SubGhzProtocolEncoderKiaV3V4;
@@ -253,13 +261,24 @@ void* kia_protocol_encoder_v3_v4_alloc(SubGhzEnvironment* environment) {
 static void kia_protocol_encoder_v3_v4_build_packet(
     SubGhzProtocolEncoderKiaV3V4* instance,
     uint8_t* raw_bytes) {
-    uint32_t plaintext = (uint32_t)(instance->cnt & 0xFFFFU) |
-                         ((uint32_t)(instance->serial & 0x3FFU) << 16) |
-                         ((uint32_t)(instance->btn & 0x0FU) << 28);
+    uint32_t plaintext;
+    uint64_t use_key;
+    if(instance->matched_mf_key) {
+        // Faithful clone: keep every captured discrimination bit, roll only cnt,
+        // and encrypt under the fob's actual key (identified at deserialize).
+        plaintext = (instance->plain_captured & 0xFFFF0000U) | (uint32_t)(instance->cnt & 0xFFFFU);
+        use_key = instance->matched_mf_key;
+    } else {
+        // Fallback (no provisioned key matched the capture): legacy field rebuild.
+        plaintext = (uint32_t)(instance->cnt & 0xFFFFU) |
+                    ((uint32_t)(instance->serial & 0x3FFU) << 16) |
+                    ((uint32_t)(instance->btn & 0x0FU) << 28);
+        use_key = get_kia_mf_key();
+    }
 
     instance->decrypted = plaintext;
 
-    uint32_t encrypted = subghz_protocol_keeloq_common_encrypt(plaintext, get_kia_mf_key());
+    uint32_t encrypted = subghz_protocol_keeloq_common_encrypt(plaintext, use_key);
     instance->encrypted = encrypted;
 
     FURI_LOG_I(
@@ -450,6 +469,38 @@ SubGhzProtocolStatus
         instance->generic.serial = instance->serial;
         instance->generic.btn = instance->btn;
         instance->generic.cnt = instance->cnt;
+
+        // Identify WHICH provisioned KIA_KEY1 key this fob uses. The decoder tries
+        // every key (line ~150) but the encoder historically hard-used the last-wins
+        // get_kia_mf_key(); a fob keyed to a non-last key was then re-encrypted under
+        // the WRONG manufacturer key -> the car's KeeLoq decrypt fails -> the frame is
+        // rejected (a non-working 2nd fob; note: rejected != desync). Mirror the
+        // decoder's try-all against the captured hop and keep the full captured
+        // plaintext so re-encryption is bit-faithful and only the counter rolls.
+        {
+            uint8_t cb0 = (uint8_t)(instance->generic.data >> 56);
+            uint8_t cb1 = (uint8_t)(instance->generic.data >> 48);
+            uint8_t cb2 = (uint8_t)(instance->generic.data >> 40);
+            uint8_t cb3 = (uint8_t)(instance->generic.data >> 32);
+            uint32_t cap_enc = ((uint32_t)pp_reverse_bits8(cb3) << 24) |
+                               ((uint32_t)pp_reverse_bits8(cb2) << 16) |
+                               ((uint32_t)pp_reverse_bits8(cb1) << 8) |
+                               (uint32_t)pp_reverse_bits8(cb0);
+            uint8_t ser_lsb = (uint8_t)(instance->serial & 0xFF);
+            instance->matched_mf_key = 0;
+            instance->plain_captured = 0;
+            uint8_t nk = get_kia_mf_key_count();
+            for(uint8_t ki = 0; ki < nk; ki++) {
+                uint64_t k = get_kia_mf_key_at(ki);
+                uint32_t d = subghz_protocol_keeloq_common_decrypt(cap_enc, k);
+                if(((d >> 28) & 0x0F) == (instance->btn & 0x0F) &&
+                   ((d >> 16) & 0xFF) == ser_lsb) {
+                    instance->matched_mf_key = k;
+                    instance->plain_captured = d;
+                    break;
+                }
+            }
+        }
 
         // Auto-advance the rolling counter by 1 per logical send so a resend
         // doesn't replay an already-used counter (matches vag.c and other

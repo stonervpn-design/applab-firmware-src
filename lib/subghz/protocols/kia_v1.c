@@ -476,7 +476,8 @@ void kia_protocol_decoder_v1_feed(void* context, bool level, uint32_t duration) 
         if(instance->decoder.decode_count_bit == kia_protocol_v1_const.min_count_bit_for_found) {
             instance->generic.data = instance->decoder.decode_data;
             instance->generic.data_count_bit = instance->decoder.decode_count_bit;
-            if(instance->base.callback)
+            kia_v1_check_remote_controller(instance);
+            if(instance->crc_check && instance->base.callback)
                 instance->base.callback(&instance->base, instance->base.context);
 
             instance->decoder.decode_data = 0;

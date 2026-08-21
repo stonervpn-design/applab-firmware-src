@@ -112,6 +112,35 @@ void subghz_protocol_decoder_scher_khan_reset(void* context) {
     instance->decoder.parser_step = ScherKhanDecoderStepReset;
 }
 
+/* Accept only the known MAGIC CODE frame lengths — reject anything else instead
+ * of surfacing it as "Unknown" (the false-positive path). */
+static bool subghz_protocol_scher_khan_bit_count_valid(uint32_t n) {
+    switch(n) {
+    case 35:
+    case 51:
+    case 57:
+    case 63:
+    case 64:
+    case 81:
+    case 82:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/* MAGIC CODE Dynamic (51-bit) transmits the 4-bit button twice: plainly at bits
+ * 27..24 ("Key") and bit-inverted at bits 19..16 ("~Key"). A genuine frame always
+ * satisfies Key == (~(~Key) & 0x0F). Verified against the four documented captures
+ * 0E8C1619E830C..0E8C16897830F (buttons 1/2/4/8 vs E/D/B/7). This is an on-air
+ * redundancy the decoder previously never checked, so a random 51-bit false hit
+ * passed 15/16 of the time; require it now. Other documented widths carry no such
+ * redundancy and are accepted unchanged. */
+static bool subghz_protocol_scher_khan_dynamic_integrity_ok(uint64_t data, uint32_t nb) {
+    if(nb != 51) return true;
+    return ((data >> 24) & 0x0FUL) == ((~(data >> 16)) & 0x0FUL);
+}
+
 void subghz_protocol_decoder_scher_khan_feed(void* context, bool level, uint32_t duration) {
     furi_check(context);
     SubGhzProtocolDecoderScherKhan* instance = context;
@@ -151,7 +180,7 @@ void subghz_protocol_decoder_scher_khan_feed(void* context, bool level, uint32_t
                     instance->decoder.te_last, subghz_protocol_scher_khan_const.te_short) <
                 subghz_protocol_scher_khan_const.te_delta) {
                 // Found start bit
-                if(instance->header_count >= 2) {
+                if(instance->header_count >= 4) {
                     instance->decoder.parser_step = ScherKhanDecoderStepSaveDuration;
                     instance->decoder.decode_data = 0;
                     instance->decoder.decode_count_bit = 1;
@@ -172,7 +201,11 @@ void subghz_protocol_decoder_scher_khan_feed(void* context, bool level, uint32_t
                 //Found stop bit
                 instance->decoder.parser_step = ScherKhanDecoderStepReset;
                 if(instance->decoder.decode_count_bit >=
-                   subghz_protocol_scher_khan_const.min_count_bit_for_found) {
+                       subghz_protocol_scher_khan_const.min_count_bit_for_found &&
+                   subghz_protocol_scher_khan_bit_count_valid(
+                       instance->decoder.decode_count_bit) &&
+                   subghz_protocol_scher_khan_dynamic_integrity_ok(
+                       instance->decoder.decode_data, instance->decoder.decode_count_bit)) {
                     instance->generic.data = instance->decoder.decode_data;
                     instance->generic.data_count_bit = instance->decoder.decode_count_bit;
                     if(instance->base.callback)

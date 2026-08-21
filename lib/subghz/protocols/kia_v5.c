@@ -174,8 +174,6 @@ const SubGhzProtocol kia_protocol_v5 = {
     .encoder = &kia_protocol_v5_encoder,
 };
 
-#ifdef ENABLE_EMULATE_FEATURE
-
 static uint8_t kia_v5_calculate_crc(uint64_t data) {
     uint8_t crc = 0;
     for(int i = 63; i >= 0; i--) {
@@ -188,6 +186,8 @@ static uint8_t kia_v5_calculate_crc(uint64_t data) {
     }
     return (uint8_t)(crc & 3U);
 }
+
+#ifdef ENABLE_EMULATE_FEATURE
 
 // Reverse ONE forward mixer step: given the NEW 32-bit state and the step's r
 // value, recover the OLD state. Forward shifts the state left by one (new bit_i =
@@ -609,7 +609,8 @@ void kia_protocol_decoder_v5_feed(void* context, bool level, uint32_t duration) 
                     instance->generic.cnt,
                     instance->crc);
 
-                if(instance->base.callback)
+                if(instance->base.callback &&
+                   instance->crc == kia_v5_calculate_crc(instance->saved_key))
                     instance->base.callback(&instance->base, instance->base.context);
             }
 

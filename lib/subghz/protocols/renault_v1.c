@@ -150,30 +150,35 @@ static void renault_v1_process_frame(SubGhzProtocolDecoderRenaultV1* instance) {
     // Sync pattern: 4C 64 = 0100 1100 0110 0100
     static const uint8_t sync_bits[16] = {0,1,0,0,1,1,0,0, 0,1,1,0,0,1,0,0};
 
-    // Search for sync pattern
+    // Fixed-position sync + exact bit count. A genuine frame's RENAULT_V1_DATA_BITS
+    // data bits (the sync is the first 16 of them) are the tail of the collected
+    // buffer. Anchor the sync to that single end position (tolerating up to 2
+    // trailing bits of Manchester edge jitter) instead of scanning every offset —
+    // a free scan of a 16-bit pattern over ~150 noise bits is the false-positive
+    // source. data_len is then exactly RENAULT_V1_DATA_BITS.
+    if(instance->all_bit_count < RENAULT_V1_DATA_BITS) return;
     int sync_pos = -1;
-    int search_end = instance->all_bit_count - 80; // need at least 80 bits after sync
-    for(int i = 0; i <= search_end; i++) {
+    int anchor = instance->all_bit_count - RENAULT_V1_DATA_BITS;
+    for(int off = anchor; off >= 0 && off >= anchor - 2; off--) {
         bool match = true;
         for(int j = 0; j < 16; j++) {
-            if(instance->all_bits[i + j] != sync_bits[j]) {
+            if(instance->all_bits[off + j] != sync_bits[j]) {
                 match = false;
                 break;
             }
         }
         if(match) {
-            sync_pos = i;
+            sync_pos = off;
             break;
         }
     }
 
     if(sync_pos < 0) {
-        FURI_LOG_D(TAG, "No sync found in %d bits", instance->all_bit_count);
+        FURI_LOG_D(TAG, "No fixed-pos sync in %d bits", instance->all_bit_count);
         return;
     }
 
-    int data_len = instance->all_bit_count - sync_pos;
-    if(data_len > RENAULT_V1_DATA_BITS) data_len = RENAULT_V1_DATA_BITS;
+    int data_len = RENAULT_V1_DATA_BITS; // exact bit count enforced by anchor
 
     // Extract generic.data (first 64 bits from sync)
     instance->generic.data = 0;
@@ -188,6 +193,17 @@ static void renault_v1_process_frame(SubGhzProtocolDecoderRenaultV1* instance) {
     }
     if(data_len > 64 && data_len - 64 < 32) {
         instance->data_32 <<= (32 - (data_len - 64));
+    }
+
+    // Payload invariant: the 80 bits after the sync are an encrypted rolling code,
+    // never all-zero or all-one. Reject degenerate buffers that satisfy the sync by
+    // accident. (Sync bits live in the high 16 of generic.data, so mask them off.)
+    {
+        uint64_t payload = instance->generic.data & 0xFFFFFFFFFFFFULL; // bits 16..63
+        if((payload == 0 && instance->data_32 == 0) ||
+           (payload == 0xFFFFFFFFFFFFULL && instance->data_32 == 0xFFFFFFFFUL)) {
+            return;
+        }
     }
 
     instance->generic.data_count_bit = data_len;

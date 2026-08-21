@@ -38,9 +38,15 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &subghz_protocol_nord_ice,      &subghz_protocol_x10,
     &subghz_protocol_hormann_bisecur, &subghz_protocol_cardin_s508,
     &subghz_protocol_pocsag,
+#ifndef PUBLIC_BUILD
+    &subghz_protocol_genie,
+#endif
     &tpms_protocol_schrader_gg4, &tpms_protocol_ford,
     &tpms_protocol_renault,      &tpms_protocol_citroen,
     &tpms_protocol_pmv107j,
+#ifndef PUBLIC_BUILD
+    &tpms_protocol_hyundai_vdo,
+#endif
 };
 
 const SubGhzProtocolRegistry subghz_protocol_registry = {

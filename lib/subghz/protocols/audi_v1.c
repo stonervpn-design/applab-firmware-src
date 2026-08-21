@@ -517,6 +517,16 @@ static void audi_v1_decoder_check_complete(SubGhzProtocolDecoderAudiV1* instance
     audi_v1_extract_fields(&instance->generic, instance->hop, instance->btn_byte);
 
     uint8_t btn_id = (instance->btn_byte >> 4) & 0x0F;
+
+    // Reject false positives: button must be Lock(0xE)/Unlock(0xB) and serial nonzero
+    if((btn_id != AUDI_V1_BTN_LOCK && btn_id != AUDI_V1_BTN_UNLOCK) ||
+       instance->generic.serial == 0) {
+        instance->decoder.decode_data = 0;
+        instance->decoder.decode_count_bit = 0;
+        instance->decoder.parser_step = AudiV1DecoderStepReset;
+        return;
+    }
+
     subghz_block_generic_global.current_btn = btn_id;
     subghz_block_generic_global.btn_length_bit = 4;
     FURI_LOG_I(

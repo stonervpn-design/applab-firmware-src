@@ -281,7 +281,16 @@ void subghz_protocol_decoder_chevrolet_v0_feed(void* context, bool level, uint32
                     instance->generic.serial =
                         (uint32_t)(instance->generic.data >> 40) & 0xFFFFFF;
 
-                    if(instance->base.callback) {
+                    // Reject false positives: button nibble must be Open(0xA)/
+                    // Close(0xB) and payload must not be degenerate all-0 / all-F.
+                    // (0xAAAAAAAB is used only as the preamble sync, never as a
+                    //  content gate here.)
+                    uint8_t btn = (instance->generic.data >> 36) & 0x0F;
+                    bool frame_valid = (btn == 0xA || btn == 0xB) &&
+                                       instance->generic.data != 0 &&
+                                       instance->generic.data != 0xFFFFFFFFFFFFFFFFULL;
+
+                    if(frame_valid && instance->base.callback) {
                         instance->base.callback(
                             &instance->base, instance->base.context);
                     }

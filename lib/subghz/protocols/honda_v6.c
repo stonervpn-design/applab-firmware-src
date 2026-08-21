@@ -331,15 +331,28 @@ static void honda_v6_process_fsk_frame(SubGhzProtocolDecoderHondaV6* instance) {
         return;
     }
 
-    /* Recover Manchester-drift frames (130–134 bit) into the clean 135-bit
-     * cell_0 layout before field extraction. */
-    if(is_pandora && instance->bit_count < 135) {
+    /* Pandora TS frames MUST carry the 40-bit frame skeleton (header magic
+     * 0x1E1E1F..0x51 + tail 0xFE). Drifted 130–134-bit frames are realigned
+     * to the clean 135-bit cell_0 layout by undrift(); a clean 135-bit frame
+     * is validated in place. A frame matching neither skeleton is not a
+     * Pandora frame — reject it (mandatory false-positive gate). */
+    if(is_pandora) {
         uint64_t rec_hi = instance->key_data_hi;
         uint64_t rec_lo = instance->key_data;
-        if(honda_v6_pandora_undrift(&rec_hi, &rec_lo, instance->bit_count)) {
+        if(instance->bit_count < 135) {
+            if(!honda_v6_pandora_undrift(&rec_hi, &rec_lo, instance->bit_count)) {
+                return;
+            }
             instance->key_data_hi = rec_hi;
             instance->key_data = rec_lo;
             instance->bit_count = 135;
+        } else {
+            bool header_ok = ((rec_lo >> 40) & 0xFFFFFF) == 0x1E1E1FULL &&
+                             (rec_lo & 0xFF) == 0x51ULL;
+            bool tail_ok = (rec_hi & 0xFF) == 0xFEULL;
+            if(!(header_ok && tail_ok)) {
+                return;
+            }
         }
     }
 
@@ -351,6 +364,11 @@ static void honda_v6_process_fsk_frame(SubGhzProtocolDecoderHondaV6* instance) {
         instance->generic.data_2 = 0;
         instance->generic.seed = 0;
         honda_v6_extract_fields(&instance->generic);
+        /* Plausibility gate: a genuine fob has a non-zero serial. Reject the
+         * near-zero frames that OOK/Manchester noise decodes into. */
+        if(instance->generic.serial == 0) {
+            return;
+        }
     } else {
         /* Pandora TS family — variable-width counter prefix at the start of
          * the frame. Counter width = bit_count - 119 (fits cell_0 16b,
@@ -398,6 +416,12 @@ static void honda_v6_313_process_frame(SubGhzProtocolDecoderHondaV6* instance) {
     instance->generic.btn = 0;
     instance->generic.seed = 0x313;  /* marker: 313 MHz mode */
     instance->generic.extra_check = true;
+
+    /* Plausibility gate: reject frames whose serial trits are all zero
+     * (empty/idle capture) rather than reporting a phantom 313 MHz decode. */
+    if(instance->generic.serial == 0) {
+        return;
+    }
 
     if(instance->base.callback) {
         instance->base.callback(&instance->base, instance->base.context);

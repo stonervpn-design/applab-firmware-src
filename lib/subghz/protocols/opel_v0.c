@@ -37,6 +37,12 @@
 #define OPEL_V0_MAX_BITS        150   /* maximum bits to collect */
 #define OPEL_V0_FRAME_GAP       20000 /* gap that ends a frame */
 
+/* Structural gate (false-positive rejection). The classifier emits on burst-width
+ * structure alone; require a fixed modal frame length instead of the wide 40..96
+ * window, and reject degenerate all-zero / all-one payloads. */
+#define OPEL_V0_FRAME_BITS      64    /* modal captured frame length */
+#define OPEL_V0_FRAME_DELTA     2     /* tolerance around modal (quantization jitter) */
+
 static const SubGhzBlockConst subghz_protocol_opel_v0_const = {
     .te_short = 830,
     .te_long = 5400,
@@ -135,6 +141,24 @@ static void subghz_protocol_opel_v0_process_frame(SubGhzProtocolDecoderOpelV0* i
             data = (data << 1) | bit;
         } else {
             data_2 = (data_2 << 1) | bit;
+        }
+    }
+
+    /* Structural gate: require the modal fixed frame length (reject the wide
+     * 40..96 window) and reject degenerate all-zero / all-one data. Emitting on
+     * width-threshold structure alone produced the false positives. */
+    if(count < (OPEL_V0_FRAME_BITS - OPEL_V0_FRAME_DELTA) ||
+       count > (OPEL_V0_FRAME_BITS + OPEL_V0_FRAME_DELTA)) {
+        return;
+    }
+    {
+        uint64_t used_mask =
+            (count >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << count) - 1ULL);
+        bool all_zero = (data == 0) && (data_2 == 0);
+        bool all_one = (data == used_mask) &&
+                       (count <= 64 || data_2 == ((1UL << (count - 64)) - 1UL));
+        if(all_zero || all_one) {
+            return;
         }
     }
 

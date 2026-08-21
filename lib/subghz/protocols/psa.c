@@ -561,9 +561,11 @@ static void psa_handle_decoded_frame(SubGhzProtocolDecoderPSA* instance, uint8_t
 
     uint8_t buffer[PSA_BUFFER_SIZE] = {0};
     psa_crypto_setup_byte_buffer(buffer, instance->key1_low, instance->key1_high, instance->key2_low);
+    bool frame_ok = false;
     if(instance->mode_serialize != 0x36 && psa_direct_xor_decrypt(instance, buffer)) {
         instance->mode_serialize = 0x23;
         instance->decrypted = 0x50;
+        frame_ok = true;
         FURI_LOG_I(
             TAG,
             "Direct XOR decryption SUCCESS - Type:0x23 Btn:%02X Ser:%06lX Cnt:%08lX",
@@ -573,11 +575,16 @@ static void psa_handle_decoded_frame(SubGhzProtocolDecoderPSA* instance, uint8_t
     } else {
         instance->decrypted = 0x00;
         instance->mode_serialize = 0x36;
+        // TEA candidate sanity gate: only emit a non-degenerate frame. Dropping
+        // the all-zero pure-failure emit kills the "PSA data all zeros" false
+        // positive while still surfacing genuine TEA (0x36) frames for BF.
+        frame_ok = (instance->key1_low != 0 || instance->key1_high != 0) &&
+                   (instance->key2_low != 0);
         FURI_LOG_I(
             TAG,
             "Direct XOR decryption FAILED - marked for brute force (Type:0x36) - deferred to get_string");
     }
-    if(instance->base.callback) {
+    if(frame_ok && instance->base.callback) {
         instance->base.callback(&instance->base, instance->base.context);
     }
     instance->decode_data_low = 0;

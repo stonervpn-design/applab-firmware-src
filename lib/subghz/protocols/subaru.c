@@ -526,10 +526,10 @@ void subghz_protocol_decoder_subaru_feed(void* context, bool level, uint32_t dur
                 instance->generic.serial = instance->serial;
                 instance->generic.btn = instance->btn;
                 instance->generic.cnt = instance->cnt;
-            }
 
-            if(instance->base.callback) {
-                instance->base.callback(&instance->base, instance->base.context);
+                if(instance->base.callback) {
+                    instance->base.callback(&instance->base, instance->base.context);
+                }
             }
 
             instance->decoder.decode_data = 0;
