@@ -48,6 +48,15 @@ jobs:
     runs-on: ubuntu-latest
     container: espressif/idf:v5.4.1
     timeout-minutes: 40
+    env:
+      # ccache: repeat custom builds share almost all object files (only the app
+      # SET differs), so a warm cache turns a full recompile into an incremental one.
+      IDF_CCACHE_ENABLE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: "2G"
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_COMPILERCHECK: content
     steps:
       - name: Checkout firmware source
         uses: actions/checkout@v5
@@ -89,11 +98,26 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Building $BOARD (public) id=$BID apps=[$APPS]"
 
+      - name: Cache compiled objects (ccache)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          # run_id makes the primary key unique so the cache is always re-saved with
+          # this build's fresh objects; restore-keys warm it from the latest prior run.
+          key: ccache-custom-${{ steps.cfg.outputs.board }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-custom-${{ steps.cfg.outputs.board }}-
+            ccache-custom-
+
       - name: Build firmware (public variant, selected apps)
         shell: bash
         run: |
           set -euo pipefail
           . "$IDF_PATH/export.sh"
+          # ccache must be on PATH for idf.py's IDF_CCACHE_ENABLE to take effect.
+          command -v ccache >/dev/null || { apt-get update -qq && apt-get install -y -qq ccache; }
+          mkdir -p "$CCACHE_DIR"
+          ccache -z >/dev/null 2>&1 || true
           # The app-icon generator (tools/fam/compile_icons.py) needs Pillow, which
           # isn't in the esp-idf container image.
           pip install --quiet pillow
@@ -107,6 +131,7 @@ jobs:
             -DFLIPPER_VARIANT=public \
             -DSDKCONFIG_DEFAULTS="${{ steps.cfg.outputs.sdkdef }}" \
             build
+          echo "=== ccache stats (this build) ==="; ccache -s 2>/dev/null || true
 
       - name: Merge single-file image
         shell: bash
