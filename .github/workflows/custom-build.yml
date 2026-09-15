@@ -134,17 +134,20 @@ jobs:
         run: |
           set -euo pipefail
           BID="${{ steps.cfg.outputs.bid }}"
+          NAME="${{ steps.cfg.outputs.name }}"
+          BOARD="${{ steps.cfg.outputs.board }}"
           test -n "$TOKEN" || { echo "::error::BUILDS_REPO_TOKEN not set"; exit 1; }
           test -n "$BUILDS_REPO" || { echo "::error::BUILDS_REPO var not set"; exit 1; }
+          test -f firmware.bin || { echo "::error::firmware.bin missing"; exit 1; }
+          FW="$PWD/firmware.bin"
           git config --global user.email "ci@applab"
           git config --global user.name "applab-ci"
           git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${BUILDS_REPO}.git" out
-          DEST="out/builds/$BID"
-          mkdir -p "$DEST"
-          cp firmware.bin "$DEST/firmware.bin"
-          cat > "$DEST/manifest.json" <<JSON
+          cd out
+          # Manifest is identical across retries; build it once.
+          MANIFEST=$(cat <<JSON
           {
-            "name": "${{ steps.cfg.outputs.name }}",
+            "name": "$NAME",
             "version": "$BID",
             "new_install_prompt_erase": true,
             "builds": [
@@ -152,19 +155,25 @@ jobs:
             ]
           }
           JSON
-          cd out
-          git add -A
-          git commit -q -m "custom build $BID (${{ steps.cfg.outputs.board }})"
-          # Concurrent custom-builds push to this SHARED repo, so a plain push races:
-          # whoever pushes second is rejected non-fast-forward and the build "fails".
-          # Each build writes a UNIQUE builds/$BID/ path (no content conflict), so on a
-          # rejection just rebase our commit onto the latest main and retry.
+          )
+          # Concurrent custom-builds push to this SHARED repo. Each build writes a UNIQUE
+          # builds/$BID/ path, so there is never a content conflict -- but a plain push
+          # still races (the second pusher is rejected non-fast-forward). Rebasing a
+          # --depth 1 clone is fragile: once main advances past the shallow boundary the
+          # rebase can't find a merge base and every retry fails. Instead, re-apply our
+          # unique files onto the freshly-fetched tip each attempt and fast-forward push.
           pushed=0
-          for attempt in 1 2 3 4 5 6; do
-            if git push -q origin HEAD; then pushed=1; echo "pushed on attempt $attempt"; break; fi
-            echo "push rejected (another build pushed first); rebase + retry ($attempt)"
-            git fetch -q origin main || true
-            git rebase -q origin/main || { git rebase --abort || true; }
+          for attempt in 1 2 3 4 5 6 7 8; do
+            git fetch -q --depth 1 origin main
+            git reset -q --hard origin/main
+            mkdir -p "builds/$BID"
+            cp "$FW" "builds/$BID/firmware.bin"
+            printf '%s\n' "$MANIFEST" > "builds/$BID/manifest.json"
+            git add -A
+            if git diff --cached --quiet; then pushed=1; echo "already published ($BID)"; break; fi
+            git commit -q -m "custom build $BID ($BOARD)"
+            if git push -q origin HEAD:main; then pushed=1; echo "pushed on attempt $attempt"; break; fi
+            echo "push rejected (another build pushed first); refetch + retry ($attempt)"
             sleep $(( (RANDOM % 4) + 1 ))
           done
           [ "$pushed" = 1 ] || { echo "::error::publish push failed after retries"; exit 1; }
