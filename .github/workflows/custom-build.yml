@@ -139,17 +139,23 @@ jobs:
           set -euo pipefail
           . "$IDF_PATH/export.sh"
           B=build
-          ARGS=( --chip esp32s3 merge_bin -o firmware.bin --flash_mode dio --flash_size ${{ steps.cfg.outputs.flashsize }} --flash_freq 80m
-                 0x0    "$B/bootloader/bootloader.bin"
+          COMMON=( --chip esp32s3 merge_bin --flash_mode dio --flash_size ${{ steps.cfg.outputs.flashsize }} --flash_freq 80m )
+          BASE=( 0x0    "$B/bootloader/bootloader.bin"
                  0x8000 "$B/partition_table/partition-table.bin"
                  0x10000 "$B/furi_esp32.bin" )
           if [ "${{ steps.cfg.outputs.board }}" = "m5stick_s3" ]; then
-            # SD-less board: bake the pre-built /ext FAT image at the storage partition.
+            # SD-less board: the /ext FAT image is baked into flash. Publish TWO images:
+            #  firmware.bin      = full (bootloader+app+ext) for a fresh install
+            #  firmware-app.bin  = app only, for a fast reflash that KEEPS the /ext data
             test -f ci/ext_m5stick_s3.bin || { echo "::error::missing ci/ext_m5stick_s3.bin"; exit 1; }
-            ARGS+=( 0x390000 ci/ext_m5stick_s3.bin )
+            python -m esptool "${COMMON[@]}" -o firmware-app.bin "${BASE[@]}"
+            python -m esptool "${COMMON[@]}" -o firmware.bin     "${BASE[@]}" 0x390000 ci/ext_m5stick_s3.bin
+            ls -l firmware.bin firmware-app.bin
+          else
+            # SD-based boards read data from microSD; the single image is already app-only.
+            python -m esptool "${COMMON[@]}" -o firmware.bin "${BASE[@]}"
+            ls -l firmware.bin
           fi
-          python -m esptool "${ARGS[@]}"
-          ls -l firmware.bin
 
       - name: Publish to the public builds repo
         shell: bash
@@ -165,6 +171,9 @@ jobs:
           test -n "$BUILDS_REPO" || { echo "::error::BUILDS_REPO var not set"; exit 1; }
           test -f firmware.bin || { echo "::error::firmware.bin missing"; exit 1; }
           FW="$PWD/firmware.bin"
+          # M5Stick also ships an app-only image for fast "firmware only" reflashes.
+          APPFW=""
+          if [ "$BOARD" = "m5stick_s3" ] && [ -f firmware-app.bin ]; then APPFW="$PWD/firmware-app.bin"; fi
           git config --global user.email "ci@applab"
           git config --global user.name "applab-ci"
           git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${BUILDS_REPO}.git" out
@@ -177,6 +186,19 @@ jobs:
             "new_install_prompt_erase": true,
             "builds": [
               { "chipFamily": "ESP32-S3", "parts": [ { "path": "firmware.bin", "offset": 0 } ] }
+            ]
+          }
+          JSON
+          )
+          # Firmware-only manifest (M5Stick fast reflash): app image, no full erase, so
+          # the device's existing /ext data (SubGHz/NFC/IR) survives.
+          MANIFEST_APP=$(cat <<JSON
+          {
+            "name": "$NAME (firmware only)",
+            "version": "$BID",
+            "new_install_prompt_erase": false,
+            "builds": [
+              { "chipFamily": "ESP32-S3", "parts": [ { "path": "firmware-app.bin", "offset": 0 } ] }
             ]
           }
           JSON
@@ -194,6 +216,10 @@ jobs:
             mkdir -p "builds/$BID"
             cp "$FW" "builds/$BID/firmware.bin"
             printf '%s\n' "$MANIFEST" > "builds/$BID/manifest.json"
+            if [ -n "$APPFW" ]; then
+              cp "$APPFW" "builds/$BID/firmware-app.bin"
+              printf '%s\n' "$MANIFEST_APP" > "builds/$BID/manifest-app.json"
+            fi
             git add -A
             if git diff --cached --quiet; then pushed=1; echo "already published ($BID)"; break; fi
             git commit -q -m "custom build $BID ($BOARD)"
