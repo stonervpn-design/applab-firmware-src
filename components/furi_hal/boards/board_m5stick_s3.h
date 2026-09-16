@@ -83,13 +83,13 @@
 #define BOARD_PIN_BTN_KEY1      11   /* front/top button */
 #define BOARD_PIN_BTN_KEY2      12   /* side button */
 
-/* Two physical buttons only: KEY1 tap=Down/hold=Up, KEY2 tap=Ok/hold=Back. There is
- * no Left or Right key, so Widget/DialogEx button rows (which fire only on
- * InputKeyLeft/Right) are otherwise unreachable — you get trapped on any
- * "Exit to X Menu?" confirmation. BOARD_TWO_BUTTON_INPUT tells those GUI modules to
- * also accept the keys this board CAN produce: Down -> Left button, Ok -> Right
- * button (Ok -> Center button already works). Guarded so full-keypad boards
- * (e.g. T-Embed) keep stock behavior. */
+/* Two physical buttons only. KEY1 (front): tap=Ok, hold 0.6s=Left, hold 1.2s=Right.
+ * KEY2 (side): tap=Down, double=Up, long=Back. KEY1's holds produce real Left/Right,
+ * so button rows and value sliders are reachable. BOARD_TWO_BUTTON_INPUT is kept as a
+ * belt-and-braces convenience: Widget/DialogEx button rows (which fire only on
+ * InputKeyLeft/Right) ALSO accept Down as the Left button and Ok as the Right button,
+ * so a confirmation like "Exit to X Menu?" is never a dead end. Guarded so full-keypad
+ * boards (e.g. T-Embed) keep stock behavior. */
 #define BOARD_TWO_BUTTON_INPUT  1
 
 /* BMI270 IMU on the internal I2C bus provides tilt -> Left/Right nav. Boards with this

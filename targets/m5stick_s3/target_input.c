@@ -4,7 +4,9 @@
  * Two physical buttons (KEY1=GPIO11 "M5"/front, KEY2=GPIO12 side). The control layout
  * matches Bruce (github pr3y/Bruce, boards/m5stack-sticks3) so it's familiar:
  *
- *   KEY1 (M5/front): press            -> InputKeyOk    (Select)
+ *   KEY1 (M5/front): tap              -> InputKeyOk    (Select)
+ *                    hold >=600ms      -> InputKeyLeft  (release in the 0.6-1.2s window)
+ *                    hold >=1200ms     -> InputKeyRight (fires while held)
  *   KEY2 (side/DW):  single-click     -> InputKeyDown
  *                    double-click     -> InputKeyUp     (2nd click within 250ms)
  *                    long-press >=600ms -> InputKeyBack (SHORT — pops a scene)
@@ -217,11 +219,30 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
     bool raw1 = (gpio_get_level(BTN_KEY1_GPIO) == 0);
     bool raw2 = (gpio_get_level(BTN_KEY2_GPIO) == 0);
 
-    /* ---- KEY1 (M5/front) = Select/Ok on each press ---- */
+    /* ---- KEY1 (M5/front): tap = Ok, hold 0.6s = Left, hold 1.2s = Right ----
+     * Mirrors KEY2's dual-long pattern. Ok now fires on release (was on press) so a
+     * hold can instead become Left/Right; a quick tap is imperceptibly different. */
     bool changed1, state1 = false;
     changed1 = debounce(&s_key1, raw1, now, &state1);
-    if(changed1 && state1) {
-        publish_tap(pubsub, InputKeyOk, sequence_counter);
+    if(changed1) {
+        if(state1) {
+            /* press edge */
+            s_key1.press_started_at = now;
+            s_key1.long_fired = false; /* reused: "Right already emitted this hold" */
+        } else if(!s_key1.long_fired) {
+            /* released before the Right threshold: Left if held past 0.6s, else Ok */
+            uint32_t held1 = now - s_key1.press_started_at;
+            publish_tap(
+                pubsub, (held1 >= long_ticks) ? InputKeyLeft : InputKeyOk, sequence_counter);
+        }
+        /* if long_fired, Right was already sent during the hold -> release does nothing */
+    } else if(s_key1.pressed) {
+        uint32_t held1 = now - s_key1.press_started_at;
+        if(!s_key1.long_fired && held1 >= long2_ticks) {
+            /* held past 1.2s -> Right (fires immediately for feedback) */
+            s_key1.long_fired = true;
+            publish_tap(pubsub, InputKeyRight, sequence_counter);
+        }
     }
 
     /* ---- KEY2 (side/DW) = single-click Down / double-click Up / long-press Back ---- */
