@@ -126,6 +126,44 @@ void furi_hal_grove_5v_set(bool on) {
 #endif
 }
 
+#ifdef BOARD_HAS_M5PM1
+bool furi_hal_m5pm1_read_vbat_mv(uint16_t* out_mv) {
+    /* The M5PM1 continuously measures VBAT and exposes it, already in millivolts,
+     * at reg 0x22 (low byte) / 0x23 (high 4 bits) — a 12-bit value. The PMIC I2C
+     * driver was installed at boot in furi_hal_m5pm1_init(); reuse it. */
+    if(!out_mv) return false;
+    uint8_t reg = 0x22;
+    uint8_t b[2] = {0, 0};
+    if(i2c_master_write_read_device(
+           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, b, 2, pdMS_TO_TICKS(50)) != ESP_OK) {
+        return false;
+    }
+    *out_mv = (uint16_t)((b[0] | ((uint16_t)b[1] << 8)) & 0x0FFF);
+    return true;
+}
+
+bool furi_hal_m5pm1_read_charging(bool* out_charging) {
+    /* Reg 0x12 = GPIO input state [4:0]; GPIO0 (bit0) low = charging. */
+    if(!out_charging) return false;
+    uint8_t reg = 0x12, v = 0;
+    if(i2c_master_write_read_device(
+           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &v, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
+        return false;
+    }
+    *out_charging = ((v & 0x01u) == 0u);
+    return true;
+}
+#else
+bool furi_hal_m5pm1_read_vbat_mv(uint16_t* out_mv) {
+    (void)out_mv;
+    return false;
+}
+bool furi_hal_m5pm1_read_charging(bool* out_charging) {
+    (void)out_charging;
+    return false;
+}
+#endif
+
 
 void furi_hal_init_early(void) {
     furi_hal_cortex_init_early();

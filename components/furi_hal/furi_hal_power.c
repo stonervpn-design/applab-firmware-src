@@ -4,6 +4,7 @@
 #include "furi_hal_display.h"
 #include "furi_hal_light.h"
 #include "furi_hal_bt.h"
+#include "furi_hal.h"
 #include "boards/board.h"
 
 #include <math.h>
@@ -536,6 +537,20 @@ bool furi_hal_power_light_sleep(void) {
 }
 
 uint8_t furi_hal_power_get_pct(void) {
+#ifdef BOARD_HAS_M5PM1
+    /* M5Stick S3: the battery sits behind the M5PM1 PMIC — there is no BQ fuel gauge
+     * and no ADC divider, so the paths below would fall through to a hard 100%. Read
+     * VBAT (mV) straight from the PMIC and map it through the LiPo curve. Cache the
+     * last good reading so a transient I2C NACK doesn't blip the gauge. */
+    {
+        static uint8_t m5pm1_last_pct = 100;
+        uint16_t mv = 0;
+        if(furi_hal_m5pm1_read_vbat_mv(&mv) && mv >= 2500 && mv <= 5000) {
+            m5pm1_last_pct = furi_hal_power_voltage_to_pct((float)mv / 1000.0f);
+        }
+        return m5pm1_last_pct;
+    }
+#endif
     /* BQ27220 fuel gauge (T-Embed CC1101) takes priority over ADC */
     if(furi_hal_bq27220_is_present()) {
         return furi_hal_bq27220_get_charge_pct();
@@ -559,6 +574,12 @@ uint8_t furi_hal_power_get_bat_health_pct(void) {
 }
 
 bool furi_hal_power_is_charging(void) {
+#ifdef BOARD_HAS_M5PM1
+    {
+        bool charging = false;
+        if(furi_hal_m5pm1_read_charging(&charging)) return charging;
+    }
+#endif
     /* Prefer BQ25896 charger status (like STM32), fallback to BQ27220 */
     if(furi_hal_bq25896_is_present()) {
         return furi_hal_bq25896_is_charging();
@@ -693,6 +714,14 @@ float furi_hal_power_get_battery_voltage(FuriHalPowerIC ic) {
         return (float)furi_hal_bq27220_get_voltage_mv() / 1000.0f;
     }
     /* Fallback: try whichever is available */
+#ifdef BOARD_HAS_M5PM1
+    {
+        uint16_t mv = 0;
+        if(furi_hal_m5pm1_read_vbat_mv(&mv) && mv >= 2500 && mv <= 5000) {
+            return (float)mv / 1000.0f;
+        }
+    }
+#endif
     if(furi_hal_bq27220_is_present()) {
         return (float)furi_hal_bq27220_get_voltage_mv() / 1000.0f;
     }
