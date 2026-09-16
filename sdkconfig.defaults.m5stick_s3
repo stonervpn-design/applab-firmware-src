@@ -22,8 +22,23 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+# ALWAYSINTERNAL = the LARGEST alloc still forced into internal SRAM; anything
+# bigger spills to PSRAM. This was 16384, which forced ~every allocation (<16KB)
+# into the scarce 512KB internal SRAM while the 8MB PSRAM sat empty -> internal
+# exhausted to ~45KB free, starving RMT/IR TX, BLE TX buffers, etc. (reboots /
+# "out of RAM"). 1024 spills all the 1KB..16KB buffers (subghz/BLE/wifi/app) to
+# PSRAM as the header comment above intends, leaving internal for DMA/stacks/TCBs.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+# Keep 64KB internal reserved so PSRAM-eligible allocs can never starve the
+# internal-only needs (DMA descriptors, task stacks, TCBs, ISRs).
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# PSRAM forces CONFIG_GDMA_ISR_IRAM_SAFE=y, which requires every GDMA callback to
+# live in IRAM. The I2S driver's DMA callback is only placed in IRAM when I2S is
+# also ISR-IRAM-safe, so without this the I2S<->GDMA registration is rejected with
+# ESP_ERR_INVALID_ARG and speaker/mic init fails (device-buddy Phase 1 audio).
+CONFIG_I2S_ISR_IRAM_SAFE=y
 
 CONFIG_BOOTLOADER_VDDSDIO_BOOST_3_3V=y
 
@@ -81,7 +96,11 @@ CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=4096
 # =============================================================================
 # Newlib / compiler
 # =============================================================================
-CONFIG_NEWLIB_NANO_FORMAT=y
+# NANO_FORMAT DISABLED (was =y): nano printf mishandles %ll (64-bit) -> subghz
+# get_string "Key: %016llX" misaligned the following %s and crashed the RX worker
+# (LoadProhibited) on real Mazda V0 / Kia frames (confirmed via panic backtrace in
+# _printf_i). Full newlib formatting handles %ll correctly (+~20-40KB flash).
+CONFIG_NEWLIB_NANO_FORMAT=n
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y
 
 # =============================================================================

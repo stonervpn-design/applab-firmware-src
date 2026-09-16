@@ -193,9 +193,12 @@
 #define BOARD_PMIC_SCL          48
 #define BOARD_PMIC_ADDR         0x6E
 
-/* ---- Audio (ES8311) — Phase 4 (disabled in Phase 0) ----
- * Pins recorded for later; BOARD_HAS_SPEAKER/ES8311 = 0 for now. */
-#define BOARD_HAS_ES8311        0
+/* ---- Audio (ES8311 codec + AW8737 amp) — Phase 1 audio bring-up (device buddy).
+ * MEMS mic -> ES8311 ADC; ES8311 DAC -> AW8737 amp -> speaker. Reuses the proven
+ * Cardputer-ADV ES8311 config in furi_hal_speaker.c (MCLK derived from BCLK, reg
+ * 0x01=0xB5); the Stick's routed MCLK=18 is left unused. Mic (ADC/I2S-RX) is Task 2
+ * and stays gated by BOARD_HAS_MIC below. */
+#define BOARD_HAS_ES8311        1
 #define BOARD_PIN_I2S_MCLK      18
 #define BOARD_PIN_I2S_SCLK      17
 #define BOARD_PIN_I2S_LRCK      15
@@ -206,6 +209,11 @@
 #define BOARD_PIN_SPEAKER_BCLK  BOARD_PIN_I2S_SCLK
 #define BOARD_PIN_SPEAKER_WCLK  BOARD_PIN_I2S_LRCK
 #define BOARD_PIN_SPEAKER_DOUT  BOARD_PIN_I2S_DOUT
+/* Defining SPEAKER_DIN makes furi_hal_speaker create a full-duplex I2S channel
+ * (tx + rx) so the ES8311 ADC / MEMS mic can be captured on DIN. */
+#define BOARD_PIN_SPEAKER_DIN   BOARD_PIN_I2S_DIN
+/* Route MCLK on GPIO18 (M5 StickS3 does — the ES8311 ADC needs it). */
+#define BOARD_PIN_SPEAKER_MCLK  BOARD_PIN_I2S_MCLK
 
 /* ---- IMU (BMI270) — Phase 1 (disabled in Phase 0) ---- */
 #define BOARD_HAS_BMI270        0
@@ -258,7 +266,7 @@
 #define BOARD_HAS_ENCODER       0
 #define BOARD_HAS_BLE           1
 #define BOARD_HAS_VIBRO         0
-#define BOARD_HAS_SPEAKER       0
+#define BOARD_HAS_SPEAKER       1
 #define BOARD_HAS_IR            1
 #define BOARD_HAS_IR_TX         1
 #define BOARD_HAS_IR_RX         1

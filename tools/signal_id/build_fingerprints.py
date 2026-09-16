@@ -25,6 +25,16 @@ PROTO_DIR = os.path.join(ROOT, "lib", "subghz", "protocols")
 
 # Makes we recognise from a protocol/name string -> canonical make label.
 MAKE_HINTS = [
+    # Specific / aftermarket makes FIRST — the match loop breaks on first hit, and a
+    # broad hint below would otherwise shadow these ("audi" is a substring of
+    # "audiovox"; "star" of "compustar"/"astrostart").
+    ("compustar", "Compustar (remote start)"),
+    ("astrostart", "Astrostart (remote start)"),
+    ("audiovox", "Audiovox (remote start)"),
+    ("gm_rke", "GM"), ("continental", "Continental (RKE)"),
+    ("nidec", "Nidec (RKE)"), ("alps", "Alps (RKE)"),
+    ("ldv", "LDV"), ("jeep", "Jeep"), ("lexus", "Lexus"),
+    ("opel", "Opel"), ("peugot", "Peugeot"), ("ducato", "Fiat"),
     ("chrysler", "Chrysler"), ("fiat", "Fiat"), ("ford", "Ford"),
     ("honda", "Honda"), ("kia", "Kia"), ("hyundai", "Hyundai"),
     ("mazda", "Mazda"), ("mitsubishi", "Mitsubishi"), ("porsche", "Porsche"),

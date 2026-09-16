@@ -73,9 +73,24 @@ static const char* apple_pp_lookup(uint8_t model) {
 // AD parsing helpers
 // ---------------------------------------------------------------------------
 
+// Case-insensitive "does `s` (len chars) start with lowercase `pfx`?" — used to
+// match trackers that have no company id / service UUID and are only identifiable
+// by their advertised local name (Nut/Nutale, Pebblebee).
+static bool name_ci_starts(const uint8_t* s, uint8_t len, const char* pfx) {
+    uint8_t i = 0;
+    for(; pfx[i]; i++) {
+        if(i >= len) return false;
+        uint8_t c = s[i];
+        if(c >= 'A' && c <= 'Z') c = (uint8_t)(c - 'A' + 'a');
+        if(c != (uint8_t)pfx[i]) return false;
+    }
+    return true;
+}
+
 // Walks one BLE advertisement TLV buffer and looks for any of:
-//   - manufacturer data (type 0xFF) for tracker matchers
-//   - 16-bit Service UUID lists (types 0x02/0x03) for Tile (0xFEED, 0xFD84)
+//   - manufacturer data (type 0xFF) for tracker matchers (company id / subtype)
+//   - 16-bit Service UUID lists (types 0x02/0x03) + service data (0x16)
+//   - the advertised local name (types 0x08/0x09) for name-only trackers
 // Outputs classification + optional model name into kind_out, name_out.
 // Returns true if a tracker kind was identified.
 static bool classify_buffer(
@@ -129,6 +144,15 @@ static bool classify_buffer(
                 name_out[0] = '\0';
                 return true;
             }
+            // Smartwatches / fitness bands by manufacturer company id:
+            // 0x0157 Anhui Huami (Mi Band + Amazfit), 0x027D Huawei (Band/Watch),
+            // 0x018E Fitbit, 0x0087 Garmin. (0x038F=Xiaomi phones and 0x180D=Heart
+            // Rate are deliberately NOT used — they false-match phones.)
+            if(cid == 0x0157 || cid == 0x027D || cid == 0x018E || cid == 0x0087) {
+                *kind_out = TrackerKindSmartwatch;
+                name_out[0] = '\0';
+                return true;
+            }
         } else if((type == 0x02 || type == 0x03) && val_len >= 2) {
             // Incomplete / Complete list of 16-bit Service Class UUIDs
             for(uint8_t i = 0; i + 1 < val_len; i += 2) {
@@ -143,6 +167,18 @@ static bool classify_buffer(
                     name_out[0] = '\0';
                     return true;
                 }
+                // Chipolo (non-Spot): 0xFE33 / 0xFE65 are SIG-registered to Chipolo.
+                if(u == 0xFE33 || u == 0xFE65) {
+                    *kind_out = TrackerKindChipolo;
+                    name_out[0] = '\0';
+                    return true;
+                }
+                // Xiaomi/Huami Mi Band + many Amazfit advertise 0xFEE0 (/0xFEE1).
+                if(u == 0xFEE0 || u == 0xFEE1) {
+                    *kind_out = TrackerKindSmartwatch;
+                    name_out[0] = '\0';
+                    return true;
+                }
             }
         } else if(type == 0x16 && val_len >= 2) {
             // Service Data - 16-bit UUID. Drone Remote ID (ASTM F3411) broadcasts
@@ -151,6 +187,33 @@ static bool classify_buffer(
             if(u == 0xFFFA) {
                 *kind_out = TrackerKindDroneRID;
                 name_out[0] = '\0';
+                return true;
+            }
+            // Chipolo (non-Spot) carries its 0xFE33 service with a data payload.
+            if(u == 0xFE33) {
+                *kind_out = TrackerKindChipolo;
+                name_out[0] = '\0';
+                return true;
+            }
+        } else if((type == 0x08 || type == 0x09) && val_len >= 2) {
+            // Shortened / Complete local name — the only reliable signal for
+            // trackers with no company id or dedicated service UUID.
+            //   Nut / Nutale : name starts "nut"
+            //   Pebblebee    : "PB-xxxx", legacy "FNDR", or "Pebblebee"
+            if(name_ci_starts(val, val_len, "nut")) {
+                *kind_out = TrackerKindNut;
+                uint8_t n = val_len < name_out_sz - 1 ? val_len : name_out_sz - 1;
+                memcpy(name_out, val, n);
+                name_out[n] = '\0';
+                return true;
+            }
+            if(name_ci_starts(val, val_len, "pb-") ||
+               name_ci_starts(val, val_len, "fndr") ||
+               name_ci_starts(val, val_len, "pebblebee")) {
+                *kind_out = TrackerKindPebblebee;
+                uint8_t n = val_len < name_out_sz - 1 ? val_len : name_out_sz - 1;
+                memcpy(name_out, val, n);
+                name_out[n] = '\0';
                 return true;
             }
         }
@@ -364,6 +427,10 @@ const char* ble_tracker_kind_label(TrackerKind k) {
     case TrackerKindAppleNearby: return "iPhone/Watch";
     case TrackerKindMetaGlasses: return "Meta Glasses";
     case TrackerKindDroneRID: return "Drone RID";
+    case TrackerKindChipolo: return "Chipolo";
+    case TrackerKindPebblebee: return "Pebblebee";
+    case TrackerKindNut: return "Nut";
+    case TrackerKindSmartwatch: return "Smartwatch";
     default: return "?";
     }
 }

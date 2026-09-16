@@ -89,3 +89,9 @@ CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 # silent TG1WDT reset leaves no output and no coredump). Reveals the real fault so
 # the boot loop can be root-caused instead of guessed. (Can be removed later.)
 CONFIG_ESP_PANIC_HANDLER_IRAM=y
+
+# Full printf (nano was ON here by default): nano-format mishandles %ll (64-bit) ->
+# subghz get_string "Key: %016llX" + following %s crashed the RX worker
+# (LoadProhibited) on real Mazda V0 / Kia frames. Full newlib handles %ll (+~57KB;
+# 16MB flash has ample room). Matches m5stick / cardputer defaults.
+CONFIG_NEWLIB_NANO_FORMAT=n

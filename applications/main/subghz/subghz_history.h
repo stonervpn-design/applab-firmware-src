@@ -64,6 +64,10 @@ uint16_t subghz_history_get_item(SubGhzHistory* instance);
  */
 uint8_t subghz_history_get_type_protocol(SubGhzHistory* instance, uint16_t idx);
 
+void subghz_history_set_fired(SubGhzHistory* instance, uint16_t idx, bool fired);
+
+bool subghz_history_get_fired(SubGhzHistory* instance, uint16_t idx);
+
 /** Get name protocol to history[idx]
  * 
  * @param instance  - SubGhzHistory instance

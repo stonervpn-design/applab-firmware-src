@@ -20,10 +20,17 @@ typedef struct {
     VariableItemList* vil;
     VariableItem* items[PinFuncCount];
     char status_hdr[24];
+    bool dirty; /* a pin was changed but not yet applied (needs reboot) */
 } PinConfigApp;
 
-/* Live-probe both radios and update the compact header (Y=found, X=not). */
+/* Header: once a pin has been edited, show a persistent "Reboot to apply" reminder
+ * (changes are staged to NVS and only take effect at boot). Until then, live-probe
+ * both radios and show the compact status (Y=found, X=not). */
 static void pin_config_update_status(PinConfigApp* app) {
+    if(app->dirty) {
+        variable_item_list_set_header(app->vil, "Reboot to apply");
+        return;
+    }
     bool cc = furi_hal_subghz_check_connection();
     bool nrf = furi_hal_nrf24_is_connected();
     snprintf(
@@ -64,55 +71,21 @@ static void pin_config_item_changed(VariableItem* item) {
     uint8_t idx = variable_item_get_current_value_index(item);
     if(idx >= pin_config_choices_count) return;
 
-    uint8_t cur = pin_config_get((PinFunc)f);
-    uint8_t cur_idx = pin_choice_index(cur);
+    /* Shared pins are allowed. The value list steps one choice at a time and we
+     * accept whatever it lands on — including a GPIO another function already uses.
+     * The old code skipped/snapped away from "in use" pins, which trapped the user
+     * below the first used pin (couldn't scroll past it). There is no live double-
+     * drive to guard against here because nothing is applied live: the change is
+     * only staged to NVS and takes effect on the next reboot, so the user is free to
+     * pick the exact layout boot should apply (e.g. move NRF24 off 4/6 onto 15). */
+    uint8_t gpio = pin_config_choices[idx];
 
-    /* Assigning two functions to one pin hangs the shared SPI3/SD bus and
-     * watchdog-reboots the device, so a pin already used by a bus line
-     * (SPI SCK/MISO/MOSI, I2C SDA/SCL) or the other radio is never applied.
-     *
-     * But snapping back to the current pin on a conflict trapped the user below
-     * the first used pin: because the list steps one value at a time, any used
-     * pin between the current one and a free one reverted the selection, so a
-     * free higher/lower pin was unreachable (the "can't set a higher number"
-     * bug). Instead, skip forward in the scroll direction to the next FREE pin so
-     * scrolling passes over used pins to reach an assignable one. This lets a
-     * radio be moved off a pin the other radio needs (e.g. NRF24 off 4/6 to 15),
-     * which then frees 4/6 for CC1101. */
-    int dir = (idx >= cur_idx) ? 1 : -1;
-    int scan = (int)idx;
-    PinFunc conflict = PinFuncCount;
-    while(scan >= 0 && scan < (int)pin_config_choices_count &&
-          pin_config_pin_conflict((PinFunc)f, pin_config_choices[scan], &conflict)) {
-        scan += dir;
-    }
-
-    if(scan < 0 || scan >= (int)pin_config_choices_count) {
-        /* Every pin in this direction is taken — keep the current assignment. */
-        FURI_LOG_W(
-            "PinConfig", "no free pin for %s past GPIO%u (in use by %s)",
-            pin_config_func_name((PinFunc)f), pin_config_choices[idx],
-            pin_config_func_name(conflict));
-        variable_item_set_current_value_index(item, cur_idx);
-        pin_config_set_value_text(item, cur);
-        snprintf(
-            app->status_hdr, sizeof(app->status_hdr), "In use: %s",
-            pin_config_func_name(conflict));
-        variable_item_list_set_header(app->vil, app->status_hdr);
-        return;
-    }
-
-    uint8_t gpio = pin_config_choices[scan];
-    if(scan != (int)idx) {
-        /* Skipped past used pin(s) — move the selection to the free pin. */
-        variable_item_set_current_value_index(item, (uint8_t)scan);
-    }
-
-    FURI_LOG_I("PinConfig", "apply %s=GPIO%u", pin_config_func_name((PinFunc)f), gpio);
+    FURI_LOG_I("PinConfig", "stage %s=GPIO%u (reboot to apply)", pin_config_func_name((PinFunc)f), gpio);
     pin_config_set((PinFunc)f, gpio);
     pin_config_set_value_text(item, gpio);
-    pin_config_apply(); // persists to NVS (single source of truth) + applies now
-    pin_config_update_status(app); // live re-probe reflects the new pin now
+    pin_config_apply(); // persists to NVS only — applied at next boot, never live
+    app->dirty = true;
+    pin_config_update_status(app); // show the "Reboot to apply" reminder
 }
 
 static bool pin_config_nav_cb(void* context) {
@@ -135,8 +108,9 @@ static void pin_config_enter_cb(void* context, uint32_t index) {
     PinConfigApp* app = context;
     if(index == PinFuncCount) {
         pin_config_reset_defaults();
-        pin_config_apply();
+        pin_config_apply(); /* stage defaults to NVS — applied on reboot */
         pin_config_refresh_items(app);
+        app->dirty = true;
         pin_config_update_status(app);
     } else if(index == PinFuncCount + 1) {
         furi_hal_power_reset(); /* no return — pins are already saved to NVS */

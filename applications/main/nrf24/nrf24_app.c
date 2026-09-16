@@ -50,6 +50,10 @@ static Nrf24App* nrf24_app_alloc(void) {
     app->widget = widget_alloc();
     view_dispatcher_add_view(app->view_dispatcher, Nrf24ViewWidget, widget_get_view(app->widget));
 
+    app->var_item_list = variable_item_list_alloc();
+    view_dispatcher_add_view(
+        app->view_dispatcher, Nrf24ViewJamConfig, variable_item_list_get_view(app->var_item_list));
+
     app->spectrum_view = nrf24_spectrum_view_alloc();
     view_set_context(app->spectrum_view, app->view_dispatcher);
     view_dispatcher_add_view(app->view_dispatcher, Nrf24ViewSpectrum, app->spectrum_view);
@@ -58,6 +62,10 @@ static Nrf24App* nrf24_app_alloc(void) {
     view_set_context(app->jam_view, app->view_dispatcher);
     view_dispatcher_add_view(app->view_dispatcher, Nrf24ViewJam, app->jam_view);
 
+    app->scan_view = nrf24_scan_view_alloc();
+    view_set_context(app->scan_view, app->view_dispatcher);
+    view_dispatcher_add_view(app->view_dispatcher, Nrf24ViewScan, app->scan_view);
+
     app->mj_scan_view = nrf24_mj_scan_view_alloc();
     view_set_context(app->mj_scan_view, app->view_dispatcher);
     view_dispatcher_add_view(app->view_dispatcher, Nrf24ViewMjScan, app->mj_scan_view);
@@ -65,6 +73,10 @@ static Nrf24App* nrf24_app_alloc(void) {
     app->mj_attack_view = nrf24_mj_attack_view_alloc();
     view_set_context(app->mj_attack_view, app->view_dispatcher);
     view_dispatcher_add_view(app->view_dispatcher, Nrf24ViewMjAttack, app->mj_attack_view);
+
+    app->wifi_aps = NULL;
+    app->wifi_ap_count = 0;
+    nrf24_jam_config_load();
 
     app->mj_target_count = 0;
     app->mj_selected_target = -1;
@@ -79,15 +91,24 @@ static void nrf24_app_free(Nrf24App* app) {
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewWidget);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewSpectrum);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewJam);
+    view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewScan);
+    view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewJamConfig);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewMjScan);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewMjAttack);
 
     submenu_free(app->submenu);
     widget_free(app->widget);
     nrf24_spectrum_view_free(app->spectrum_view);
+    variable_item_list_free(app->var_item_list);
     nrf24_jam_view_free(app->jam_view);
+    nrf24_scan_view_free(app->scan_view);
     nrf24_mj_scan_view_free(app->mj_scan_view);
     nrf24_mj_attack_view_free(app->mj_attack_view);
+
+    if(app->wifi_aps) {
+        free(app->wifi_aps);
+        app->wifi_aps = NULL;
+    }
 
     if(app->mj_script_path) {
         furi_string_free(app->mj_script_path);

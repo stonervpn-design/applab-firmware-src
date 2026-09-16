@@ -91,7 +91,9 @@ static bool
         FURI_LOG_T(TAG, "found EMV_TAG_LOG_FMT %X: len %d", tag, tlen);
         break;
     case EMV_TAG_GPO_FMT1:
-        // skip AIP
+        // skip AIP. tlen is a card-controlled uint8_t; a length of 0 or 1 would underflow
+        // to 254/255 and pass the size check below, over-reading the response buffer.
+        if(tlen < 2) break;
         i += 2;
         tlen -= 2;
         furi_check(tlen < sizeof(app->afl.data));
@@ -402,6 +404,9 @@ static bool emv_decode_tl(
     while(f < fmt_len && i < len) {
         success = emv_parse_tag(fmt, fmt_len, &tag, &tlen, &f);
         if(!success) return success;
+        // tlen comes from the (card-controlled) format template; stop if the value
+        // would read past the response buffer rather than over-read into adjacent memory.
+        if((size_t)i + tlen > len) break;
         emv_decode_tlv_tag(&buff[i], tag, tlen, app);
         i += tlen;
     }
@@ -421,6 +426,10 @@ static bool emv_decode_response_tlv(const uint8_t* buff, uint8_t len, EmvApplica
 
         success = emv_parse_tag(buff, len, &tag, &tlen, &i);
         if(!success) return success;
+
+        // emv_parse_tag advanced i past the tag+length header; a malformed card can
+        // report a tlen that runs past the buffer. Stop before reading/recursing OOB.
+        if((size_t)i + tlen > len) break;
 
         if((first_byte & 32) == 32) { // "Constructed" -- contains more TLV data to parse
             FURI_LOG_T(TAG, "Constructed TLV %x", tag);

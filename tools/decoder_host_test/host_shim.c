@@ -1,3 +1,4 @@
+#include <stdarg.h>
 // Host shims for the furi symbols the real decoder/encoder code links against.
 // Lets the firmware's ProtoPirate + lib/subghz decode/encode code run on a PC.
 #include <stddef.h>
@@ -38,8 +39,12 @@ void* memmgr_alloc_from_pool(size_t size) { return calloc(1, size); }
 // ---- logging: no-op (decoders emit FURI_LOG_* we don't need on host) ----
 void furi_log_print_format(int level, const char* tag, const char* format, ...) {
     (void)level;
-    (void)tag;
-    (void)format;
+    va_list ap;
+    va_start(ap, format);
+    fprintf(stderr, "[LOG][%s] ", tag ? tag : "?");
+    vfprintf(stderr, format, ap);
+    fputc(10, stderr);
+    va_end(ap);
 }
 void furi_log_print_raw_format(int level, const char* format, ...) {
     (void)level;
@@ -77,3 +82,6 @@ bool buffered_file_stream_close(void* s) {
     (void)s;
     return false;
 }
+
+/* Host stub: no delay on host (real firmware has furi_delay_tick in furi HAL). */
+void furi_delay_tick(uint32_t ticks) { (void)ticks; }

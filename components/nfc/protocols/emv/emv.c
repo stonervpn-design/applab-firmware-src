@@ -76,23 +76,33 @@ bool emv_load(EmvData* data, FlipperFormat* ff, uint32_t version) {
 
         EmvApplication* app = &data->emv_application;
 
+        // Bounded copies: these strings come from an untrusted .nfc file; strcpy would
+        // overflow the fixed struct fields. snprintf truncates to fit and NUL-terminates.
         flipper_format_read_string(ff, "Cardholder name", temp_str);
-        strcpy(app->cardholder_name, furi_string_get_cstr(temp_str));
+        snprintf(
+            app->cardholder_name, sizeof(app->cardholder_name), "%s", furi_string_get_cstr(temp_str));
 
         flipper_format_read_string(ff, "Application name", temp_str);
-        strcpy(app->application_name, furi_string_get_cstr(temp_str));
+        snprintf(
+            app->application_name, sizeof(app->application_name), "%s", furi_string_get_cstr(temp_str));
 
         flipper_format_read_string(ff, "Application label", temp_str);
-        strcpy(app->application_label, furi_string_get_cstr(temp_str));
+        snprintf(
+            app->application_label,
+            sizeof(app->application_label),
+            "%s",
+            furi_string_get_cstr(temp_str));
 
         uint32_t pan_len;
         if(!flipper_format_read_uint32(ff, "PAN length", &pan_len, 1)) break;
+        if(pan_len > sizeof(app->pan)) break; // reject over-long PAN from untrusted file
         app->pan_len = pan_len;
 
         if(!flipper_format_read_hex(ff, "PAN", app->pan, pan_len)) break;
 
         uint32_t aid_len;
         if(!flipper_format_read_uint32(ff, "AID length", &aid_len, 1)) break;
+        if(aid_len > sizeof(app->aid)) break; // reject over-long AID from untrusted file
         app->aid_len = aid_len;
 
         if(!flipper_format_read_hex(ff, "AID", app->aid, aid_len)) break;

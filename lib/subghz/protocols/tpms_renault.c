@@ -40,8 +40,17 @@ typedef struct {
     SubGhzProtocolDecoderBase base;
     SubGhzBlockDecoder decoder;
     TPMSBlockGeneric generic;
-    ManchesterState manchester_saved_state;
-    uint16_t header_shift;
+    // Renault is FSK where the frame is RAW half-symbols: a fixed sync preamble in
+    // the raw bits, then the 72-bit payload is Manchester-encoded (matches
+    // rtl_433 tpms_renault: it inverts then searches 0xAAA9 == raw 0x5556, and
+    // manchester-decodes only the data). The old port ran manchester over
+    // EVERYTHING and hunted the preamble in the manchester-decoded stream, which
+    // never syncs.
+    uint16_t raw_shift; // rolling window of raw half-symbol bits for preamble hunt
+    bool in_data; // true once the preamble matched, collecting manchester data
+    bool data_second; // pair convention: false=data is 1st half (0x5556), true=2nd (0xAAA9)
+    bool have_half; // holding the first half of a manchester pair
+    uint8_t first_half; // the first half-symbol of the current pair
     uint64_t head_64_bit; // upper bits when frame > 64 bit (see subghz_protocol_blocks_add_to_128_bit)
 } TPMSProtocolDecoderRenault;
 
@@ -85,7 +94,6 @@ void* tpms_protocol_decoder_renault_alloc(SubGhzEnvironment* environment) {
     TPMSProtocolDecoderRenault* instance = calloc(1, sizeof(TPMSProtocolDecoderRenault));
     instance->base.protocol = &tpms_protocol_renault;
     instance->generic.protocol_name = instance->base.protocol->name;
-    instance->manchester_saved_state = ManchesterStateStart1;
     return instance;
 }
 
@@ -97,30 +105,14 @@ void tpms_protocol_decoder_renault_free(void* context) {
 void tpms_protocol_decoder_renault_reset(void* context) {
     furi_assert(context);
     TPMSProtocolDecoderRenault* instance = context;
-    instance->decoder.parser_step = RenaultDecoderStepReset;
     instance->decoder.decode_data = 0;
     instance->decoder.decode_count_bit = 0;
+    instance->raw_shift = 0;
+    instance->in_data = false;
+    instance->data_second = false;
+    instance->have_half = false;
+    instance->first_half = 0;
     instance->head_64_bit = 0;
-    instance->header_shift = 0;
-    instance->manchester_saved_state = ManchesterStateStart1;
-}
-
-static ManchesterEvent renault_evt(bool level, uint32_t duration) {
-    bool is_long = false;
-    if(DURATION_DIFF(duration, tpms_protocol_renault_const.te_long) <
-       tpms_protocol_renault_const.te_delta * 2) {
-        is_long = true;
-    } else if(
-        DURATION_DIFF(duration, tpms_protocol_renault_const.te_short) <
-        tpms_protocol_renault_const.te_delta) {
-        is_long = false;
-    } else {
-        return ManchesterEventReset;
-    }
-    if(level)
-        return is_long ? ManchesterEventLongHigh : ManchesterEventShortHigh;
-    else
-        return is_long ? ManchesterEventLongLow : ManchesterEventShortLow;
 }
 
 static void renault_get_bytes(TPMSProtocolDecoderRenault* instance, uint8_t b[9]) {
@@ -174,57 +166,70 @@ void tpms_protocol_renault_pack(TPMSBlockGeneric* g) {
     g->data_count_bit = 72;
 }
 
-void tpms_protocol_decoder_renault_feed(void* context, bool level, uint32_t duration) {
-    furi_assert(context);
-    TPMSProtocolDecoderRenault* instance = context;
-
-    ManchesterEvent event = renault_evt(level, duration);
-    if(event == ManchesterEventReset) {
-        instance->decoder.parser_step = RenaultDecoderStepReset;
-        instance->decoder.decode_data = 0;
-        instance->decoder.decode_count_bit = 0;
-        instance->head_64_bit = 0;
-        instance->header_shift = 0;
-        instance->manchester_saved_state = ManchesterStateStart1;
-        return;
-    }
-
-    bool bit = false;
-    bool have_bit = manchester_advance(
-        instance->manchester_saved_state, event, &instance->manchester_saved_state, &bit);
-    if(!have_bit) return;
-
-    switch(instance->decoder.parser_step) {
-    case RenaultDecoderStepReset:
-        instance->header_shift = 0;
-        instance->manchester_saved_state = ManchesterStateStart1;
-        instance->decoder.parser_step = RenaultDecoderStepFindPreamble;
-        /* fallthrough */
-    case RenaultDecoderStepFindPreamble:
-        instance->header_shift = (uint16_t)((instance->header_shift << 1) | (bit ? 1 : 0));
-        if(instance->header_shift == RENAULT_PREAMBLE) {
-            instance->decoder.parser_step = RenaultDecoderStepData;
+// Consume one raw half-symbol bit: hunt the raw preamble (0x5556, or the
+// inverted-polarity 0xAAA9), then Manchester-decode the 72-bit payload. Matches
+// rtl_433 tpms_renault (preamble searched in raw bits; only the data is
+// Manchester). The frame is >64 bits, so the top bits spill into head_64_bit via
+// subghz_protocol_blocks_add_to_128_bit (low byte lands in head_64_bit = b[0]).
+static void renault_emit_raw_bit(TPMSProtocolDecoderRenault* instance, uint8_t bit) {
+    bit &= 1;
+    if(!instance->in_data) {
+        instance->raw_shift = (uint16_t)((instance->raw_shift << 1) | bit);
+        if(instance->raw_shift == 0x5556 || instance->raw_shift == 0xAAA9) {
+            instance->in_data = true;
+            instance->data_second = (instance->raw_shift == 0xAAA9);
+            instance->have_half = false;
             instance->decoder.decode_data = 0;
             instance->decoder.decode_count_bit = 0;
             instance->head_64_bit = 0;
         }
-        break;
-
-    case RenaultDecoderStepData:
-        subghz_protocol_blocks_add_to_128_bit(
-            &instance->decoder, bit ? 1 : 0, &instance->head_64_bit);
-        if(instance->decoder.decode_count_bit ==
-           tpms_protocol_renault_const.min_count_bit_for_found) {
-            if(renault_check_crc(instance)) {
-                instance->generic.data = instance->decoder.decode_data;
-                instance->generic.data_count_bit = instance->decoder.decode_count_bit;
-                renault_analyze(instance);
-                if(instance->base.callback)
-                    instance->base.callback(&instance->base, instance->base.context);
-            }
-            instance->decoder.parser_step = RenaultDecoderStepReset;
+        return;
+    }
+    // Inside the Manchester payload: pair up half-symbols. A valid pair is a
+    // transition (halves differ); the data bit is the 1st half (0x5556) or 2nd
+    // half (0xAAA9). No transition = end/garbage -> resync on the preamble.
+    if(!instance->have_half) {
+        instance->first_half = bit;
+        instance->have_half = true;
+        return;
+    }
+    instance->have_half = false;
+    if(instance->first_half == bit) {
+        instance->in_data = false;
+        instance->raw_shift = 0;
+        return;
+    }
+    uint8_t data_bit = instance->data_second ? bit : instance->first_half;
+    subghz_protocol_blocks_add_to_128_bit(&instance->decoder, data_bit, &instance->head_64_bit);
+    if(instance->decoder.decode_count_bit == RENAULT_DATA_BITS) {
+        if(renault_check_crc(instance)) {
+            instance->generic.data = instance->decoder.decode_data;
+            instance->generic.data_count_bit = instance->decoder.decode_count_bit;
+            renault_analyze(instance);
+            if(instance->base.callback)
+                instance->base.callback(&instance->base, instance->base.context);
         }
-        break;
+        instance->in_data = false;
+        instance->raw_shift = 0;
+    }
+}
+
+void tpms_protocol_decoder_renault_feed(void* context, bool level, uint32_t duration) {
+    furi_assert(context);
+    TPMSProtocolDecoderRenault* instance = context;
+
+    const uint32_t te = tpms_protocol_renault_const.te_short; // 52us half-symbol
+    // A gap (or any pulse longer than two half-symbols) ends the burst.
+    if(duration >= te * 3) {
+        tpms_protocol_decoder_renault_reset(instance);
+        return;
+    }
+    // Expand this pulse into 1 or 2 raw half-symbol bits of the current level.
+    uint32_t n = (duration + te / 2) / te;
+    if(n < 1) n = 1;
+    if(n > 2) n = 2;
+    for(uint32_t k = 0; k < n; k++) {
+        renault_emit_raw_bit(instance, level ? 1 : 0);
     }
 }
 
@@ -353,23 +358,26 @@ static bool tpms_protocol_encoder_renault_get_upload(TPMSProtocolEncoderRenault*
         }                                                                             \
     } while(0)
 
+// Manchester data bit: 1st half = the data bit (decoder reads data = 1st half of
+// each transitioning pair for the 0x5556 preamble).
 #define MAN_BIT(bit)                 \
     do {                             \
         if(bit) {                    \
-            EMIT(false, te);         \
             EMIT(true, te);          \
+            EMIT(false, te);         \
         } else {                     \
-            EMIT(true, te);          \
             EMIT(false, te);         \
+            EMIT(true, te);          \
         }                            \
     } while(0)
 
     EMIT(false, te * 50);
 
+    // Raw sync preamble (NOT Manchester): decoder hunts the raw 0x5556 pattern.
     static const uint8_t preamble[4] = {0x55, 0x55, 0x55, 0x56};
     for(int i = 0; i < 4; i++) {
         for(int b = 7; b >= 0; b--) {
-            MAN_BIT((preamble[i] >> b) & 0x1);
+            EMIT(((preamble[i] >> b) & 0x1) ? true : false, te);
         }
     }
 

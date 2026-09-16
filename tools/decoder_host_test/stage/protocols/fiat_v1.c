@@ -537,6 +537,10 @@ static bool fiat_v1_key_matches(
     return fiat_v1_bcm_generate_authenticator(uid, button, control, key, epoch) == hop;
 }
 
+#ifndef FIAT_V1_EPOCH_SEARCH_MAX
+#define FIAT_V1_EPOCH_SEARCH_MAX 256U
+#endif
+
 static void fiat_v1_verify_hitag2_key(SubGhzProtocolDecoderFiatV1* instance) {
     instance->hitag2_key_valid = false;
     instance->hitag2_epoch = 0U;
@@ -547,12 +551,21 @@ static void fiat_v1_verify_hitag2_key(SubGhzProtocolDecoderFiatV1* instance) {
     const uint16_t control = (uint16_t)(instance->generic.cnt & 0x03FFU);
     const uint32_t hop = instance->hop;
 
-    for(uint8_t i = 0U; i < FIAT_V1_KNOWN_KEY_COUNT; i++) {
-        if(fiat_v1_key_matches(
-               uid, button, control, hop, fiat_v1_known_keys[i], instance->hitag2_epoch)) {
-            memcpy(instance->hitag2_key, fiat_v1_known_keys[i], sizeof(instance->hitag2_key));
-            instance->hitag2_key_valid = true;
-            return;
+    // The authenticator IV embeds an 18-bit epoch = full_counter >> 10; the
+    // captured `control` is only its low 10 bits. A factory-key fob past its
+    // first ~1024 presses sits at epoch>0, so search epochs 0..255 (<=2048
+    // authenticator runs, a few ms on-device) instead of only epoch 0. A
+    // deployed per-car key matches at no epoch -> still offline-only (2^38).
+    for(uint32_t epoch = 0U; epoch < FIAT_V1_EPOCH_SEARCH_MAX; epoch++) {
+        for(uint8_t i = 0U; i < FIAT_V1_KNOWN_KEY_COUNT; i++) {
+            if(fiat_v1_key_matches(
+                   uid, button, control, hop, fiat_v1_known_keys[i], epoch)) {
+                memcpy(
+                    instance->hitag2_key, fiat_v1_known_keys[i], sizeof(instance->hitag2_key));
+                instance->hitag2_epoch = epoch;
+                instance->hitag2_key_valid = true;
+                return;
+            }
         }
     }
 }

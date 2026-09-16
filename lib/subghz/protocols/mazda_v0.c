@@ -22,6 +22,7 @@ _Static_assert(
 #define MAZDA_V0_SYNC_BYTE     0xD7
 #define MAZDA_V0_TAIL_BYTE     0x5A
 #define MAZDA_V0_PREAMBLE_ONES 16
+#define MAZDA_V0_PREDICT_COUNT  3
 
 // =============================================================================
 // STRUCT DEFINITIONS
@@ -65,8 +66,9 @@ typedef enum {
 
 static bool mazda_v0_get_event(uint32_t duration, bool level, ManchesterEvent* event);
 static void mazda_v0_decode_key(SubGhzBlockGeneric* generic);
-#ifdef ENABLE_EMULATE_FEATURE
 static uint64_t mazda_v0_encode_key(uint32_t serial, uint8_t button, uint32_t counter);
+static uint64_t mazda_v0_predict_key(uint32_t serial, uint8_t button, uint32_t counter);
+#ifdef ENABLE_EMULATE_FEATURE
 static bool mazda_v0_encoder_add_level(
     SubGhzProtocolEncoderMazdaV0* instance,
     size_t* index,
@@ -192,7 +194,11 @@ static void mazda_v0_decode_key(SubGhzBlockGeneric* generic) {
     generic->data_count_bit = subghz_protocol_mazda_v0_const.min_count_bit_for_found;
 }
 
-#ifdef ENABLE_EMULATE_FEATURE
+// Deterministic rolling-code generator: the exact inverse of
+// mazda_v0_decode_key(). Pure integer math (plaintext layout + additive
+// checksum + reversible bit-interleave + forward XOR mask) with no
+// secret/manufacturer key, so it lives outside ENABLE_EMULATE_FEATURE and
+// decode-only builds can predict/display upcoming codes.
 static uint64_t mazda_v0_encode_key(uint32_t serial, uint8_t button, uint32_t counter) {
     uint8_t data[8];
 
@@ -224,6 +230,16 @@ static uint64_t mazda_v0_encode_key(uint32_t serial, uint8_t button, uint32_t co
     return pp_bytes_to_u64_be(data);
 }
 
+// Predict the full 64-bit frame for an absolute counter value by re-encoding
+// (serial, button, counter). Because mazda_v0_encode_key is the exact inverse
+// of mazda_v0_decode_key, the returned key decodes back to the same fields with
+// a valid additive checksum, so it is load/emulate/save-able. counter is masked
+// to the protocol's 20-bit field (wraps naturally at 0xFFFFF).
+static uint64_t mazda_v0_predict_key(uint32_t serial, uint8_t button, uint32_t counter) {
+    return mazda_v0_encode_key(serial, button, counter & 0xFFFFFU);
+}
+
+#ifdef ENABLE_EMULATE_FEATURE
 static bool mazda_v0_encoder_add_level(
     SubGhzProtocolEncoderMazdaV0* instance,
     size_t* index,
@@ -596,4 +612,20 @@ void subghz_protocol_decoder_mazda_v0_get_string(void* context, FuriString* outp
         mazda_v0_get_button_name(instance->generic.btn),
         (unsigned long)(instance->generic.cnt & 0xFFFFFU),
         raw_crc);
+
+    // Next-code prediction: the counter is cleartext and the frame is protected
+    // only by a reversible interleave/XOR + additive checksum that
+    // mazda_v0_encode_key reproduces exactly, so cnt+1..cnt+N are byte-correct.
+    // Guarded on a self-consistent (checksum-OK) frame so we only predict from a
+    // genuine capture with a known counter.
+    if(raw_crc == calc_crc) {
+        for(uint8_t i = 1; i <= MAZDA_V0_PREDICT_COUNT; i++) {
+            const uint64_t next_key = mazda_v0_predict_key(
+                instance->generic.serial,
+                instance->generic.btn,
+                (instance->generic.cnt & 0xFFFFFU) + (uint32_t)i);
+            furi_string_cat_printf(
+                output, "\r\nNext+%u:%016llX", (unsigned int)i, (unsigned long long)next_key);
+        }
+    }
 }

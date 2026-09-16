@@ -652,7 +652,17 @@ static void fiat_process_frame(SubGhzProtocolDecoderFiat* instance) {
 
     switch(instance->variant) {
     case FiatVariantV2: {
-        if(preamble_len < 8 || data_len < 64) return;
+        /* Strict structural gate. A genuine V2 frame is a 16-bit preamble plus
+         * exactly 86 data bits (32 fix + 32 hop + 22 tail) = 102-bit frame.
+         * Require the preamble and data length to match closely rather than
+         * accepting >=8 / >=64, and REJECT an over-long burst instead of silently
+         * truncating its tail to 22 bits — that truncation is what let a Fiat V1
+         * burst (read through this Manchester SM) commit here as a bogus V2.
+         * (Button validity is already enforced later via valid_btn.) */
+        if(preamble_len < (uint16_t)(FIAT_V2_PREAMBLE_BITS - 3) ||
+           preamble_len > (uint16_t)(FIAT_V2_PREAMBLE_BITS + 4))
+            return;
+        if(data_len < 86 || data_len > 88) return;
 
         uint32_t fix = 0;
         for(uint16_t i = 0; i < 32; i++) {

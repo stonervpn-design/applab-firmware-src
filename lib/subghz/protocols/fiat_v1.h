@@ -34,3 +34,12 @@ void subghz_protocol_decoder_fiat_v1_get_string(void* context, FuriString* outpu
 void* subghz_protocol_encoder_fiat_v1_alloc(SubGhzEnvironment* environment);
 SubGhzProtocolStatus
     subghz_protocol_encoder_fiat_v1_deserialize(void* context, FlipperFormat* flipper_format);
+
+// Public Fiat V1 Hitag2-BCM authenticator (for the Hitag2Hell recovery module's
+// self-test cross-check). uid/button/control/key[6]/epoch -> 32-bit auth.
+uint32_t subghz_protocol_fiat_v1_compute_auth(
+    uint32_t uid,
+    uint8_t button,
+    uint16_t control,
+    const uint8_t key[6],
+    uint32_t epoch);

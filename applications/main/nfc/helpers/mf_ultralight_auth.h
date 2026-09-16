@@ -18,6 +18,8 @@ typedef struct {
     MfUltralightAuthType type;
     MfUltralightAuthPassword password;
     MfUltralightC3DesAuthKey tdes_key;
+    MfUltralightAesKey aes_key; // UL-AES (MF0AES20) 16-byte AES key
+    MfUltralightAesKeyType aes_key_type; // which on-card AES key slot (default Data)
     MfUltralightAuthPack pack;
 } MfUltralightAuth;
 

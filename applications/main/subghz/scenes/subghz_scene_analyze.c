@@ -72,7 +72,7 @@ static KeeloqTypeInfo subghz_scene_analyze_keeloq_family(SubGhz* subghz, const c
     SubGhzKeyArray_t* data = subghz_keystore_get_data(keystore);
     if(!data) return info;
     for M_EACH(key, *data, SubGhzKeyArray_t) {
-        if(strcmp(furi_string_get_cstr(key->name), mf_name) == 0) {
+        if(strcmp(key->name, mf_name) == 0) {
             return subghz_keeloq_registry_type_info(key->type, mf_name);
         }
     }

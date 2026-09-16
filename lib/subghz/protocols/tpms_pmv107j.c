@@ -23,18 +23,16 @@
 //
 // Preamble (decoded): 6-bit `0b111110` = 0xF8.
 //
-// We implement Differential Manchester decoding directly from level/duration
-// pulses (the Flipper port has no helper for it). State machine:
-//   - duration ≈ te_long  → bit had no mid-bit transition → emit "1"
-//   - duration ≈ te_short → half-bit traversal. First half: just set "saw
-//     start transition"; second half: emit "0".
-//
-// State starts UNCLOCKED; the first te_long pulse establishes synchronisation
-// (the preamble starts with five "1" bits = five te_long durations).
+// rtl_433 uses FSK_PULSE_PCM (short=long=100us): the raw bit stream is one bit
+// per 100us half-symbol. It searches the 6-bit preamble 0xF8 (top 6 bits =
+// 0b111110) in that RAW stream, then runs bitbuffer_differential_manchester_decode
+// from bitpos+6 with maxbits=70, requiring at least 67*2 raw bits. We mirror that:
+// feed() expands each pulse into round(dur/te_short) raw half-symbol bits, and on a
+// gap we search the raw buffer for the 6-bit preamble and DM-decode the 66-bit
+// payload. (The old pulse-width DM + preamble_shift state machine never matched
+// real frames.)
 
-// 6-bit preamble 0b111110 (five '1' bits + a '0'); must fit the 6-bit
-// preamble_shift accumulator (masked & 0x3F). The old 0xF8 (8-bit) could never
-// match the masked value, so the decoder never left FindPreamble.
+// 6-bit preamble 0b111110 = top 6 bits of rtl_433's 0xF8 pattern.
 #define PMV107J_PREAMBLE 0x3EU
 #define PMV107J_PREAMBLE_BITS 6
 #define PMV107J_DATA_BITS 66
@@ -46,26 +44,18 @@ static const SubGhzBlockConst tpms_protocol_pmv107j_const = {
     .min_count_bit_for_found = PMV107J_DATA_BITS,
 };
 
-typedef enum {
-    Pmv107jDmUnclocked = 0, // not yet seen any te_long → no sync
-    Pmv107jDmAtBoundary, // about to start a new bit
-    Pmv107jDmAtMid, // saw mid-bit transition, waiting for the next-bit boundary
-} Pmv107jDmState;
-
-typedef enum {
-    Pmv107jStepReset = 0,
-    Pmv107jStepFindPreamble,
-    Pmv107jStepData,
-} Pmv107jStep;
-
 typedef struct {
     SubGhzProtocolDecoderBase base;
     SubGhzBlockDecoder decoder;
     TPMSBlockGeneric generic;
 
-    Pmv107jDmState dm_state;
-    uint8_t preamble_shift;
-    uint64_t head_64_bit;
+    // Raw half-symbol bits for the current burst. On a gap the buffer is searched
+    // for the 6-bit 0x3E preamble and the payload is differential-Manchester
+    // decoded, faithfully mirroring rtl_433 bitbuffer_differential_manchester_decode
+    // (the old pulse-width DM + preamble_shift state machine never matched frames).
+    uint8_t rawbuf[48]; // up to 384 raw half-symbol bits
+    uint16_t rawbits;
+    uint64_t head_64_bit; // upper bits when frame > 64 bit (add_to_128_bit)
 } TPMSProtocolDecoderPmv107j;
 
 typedef struct {
@@ -105,7 +95,7 @@ const SubGhzProtocol tpms_protocol_pmv107j = {
 
 void* tpms_protocol_decoder_pmv107j_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
-    TPMSProtocolDecoderPmv107j* instance = malloc(sizeof(TPMSProtocolDecoderPmv107j));
+    TPMSProtocolDecoderPmv107j* instance = calloc(1, sizeof(TPMSProtocolDecoderPmv107j));
     instance->base.protocol = &tpms_protocol_pmv107j;
     instance->generic.protocol_name = instance->base.protocol->name;
     return instance;
@@ -117,12 +107,10 @@ void tpms_protocol_decoder_pmv107j_free(void* context) {
 }
 
 static void pmv107j_reset_state(TPMSProtocolDecoderPmv107j* instance) {
-    instance->decoder.parser_step = Pmv107jStepReset;
     instance->decoder.decode_data = 0;
     instance->decoder.decode_count_bit = 0;
     instance->head_64_bit = 0;
-    instance->dm_state = Pmv107jDmUnclocked;
-    instance->preamble_shift = 0;
+    instance->rawbits = 0;
 }
 
 void tpms_protocol_decoder_pmv107j_reset(void* context) {
@@ -130,38 +118,53 @@ void tpms_protocol_decoder_pmv107j_reset(void* context) {
     pmv107j_reset_state(context);
 }
 
-// Returns -1 = no bit yet, 0 or 1 = decoded bit, -2 = sync lost / reset.
-static int pmv107j_dm_advance(TPMSProtocolDecoderPmv107j* instance, uint32_t duration) {
-    bool is_short = DURATION_DIFF(duration, tpms_protocol_pmv107j_const.te_short) <
-                    tpms_protocol_pmv107j_const.te_delta;
-    bool is_long = DURATION_DIFF(duration, tpms_protocol_pmv107j_const.te_long) <
-                   tpms_protocol_pmv107j_const.te_delta;
+// Raw half-symbol bit access (MSB-first per byte), matching rtl_433 bit_at.
+static inline uint8_t pmv107j_bit_at(const uint8_t* buf, unsigned i) {
+    return (uint8_t)((buf[i >> 3] >> (7 - (i & 7))) & 1);
+}
 
-    if(!is_short && !is_long) {
-        instance->dm_state = Pmv107jDmUnclocked;
-        return -2;
+// Faithful port of rtl_433 bitbuffer_differential_manchester_decode: decode up to
+// `maxbits` data bits starting at raw-bit `start` into out[] (one byte per bit),
+// returning the count. bit1 is the clock half (must differ from the previous data
+// half); the data bit is (bit1==bit2)?1:0.
+static int pmv107j_dm_decode(
+    const uint8_t* buf,
+    unsigned nbits,
+    unsigned start,
+    uint8_t* out,
+    int maxbits) {
+    unsigned ipos = start, len = nbits;
+    if(maxbits && len > start + (unsigned)maxbits * 2) len = start + (unsigned)maxbits * 2;
+    uint8_t bit2 = 0;
+    int n = 0;
+    // sync: establish the clock (may emit leading data bits, per rtl_433)
+    while(ipos + 1 < len) {
+        uint8_t b1 = pmv107j_bit_at(buf, ipos++);
+        uint8_t b2 = pmv107j_bit_at(buf, ipos++);
+        uint8_t b3 = (ipos < nbits) ? pmv107j_bit_at(buf, ipos) : 0;
+        if(b1 != b2) {
+            if(b2 != b3) {
+                if(n < maxbits) out[n++] = 0;
+            } else {
+                bit2 = b1;
+                ipos -= 1;
+                break;
+            }
+        } else {
+            bit2 = (uint8_t)(1 - b1);
+            ipos -= 2;
+            break;
+        }
     }
-
-    if(is_long) {
-        // Full bit period without a mid transition → "1".
-        instance->dm_state = Pmv107jDmAtBoundary;
-        return 1;
+    // main: two raw halves per data bit
+    while(ipos + 1 < len && n < maxbits) {
+        uint8_t b1 = pmv107j_bit_at(buf, ipos++);
+        if(b1 == bit2) break; // clock missing
+        uint8_t b2 = pmv107j_bit_at(buf, ipos++);
+        out[n++] = (b1 == b2) ? 1 : 0;
+        bit2 = b2;
     }
-
-    // is_short
-    if(instance->dm_state == Pmv107jDmUnclocked) {
-        // Can't tell whether this is start- or mid-half until we've seen a
-        // te_long anchor; drop until we sync.
-        return -1;
-    }
-    if(instance->dm_state == Pmv107jDmAtBoundary) {
-        // First half of a bit with mid-transition.
-        instance->dm_state = Pmv107jDmAtMid;
-        return -1;
-    }
-    // At mid → second half done, full bit consumed with mid-transition → "0".
-    instance->dm_state = Pmv107jDmAtBoundary;
-    return 0;
+    return n;
 }
 
 static void pmv107j_get_bytes(TPMSProtocolDecoderPmv107j* instance, uint8_t b[9]) {
@@ -224,49 +227,73 @@ void tpms_protocol_pmv107j_pack(TPMSBlockGeneric* g) {
     g->data_count_bit = 66;
 }
 
+// Search the accumulated raw buffer for the 6-bit preamble 0x3E and, from each
+// hit, differential-Manchester-decode the 66-bit payload (from bitpos+6) and
+// accept on CRC + the pressure/inverted-pressure integrity check. Mirrors
+// rtl_433 tpms_pmv107j_callback (bitbuffer_search 6, decode from bitpos+6).
+static void pmv107j_process(TPMSProtocolDecoderPmv107j* instance) {
+    unsigned nbits = instance->rawbits;
+    if(nbits < PMV107J_PREAMBLE_BITS + PMV107J_DATA_BITS * 2u) return;
+    for(unsigned pos = 0; pos + PMV107J_PREAMBLE_BITS <= nbits; pos++) {
+        uint16_t v = 0;
+        for(int k = 0; k < PMV107J_PREAMBLE_BITS; k++)
+            v = (uint16_t)((v << 1) | pmv107j_bit_at(instance->rawbuf, pos + k));
+        if(v != PMV107J_PREAMBLE) continue;
+
+        // Decode up to 80 bits (the sync loop can emit leading data bits before
+        // the clock locks, per rtl_433), then require the full 66-bit payload.
+        uint8_t bits[80];
+        int n = pmv107j_dm_decode(
+            instance->rawbuf, nbits, pos + PMV107J_PREAMBLE_BITS, bits, 80);
+        if(n < (int)PMV107J_DATA_BITS) continue;
+
+        instance->decoder.decode_data = 0;
+        instance->head_64_bit = 0;
+        instance->decoder.decode_count_bit = 0;
+        for(int i = 0; i < (int)PMV107J_DATA_BITS; i++) {
+            subghz_protocol_blocks_add_to_128_bit(
+                &instance->decoder, bits[i], &instance->head_64_bit);
+        }
+        if(pmv107j_check(instance)) {
+            instance->generic.data = instance->decoder.decode_data;
+            instance->generic.data_count_bit = instance->decoder.decode_count_bit;
+            pmv107j_analyze(instance);
+            if(instance->base.callback)
+                instance->base.callback(&instance->base, instance->base.context);
+            return; // one good frame per burst is enough
+        }
+    }
+}
+
 void tpms_protocol_decoder_pmv107j_feed(void* context, bool level, uint32_t duration) {
     furi_assert(context);
-    UNUSED(level);
     TPMSProtocolDecoderPmv107j* instance = context;
 
-    int bit = pmv107j_dm_advance(instance, duration);
-    if(bit == -2) {
+    const uint32_t te = tpms_protocol_pmv107j_const.te_short; // 100us half-symbol
+    // A gap ends the burst. The PMV preamble 0b111110 is a raw 5-symbol run
+    // (~500us), so the gap threshold must sit ABOVE it (7*te) and the per-pulse
+    // expansion must allow up to 6 half-symbols (DM data never exceeds 2, but the
+    // preamble run does — a 4-cap truncates it and a 5*te gap resets on it).
+    if(duration >= te * 7) {
+        pmv107j_process(instance);
         pmv107j_reset_state(instance);
         return;
     }
-    if(bit == -1) return;
-
-    switch(instance->decoder.parser_step) {
-    case Pmv107jStepReset:
-        instance->preamble_shift = 0;
-        instance->decoder.parser_step = Pmv107jStepFindPreamble;
-        /* fallthrough */
-    case Pmv107jStepFindPreamble:
-        instance->preamble_shift =
-            (uint8_t)(((instance->preamble_shift << 1) | (bit & 0x1)) & 0x3F);
-        if(instance->preamble_shift == PMV107J_PREAMBLE) {
-            instance->decoder.parser_step = Pmv107jStepData;
-            instance->decoder.decode_data = 0;
-            instance->decoder.decode_count_bit = 0;
-            instance->head_64_bit = 0;
-        }
-        break;
-
-    case Pmv107jStepData:
-        subghz_protocol_blocks_add_to_128_bit(
-            &instance->decoder, (uint8_t)bit, &instance->head_64_bit);
-        if(instance->decoder.decode_count_bit ==
-           tpms_protocol_pmv107j_const.min_count_bit_for_found) {
-            if(pmv107j_check(instance)) {
-                instance->generic.data = instance->decoder.decode_data;
-                instance->generic.data_count_bit = instance->decoder.decode_count_bit;
-                pmv107j_analyze(instance);
-                if(instance->base.callback)
-                    instance->base.callback(&instance->base, instance->base.context);
-            }
+    // Expand this pulse into 1..6 raw half-symbol bits of the current level.
+    uint32_t nb = (duration + te / 2) / te;
+    if(nb < 1) nb = 1;
+    if(nb > 6) nb = 6;
+    for(uint32_t k = 0; k < nb; k++) {
+        if(instance->rawbits >= (uint16_t)(sizeof(instance->rawbuf) * 8)) {
+            pmv107j_process(instance);
             pmv107j_reset_state(instance);
         }
-        break;
+        unsigned idx = instance->rawbits;
+        if(level)
+            instance->rawbuf[idx >> 3] |= (uint8_t)(0x80u >> (idx & 7u));
+        else
+            instance->rawbuf[idx >> 3] &= (uint8_t)~(0x80u >> (idx & 7u));
+        instance->rawbits++;
     }
 }
 
@@ -390,38 +417,62 @@ static bool tpms_protocol_encoder_pmv107j_get_upload(TPMSProtocolEncoderPmv107j*
         for(int j = 7; j >= 0; j--) bits[n++] = (frame[i] >> j) & 0x1;
     }
 
+    (void)te_long;
     size_t index = 0;
     const size_t max = instance->encoder.size_upload;
-    bool level = true;
+    bool last_level = false;
+    uint32_t last_duration = 0;
 
-#define PUSH(dur)                                                                  \
-    do {                                                                           \
-        if(index >= max) return false;                                             \
-        instance->encoder.upload[index++] = level_duration_make(level, (dur));     \
-        level = !level;                                                            \
+    // Run-length-merged emit (matches the raw-bit model the fixed decoder expands
+    // via round(dur/te_short)): each RAW() is ONE raw half-symbol of te_short.
+#define EMIT(lvl, dur)                                                                \
+    do {                                                                              \
+        if(last_duration != 0 && last_level == (lvl)) {                               \
+            last_duration += (dur);                                                   \
+        } else {                                                                      \
+            if(last_duration != 0) {                                                  \
+                if(index >= max) return false;                                        \
+                instance->encoder.upload[index++] =                                   \
+                    level_duration_make(last_level, last_duration);                   \
+            }                                                                         \
+            last_level = (lvl);                                                       \
+            last_duration = (dur);                                                    \
+        }                                                                             \
     } while(0)
+#define RAW(bit) EMIT((bit) ? true : false, te_short)
 
-    // Inter-frame gap: out-of-range low -> decoder reset (loses sync/clock)
-    PUSH(te_short * 40);
+    // Inter-frame gap (>= te_short*7 reset threshold) so each frame starts clean.
+    EMIT(false, te_short * 40);
 
-    // Preamble: lead-in '1' bits (te_long) then a single '0' -> forms 0x3E
-    for(int i = 0; i < TPMS_PMV107J_PREAMBLE_ONES; i++) {
-        PUSH(te_long);
-    }
-    PUSH(te_short); // '0' first half
-    PUSH(te_short); // '0' second half
+    // Raw preamble 0x3E = 0b111110 (five high half-symbols + one low). The decoder
+    // hunts this RAW 6-bit pattern; it must NOT be differential-Manchester encoded,
+    // and the 5-run must stay within the feed's per-pulse cap (so exactly five ones).
+    RAW(1);
+    RAW(1);
+    RAW(1);
+    RAW(1);
+    RAW(1);
+    RAW(0);
 
-    // 66 data bits
+    // 66 data bits, differential-Manchester encoded to match pmv107j_dm_decode:
+    // clock half b1 flips the previous data half; second half b2 == b1 for a '1',
+    // != b1 for a '0'. prev starts at 0 (the last preamble bit).
+    int prev = 0;
     for(int i = 0; i < PMV107J_DATA_BITS; i++) {
-        if(bits[i]) {
-            PUSH(te_long);
-        } else {
-            PUSH(te_short);
-            PUSH(te_short);
-        }
+        int b1 = 1 - prev;
+        int b2 = bits[i] ? b1 : (1 - b1);
+        RAW(b1);
+        RAW(b2);
+        prev = b2;
     }
 
-#undef PUSH
+    if(last_duration != 0) {
+        if(index >= max) return false;
+        instance->encoder.upload[index++] = level_duration_make(last_level, last_duration);
+    }
+
+#undef RAW
+#undef EMIT
 
     instance->encoder.size_upload = index;
     return true;

@@ -14,6 +14,10 @@ typedef enum {
     TrackerKindAppleNearby,   // Apple Nearby: mfg 0x004C + sub 0x10 (iPhone/Watch)
     TrackerKindMetaGlasses,   // Ray-Ban Meta smart glasses: mfg 0x058E (fox-hunt target)
     TrackerKindDroneRID,      // Drone Remote ID (ASTM F3411): service data UUID 0xFFFA
+    TrackerKindChipolo,       // Chipolo (non-Spot): 16-bit service UUID 0xFE33 / 0xFE65
+    TrackerKindPebblebee,     // Pebblebee (native mode): local name "PB-"/"FNDR"/"Pebblebee"
+    TrackerKindNut,           // Nut / Nutale: local name starts "nut"
+    TrackerKindSmartwatch,    // Mi Band/Amazfit (0xFEE0/0x0157), Huawei/Fitbit/Garmin wearables
 } TrackerKind;
 
 typedef struct {

@@ -344,7 +344,12 @@ static void honda_v5_process_frame(SubGhzProtocolDecoderHondaV5* instance) {
             instance->generic.crc = computed_crc;
             instance->generic.crc_check = instance->crc_ok;
 
-            if(instance->base.callback) {
+            // [FP-FIX 2026-09-14] Alt 168-bit path was gated only by the 16-bit
+            // 0x6428 header (~2^-16) and emitted regardless of CRC. Require the
+            // reflected CRC-8 to pass (raises accept to ~2^-24). A 0x6428-header
+            // frame can never also match the standard 0x6C0F62 header, so dropping
+            // (not falling through) loses no true standard frame.
+            if(instance->crc_ok && instance->base.callback) {
                 instance->base.callback(&instance->base, instance->base.context);
             }
             return;

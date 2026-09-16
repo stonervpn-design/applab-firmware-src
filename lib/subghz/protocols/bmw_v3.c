@@ -471,7 +471,18 @@ static void subghz_protocol_encoder_bmw_v3_get_upload(SubGhzProtocolEncoderBmwV3
         }
     }
 
-    // Gap between repetitions
+    // The decoder emits a data bit only after seeing BOTH te_short halves of its
+    // Manchester pair (and fires the callback the instant bit 64 completes). When
+    // the last data bit is 1 the pair ends on a LOW half, which on-air (and in the
+    // coalesce) merges with the LOW inter-frame gap and swallows the 64th bit ->
+    // the frame decodes as 63 bits and is rejected. Emit a HIGH te_short terminator
+    // so that trailing LOW half stays a distinct pulse before the (LOW) gap.
+    if((data & 1ULL) != 0ULL) {
+        instance->encoder.upload[index++] =
+            level_duration_make(true, (uint32_t)subghz_protocol_bmw_v3_const.te_short);
+    }
+
+    // Gap between repetitions (LOW so the decoder can re-sync on the next frame)
     instance->encoder.upload[index++] =
         level_duration_make(false, (uint32_t)BMW_V3_GAP_MIN + 150);
 

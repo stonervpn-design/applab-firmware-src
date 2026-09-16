@@ -64,6 +64,7 @@ idf_component_register(
         "protocols/mf_plus/mf_plus_poller.c"
         "protocols/mf_plus/mf_plus_poller_i.c"
         "protocols/mf_ultralight/mf_ultralight.c"
+        "protocols/mf_ultralight/mf_ultralight_aes_crypto.c"
         "protocols/mf_ultralight/mf_ultralight_listener.c"
         "protocols/mf_ultralight/mf_ultralight_listener_i.c"
         "protocols/mf_ultralight/mf_ultralight_poller.c"

@@ -160,6 +160,23 @@ static struct ble_gap_adv_params serial_adv_params = {
     .itvl_max = 0x40,
 };
 
+/* ---- Preferred connection parameters ----
+ * Requested from the central right after connect. A long (5 s) supervision
+ * timeout with zero slave latency keeps the mobile-app link up even when this
+ * device is busy driving the nRF24 / WiFi / LCD and briefly misses connection
+ * events — the classic cause of a session that "connects then drops on its own".
+ * Interval 30–45 ms (multiples of 15 ms), max ≥ min+15 ms, timeout < 6 s: all
+ * within Apple's BLE parameter guidelines so iOS accepts the update instead of
+ * rejecting it. Units: interval = 1.25 ms, supervision_timeout = 10 ms. */
+static const struct ble_gap_upd_params serial_conn_params = {
+    .itvl_min = 24,             /* 30 ms */
+    .itvl_max = 36,             /* 45 ms */
+    .latency = 0,
+    .supervision_timeout = 500, /* 5000 ms */
+    .min_ce_len = 0,
+    .max_ce_len = 0,
+};
+
 /* ---- Forward declarations ---- */
 static int ble_gap_event(struct ble_gap_event* event, void* arg);
 static void serial_try_start_advertising_locked(void);
@@ -613,6 +630,24 @@ static void serial_resend_flow_and_rpc(BleSerial* s) {
     }
 }
 
+/* Decode the common HCI disconnect reasons so a dropped mobile-app session is
+ * diagnosable from the console. NimBLE wraps the HCI code as BLE_HS_HCI_ERR
+ * (0x200 + code); accept either the wrapped or the raw form. */
+static const char* serial_disconnect_reason_str(int reason) {
+    int hci = (reason >= 0x200) ? (reason - 0x200) : reason;
+    switch(hci) {
+    case 0x08: return "supervision timeout (link lost)";
+    case 0x13: return "remote user terminated (phone/app closed it)";
+    case 0x16: return "local host terminated";
+    case 0x05: return "authentication failure (pairing)";
+    case 0x3D: return "MIC failure (bond mismatch)";
+    case 0x22: return "LL response timeout";
+    case 0x3B: return "unacceptable connection parameters";
+    case 0x28: return "instant passed";
+    default:   return "other";
+    }
+}
+
 /* ---- Single GAP/GATT event handler ----
  * Collapses all the Bluedroid GAP + GATTS events into one NimBLE callback. */
 
@@ -635,6 +670,15 @@ static int ble_gap_event_body(struct ble_gap_event* event, BleSerial* serial) {
             if(rc != 0 && rc != BLE_HS_EALREADY) {
                 ESP_LOGW(TAG, "gap: security_initiate rc=%d", rc);
             }
+
+            /* Ask the central for our preferred connection parameters (long
+             * supervision timeout, zero latency) so the link survives the busy
+             * radio/LCD periods that were dropping the mobile-app session.
+             * Harmless if the central declines — it keeps its own params. */
+            int upd = ble_gap_update_params(event->connect.conn_handle, &serial_conn_params);
+            if(upd != 0 && upd != BLE_HS_EALREADY) {
+                ESP_LOGW(TAG, "gap: update_params rc=%d", upd);
+            }
         } else {
             /* Connection failed — resume advertising. */
             serial_lock_global();
@@ -645,7 +689,8 @@ static int ble_gap_event_body(struct ble_gap_event* event, BleSerial* serial) {
         return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI(TAG, "gap: disconnect reason=0x%x", event->disconnect.reason);
+        ESP_LOGW(TAG, "gap: disconnect reason=0x%x (%s)",
+            event->disconnect.reason, serial_disconnect_reason_str(event->disconnect.reason));
         if(serial) {
             serial_update_connection(serial, false);
         }

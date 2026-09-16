@@ -1,4 +1,11 @@
 #include "subghz_read_raw.h"
+
+#ifdef BOARD_INCLUDE
+#include BOARD_INCLUDE
+#endif
+#ifdef BOARD_HAS_TILT_NAV
+#include "target_input.h"
+#endif
 #include "../subghz_i.h"
 
 #include <furi.h>
@@ -515,6 +522,13 @@ void subghz_read_raw_set_status(
     const char* file_name,
     float raw_threshold_rssi) {
     furi_assert(instance);
+
+#ifdef BOARD_HAS_TILT_NAV
+    /* Suppress tilt->Left/Right while actively recording (Start) so an accidental
+     * roll can't open the freq Config menu mid-capture; re-enabled in every other
+     * state (IDLE/Save/Load) so tilt Save/Erase/nav still work when not capturing. */
+    target_input_set_tilt_nav_suppressed(status == SubGhzReadRAWStatusStart);
+#endif
 
     switch(status) {
     case SubGhzReadRAWStatusStart:

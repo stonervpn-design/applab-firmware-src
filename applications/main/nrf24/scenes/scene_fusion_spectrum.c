@@ -61,11 +61,12 @@
 
 #define TAG "Nrf24Fusion"
 
-#define WF_ROWS          90    /* waterfall history depth (126*90 ~= 11 KB) */
+#define WF_ROWS          96    /* waterfall history depth (bottom half); 126*96 ~= 12 KB */
 #define STRIPE_H         16    /* horizontal band height (one DMA blit) */
 #define READOUT_H        9     /* top text band height (5x7 font + margin) */
 #define FUSION_DWELL_US  250   /* per-channel RPD dwell (proven in classic) */
 #define FUSION_OCC_THRESH 15   /* occ>=thresh with no Wi-Fi/BLE => SRC_HOPPER */
+#define WF_NOISE_FLOOR    14   /* waterfall: intensity below this % = black (no signal) */
 
 /* Compile-time RGB565 byte-swap (native -> ST7789 wire order). The stripe
  * buffer is entirely in ST7789 order, so every constant written into it is
@@ -75,6 +76,8 @@
 #define COL_BG    ((uint16_t)0x0000) /* black */
 #define COL_WHITE ((uint16_t)0xFFFF) /* cursor + peak line */
 #define COL_GLOW  SW16(0xFEB4)       /* pale warm halo above bar tops */
+#define COL_GRID  SW16(0x2104)       /* faint gridline (WiFi 1/6/11 guides) */
+#define COL_DIV   SW16(0x528A)       /* panel divider between bars + waterfall */
 
 typedef enum {
     FusionEventCursorLeft = 100,
@@ -92,7 +95,9 @@ typedef struct {
     Nrf24Waterfall wf;
     uint8_t* wf_backing;     /* NRF24_FUSION_CH * WF_ROWS, regular heap */
 
-    uint16_t* stripe;        /* h_res * STRIPE_H u16, MALLOC_CAP_DMA */
+    uint16_t* stripe[2];     /* two h_res*STRIPE_H u16 DMA buffers, ping-ponged
+                              * so the CPU never refills the one whose blit DMA
+                              * is still in flight (was: single-buffer tear). */
     uint8_t*  xch;           /* h_res bytes: x-pixel -> channel index */
 
     esp_lcd_panel_handle_t panel;
@@ -165,16 +170,19 @@ static int32_t fusion_sweep_worker(void* context) {
 static void fusion_render_frame(FusionCtx* ctx) {
     const int W = ctx->h_res;
     const int H = ctx->v_res;
+    int sb = 0; /* ping-pong index; buf is chosen per-blit below */
+
+    /* Split view: [readout band] / [spectrum bars] / [divider] / [waterfall].
+     * mid = boundary; bars occupy READOUT_H..mid, waterfall mid+1..H. */
     const int mid = H / 2;
     const int bar_span = (mid > READOUT_H) ? (mid - READOUT_H) : 1;
-    uint16_t* buf = ctx->stripe;
+    const bool maxhold = ctx->maxhold;
 
     /* --- snapshot model + push a fresh fused waterfall row (under lock) --- */
     uint8_t fused[NRF24_FUSION_CH];
     uint8_t peak[NRF24_FUSION_CH];
     uint8_t wfrow[NRF24_FUSION_CH];
 
-    const bool maxhold = ctx->maxhold;
     const bool frozen = ctx->freeze;
 
     furi_mutex_acquire(ctx->lock, FuriWaitForever);
@@ -203,6 +211,7 @@ static void fusion_render_frame(FusionCtx* ctx) {
     /* --- draw bars + waterfall in stripes --- */
     for(int y0 = 0; y0 < H; y0 += STRIPE_H) {
         int sh = (y0 + STRIPE_H <= H) ? STRIPE_H : (H - y0);
+        uint16_t* buf = ctx->stripe[sb];
 
         for(int i = 0; i < sh * W; i++) buf[i] = COL_BG;
 
@@ -210,36 +219,53 @@ static void fusion_render_frame(FusionCtx* ctx) {
             int y = y0 + ly;
             uint16_t* line = buf + (size_t)ly * W;
 
-            if(y < mid) {
-                /* top half: bars grow up from `mid` toward READOUT_H */
-                if(y >= READOUT_H) {
-                    for(int x = 0; x < W; x++) {
-                        uint8_t ch = ctx->xch[x];
-                        int bh = ((int)fused[ch] * bar_span) / 100;
-                        int bar_top = mid - bh;
-                        if(y >= bar_top) {
-                            int frac = (mid - y) * 100 / bar_span; /* vertical gradient */
-                            if(frac < 0) frac = 0;
-                            if(frac > 100) frac = 100;
-                            line[x] = nrf24_heat_color(ctx->heat_lut, (uint8_t)frac);
-                        } else if(bh > 0 && y == bar_top - 1) {
-                            line[x] = COL_GLOW; /* 1px halo above the bar */
-                        }
-                        if(maxhold) {
-                            int ph = ((int)peak[ch] * bar_span) / 100;
-                            if(ph > 0 && y == mid - ph) line[x] = COL_WHITE; /* peak line */
-                        }
+            if(y < READOUT_H) {
+                /* reserved for the readout band, blitted on top afterwards */
+            } else if(y < mid) {
+                /* ---- spectrum panel: gradient bars over a faint frequency grid.
+                 * Each bar's height = fused intensity; fill runs cold (blue) at the
+                 * baseline to hot at the tip, with a pale cap one pixel above and an
+                 * optional white max-hold marker. Empty columns show only the grid,
+                 * with vertical guides under WiFi channels 1/6/11 (nRF ch 12/37/62). */
+                for(int x = 0; x < W; x++) {
+                    uint8_t ch = ctx->xch[x];
+                    int bh = ((int)fused[ch] * bar_span) / 100;
+                    int bar_top = mid - bh;
+                    if(y >= bar_top) {
+                        int frac = (mid - y) * 100 / bar_span;
+                        if(frac < 0) frac = 0;
+                        if(frac > 100) frac = 100;
+                        line[x] = nrf24_heat_color(ctx->heat_lut, (uint8_t)frac);
+                    } else if(bh > 0 && y == bar_top - 1) {
+                        line[x] = COL_GLOW;
+                    } else if(ch == 12 || ch == 37 || ch == 62) {
+                        line[x] = COL_GRID;
+                    }
+                    if(maxhold) {
+                        int ph = ((int)peak[ch] * bar_span) / 100;
+                        if(ph > 0 && y == mid - ph) line[x] = COL_WHITE;
                     }
                 }
+            } else if(y == mid) {
+                /* ---- divider / spectrum baseline ---- */
+                for(int x = 0; x < W; x++) line[x] = COL_DIV;
             } else {
-                /* bottom half: waterfall, newest row at y==mid, scrolling down */
-                int age = y - mid;
+                /* ---- waterfall panel: newest row just below the divider, scrolling
+                 * down. X = channel (2400..2525 MHz), colour = fused heat. Dark below
+                 * the noise floor so it reads as streaks on black, not a blue wall. */
+                int age = y - mid - 1;
                 const uint8_t* wr = nrf24_wf_row(&ctx->wf, age);
                 for(int x = 0; x < W; x++) {
                     uint8_t ch = ctx->xch[x];
                     uint8_t v6 = wr[ch] & 0x3F;
                     uint8_t inten = (uint8_t)((v6 * 100) / 63);
-                    line[x] = nrf24_heat_color(ctx->heat_lut, inten);
+                    if(inten < WF_NOISE_FLOOR) {
+                        line[x] = COL_BG;
+                    } else {
+                        uint8_t scaled =
+                            (uint8_t)(((int)inten - WF_NOISE_FLOOR) * 100 / (100 - WF_NOISE_FLOOR));
+                        line[x] = nrf24_heat_color(ctx->heat_lut, scaled);
+                    }
                 }
             }
 
@@ -251,9 +277,11 @@ static void fusion_render_frame(FusionCtx* ctx) {
         furi_hal_spi_bus_lock();
         esp_lcd_panel_draw_bitmap(ctx->panel, 0, y0, W, y0 + sh, buf);
         furi_hal_spi_bus_unlock();
+        sb ^= 1; /* next fill targets the other buffer; this one's DMA drains meanwhile */
     }
 
     /* --- readout band (its own stripe blitted over the top) --- */
+    uint16_t* buf = ctx->stripe[sb];
     for(int i = 0; i < READOUT_H * W; i++) buf[i] = COL_BG;
     char rd[24];
     snprintf(
@@ -342,14 +370,27 @@ void nrf24_app_scene_fusion_spectrum_on_enter(void* context) {
         goto fail;
     }
 
-    ctx->stripe =
+    ctx->stripe[0] =
+        heap_caps_malloc((size_t)ctx->h_res * STRIPE_H * sizeof(uint16_t), MALLOC_CAP_DMA);
+    ctx->stripe[1] =
         heap_caps_malloc((size_t)ctx->h_res * STRIPE_H * sizeof(uint16_t), MALLOC_CAP_DMA);
     ctx->xch = malloc((size_t)ctx->h_res);
-    if(!ctx->stripe || !ctx->xch) goto fail;
+    if(!ctx->stripe[0] || !ctx->stripe[1] || !ctx->xch) goto fail;
     for(int x = 0; x < ctx->h_res; x++) {
         int ch = x * NRF24_FUSION_CH / ctx->h_res;
         if(ch >= NRF24_FUSION_CH) ch = NRF24_FUSION_CH - 1;
         ctx->xch[x] = (uint8_t)ch;
+    }
+
+    /* The sweep + render worker threads need ~12 KB of *internal* stack (4096 + 8192);
+     * PSRAM stacks are rejected on =n boards, so on a tight heap furi_thread would panic
+     * mid-launch. Pre-check internal headroom and back out cleanly via fail: (which still
+     * releases the display takeover + buffers) instead. Placed before input subscribe so
+     * the fail: path has nothing extra to unwind. */
+    if(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < (8192 + 512) ||
+       heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < (4096 + 8192 + 4096)) {
+        FURI_LOG_E(TAG, "not enough internal RAM for Fusion workers; backing out");
+        goto fail;
     }
 
     nrf24_hw_init();
@@ -368,7 +409,8 @@ void nrf24_app_scene_fusion_spectrum_on_enter(void* context) {
 
 fail:
     if(dd_acquired) gui_direct_draw_release(app->gui);
-    if(ctx->stripe) heap_caps_free(ctx->stripe);
+    if(ctx->stripe[0]) heap_caps_free(ctx->stripe[0]);
+    if(ctx->stripe[1]) heap_caps_free(ctx->stripe[1]);
     if(ctx->xch) free(ctx->xch);
     if(ctx->wf_backing) free(ctx->wf_backing);
     if(ctx->lock) furi_mutex_free(ctx->lock);
@@ -428,7 +470,8 @@ void nrf24_app_scene_fusion_spectrum_on_exit(void* context) {
     /* release the display (no render can race now) */
     gui_direct_draw_release(ctx->app->gui);
 
-    if(ctx->stripe) heap_caps_free(ctx->stripe);
+    if(ctx->stripe[0]) heap_caps_free(ctx->stripe[0]);
+    if(ctx->stripe[1]) heap_caps_free(ctx->stripe[1]);
     if(ctx->xch) free(ctx->xch);
     if(ctx->wf_backing) free(ctx->wf_backing);
     if(ctx->lock) furi_mutex_free(ctx->lock);

@@ -17,6 +17,18 @@ static char wp_status_glyph(WpStatus s) {
     }
 }
 
+static const char* wp_status_word(WpStatus s) {
+    switch(s) {
+    case WpStatusLikelyVuln:  return "LIKELY VULN";
+    case WpStatusSurface:     return "FP surface";
+    case WpStatusProbing:     return "probing";
+    case WpStatusNoSurface:   return "no FP surface";
+    case WpStatusConnectFail: return "unreachable";
+    case WpStatusUnknown:
+    default:                  return "not probed";
+    }
+}
+
 static void whisperpair_detector_draw_callback(Canvas* canvas, void* _model) {
     WpDetectorModel* model = _model;
     canvas_clear(canvas);
@@ -65,6 +77,24 @@ static void whisperpair_detector_draw_callback(Canvas* canvas, void* _model) {
         if(idx == model->selected) {
             canvas_set_color(canvas, ColorBlack);
         }
+    }
+
+    // Selected-device detail: worded verdict + the Fast Pair Model-ID (probe reads it
+    // but the per-row line has no room to show it).
+    if(model->count > 0 && model->selected < model->count) {
+        WpDevice* sel = &model->devices[model->selected];
+        char det[40];
+        if(sel->model_id_valid) {
+            snprintf(
+                det,
+                sizeof(det),
+                "%s  ID %06lX",
+                wp_status_word(sel->status),
+                (unsigned long)(sel->model_id & 0xFFFFFF));
+        } else {
+            snprintf(det, sizeof(det), "%s", wp_status_word(sel->status));
+        }
+        canvas_draw_str(canvas, 2, 53, det);
     }
 
     canvas_set_font(canvas, FontPrimary);

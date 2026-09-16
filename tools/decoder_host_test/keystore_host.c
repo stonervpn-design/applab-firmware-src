@@ -13,6 +13,7 @@
 #include <lib/subghz/subghz_keystore.h>
 #include <lib/subghz/subghz_keystore_i.h>
 #include <core/furi_string.h>
+#include <string.h>
 #include "keystore_entries.h"
 
 static SubGhzKeystore g_ks;
@@ -27,7 +28,7 @@ static void ensure(void) {
         // both validate.
         for(int i = 0; i < KS_ENTRIES_N; i++) {
             SubGhzKey* k = SubGhzKeyArray_push_new(g_ks.data);
-            k->name = furi_string_alloc_set_str(KS_ENTRIES[i].name);
+            k->name = strdup(KS_ENTRIES[i].name); // SubGhzKey.name is now char* (PSRAM on device; heap here)
             k->key = KS_ENTRIES[i].key;
             k->type = KS_ENTRIES[i].type;
         }

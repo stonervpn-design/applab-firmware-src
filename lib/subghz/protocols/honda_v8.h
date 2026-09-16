@@ -30,6 +30,7 @@
 #define HV8_TE_DELTA           150u
 #define HV8_TE_BIT1_LOW        50u
 #define HV8_PREAMBLE_COUNT     23u
+#define HV8_PREAMBLE_MIN       8u /* min consecutive base pulses to accept a sync */
 #define HV8_SYNC_GAP_US        4000u
 #define HV8_TRAIL_US           15600u
 #define HV8_SYNC_MIN_US        2500u
@@ -108,6 +109,7 @@ typedef struct {
     bool         frame_valid;
     uint16_t     last_rolling;
     bool         has_last_rolling;
+    uint16_t     preamble_run; /* consecutive base-width pulses seen (structural gate) */
     FuriString*  result_str;
 } SubGhzProtocolDecoderHondaV8;
 

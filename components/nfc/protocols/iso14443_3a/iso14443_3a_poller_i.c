@@ -130,6 +130,21 @@ Iso14443_3aError
             instance->rx_buffer,
             ISO14443_3A_FDT_LISTEN_FC);
         if(error != NfcErrorNone) {
+            /* A PICC that has been HALTed ignores REQA/SENS_REQ and answers ONLY
+             * WUPA/ALL_REQ. The MIFARE Classic poller HALTs at every sector trailer
+             * to re-auth the next sector; this backend keeps the RF field up between
+             * sectors, so the card stays powered in the HALT state instead of
+             * returning to IDLE, and the plain REQA re-activation gets no answer —
+             * the card is declared Lost and a 1K read drops mid-sweep. Retry once
+             * with ALL_REQ (WUPA), which wakes a card in HALT *or* IDLE, so a fresh
+             * tap is unchanged and a halted card re-activates cleanly. */
+            error = nfc_iso14443a_poller_trx_short_frame(
+                instance->nfc,
+                NfcIso14443aShortFrameAllReqa,
+                instance->rx_buffer,
+                ISO14443_3A_FDT_LISTEN_FC);
+        }
+        if(error != NfcErrorNone) {
             ret = Iso14443_3aErrorNotPresent;
             break;
         }

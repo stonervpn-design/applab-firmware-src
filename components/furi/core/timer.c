@@ -5,6 +5,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <freertos/timers.h>
+#include <esp_heap_caps.h>
 
 struct FuriTimer {
     StaticTimer_t container;
@@ -38,7 +39,12 @@ static void furi_timer_flush_epilogue(void* context, uint32_t arg) {
 FuriTimer* furi_timer_alloc(FuriTimerCallback func, FuriTimerType type, void* context) {
     furi_check((furi_kernel_is_irq_or_masked() == 0U) && (func != NULL));
 
-    FuriTimer* instance = malloc(sizeof(FuriTimer));
+    // StaticTimer_t control block must live in internal RAM (FreeRTOS requirement);
+    // force internal and panic cleanly on OOM instead of NULL-derefing just below,
+    // mirroring mutex/semaphore/event_flag/stream_buffer.
+    FuriTimer* instance =
+        heap_caps_malloc(sizeof(FuriTimer), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    furi_check(instance);
 
     instance->cb_func = func;
     instance->cb_context = context;

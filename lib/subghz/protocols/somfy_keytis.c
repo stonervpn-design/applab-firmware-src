@@ -93,6 +93,7 @@ void* subghz_protocol_encoder_somfy_keytis_alloc(SubGhzEnvironment* environment)
 void* subghz_protocol_decoder_somfy_keytis_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolDecoderSomfyKeytis* instance = malloc(sizeof(SubGhzProtocolDecoderSomfyKeytis));
+    memset(instance, 0, sizeof(SubGhzProtocolDecoderSomfyKeytis)); // else generic.data is garbage on the 1st CRC check
     instance->base.protocol = &subghz_protocol_somfy_keytis;
     instance->generic.protocol_name = instance->base.protocol->name;
 
@@ -602,8 +603,12 @@ void subghz_protocol_decoder_somfy_keytis_feed(void* context, bool level, uint32
                              subghz_protocol_somfy_keytis_const.te_delta)) {
                 if(instance->decoder.decode_count_bit ==
                    subghz_protocol_somfy_keytis_const.min_count_bit_for_found) {
-                    //check crc
-                    uint64_t data_tmp = instance->generic.data ^ (instance->generic.data >> 8);
+                    //check crc — validate the FRESHLY decoded frame (decoder.decode_data),
+                    // NOT the previously accepted generic.data. Checking generic.data let a
+                    // corrupt frame arriving after a good one pass CRC against the good one
+                    // and be accepted with the wrong serial/counter (poisoning a clone).
+                    uint64_t data_tmp =
+                        instance->decoder.decode_data ^ (instance->decoder.decode_data >> 8);
                     if(((data_tmp >> 40) & 0xF) == subghz_protocol_somfy_keytis_crc(data_tmp)) {
                         instance->generic.data = instance->decoder.decode_data;
                         instance->generic.data_count_bit = instance->decoder.decode_count_bit;

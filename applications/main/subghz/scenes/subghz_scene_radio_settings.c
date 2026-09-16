@@ -165,7 +165,7 @@ static void subghz_scene_receiver_config_set_timestamp_file_names(VariableItem* 
 }
 
 #ifndef PUBLIC_BUILD
-static const char* const car_mode_text[] = {"Off", "Cars"};
+static const char* const car_mode_text[] = {"Off", "Cars", "Sensors"};
 #define CAR_MODE_COUNT (sizeof(car_mode_text) / sizeof(car_mode_text[0]))
 
 static void subghz_scene_radio_settings_set_automotive(VariableItem* item) {
@@ -189,7 +189,7 @@ void subghz_scene_radio_settings_on_enter(void* context) {
     // Stripped from public builds (guardrail — no car UI on public).
     item = variable_item_list_add(
         variable_item_list,
-        "Automotive",
+        "RX Set",
         CAR_MODE_COUNT,
         subghz_scene_radio_settings_set_automotive,
         subghz);

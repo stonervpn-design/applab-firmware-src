@@ -1,13 +1,29 @@
 /*
- * honda_v10.c — Honda V2H4 Aftermarket OEM FSK Protocol (decoder only)
+ * honda_v10.c — Honda V2H4 Aftermarket OEM FSK Protocol (decode + verbatim replay)
  *
  * Native 2FSK Manchester at 104µs half-bit, MSB-first, 96-bit frame.
  * Structure reverse-engineered from HondaV2H4_OEM_300lck.sub and _300ulk.sub:
- * first 3 bytes = device fingerprint, byte 3 high nibble = button,
- * bytes 4..6 = counter, bytes 8..11 = cipher/CRC tail.
+ * bytes 0..2 = 24-bit serial, byte 3 hi nibble = button / lo nibble = flags
+ * (const 0x7), bytes 4..6 = bitwise-inverted PLAINTEXT counter, byte 7 = status,
+ * bytes 8..11 = 32-bit deterministic parity/LFSR "Tail" (NOT keyed, NOT a CRC).
  *
- * Encoder not yet implemented — cipher algorithm over bytes 8..11
- * has not been reverse engineered.
+ * Tail RE verdict (2026-08-26): the Tail is a KEYLESS deterministic function of
+ * the plaintext counter — NOT a cipher. Proven by exclusion + literature:
+ *   - exhaustive test found ZERO matches: full CRC-32/CRC-16 catalogue over every
+ *     header slice, AND KeeLoq decrypt under all 254 held keys (incl. the 21 Honda
+ *     ROM keys @Pandora 0x14D60), at every 32-bit alignment, both learning modes,
+ *     both bit orders. Nothing decrypts to a counter-consistent plaintext.
+ *   - Honda RKE (KR5V2X / Rolling-PWN CVE-2021-46145 / ARF honda_v2 reference) is
+ *     documented as fixed-serial + plaintext rolling counter + a deterministic
+ *     XOR-parity/LFSR tail with NO key. V2H4 is a wider 32-bit member of that
+ *     family (partial parity correlation confirmed vs the KR5V2X c0/c1/c2 taps).
+ * => A keyless SELF-ROLLING encoder IS achievable, but the exact 32-bit tail
+ *    function must be solved from MANY captures (~30-40 same-button presses with
+ *    incrementing counter -> GF(2) linear solve); two frames are insufficient.
+ * Until the function is derived, the encoder does VERBATIM REPLAY (RT:EXACT, Send
+ * enabled); Rolling-PWN sequence-replay of consecutive captures resyncs the
+ * receiver's sliding window. (My earlier "keyed authenticator" note was an
+ * over-inference from not-CRC/not-KeeLoq and is superseded by this.)
  */
 
 #include "honda_v10.h"

@@ -220,6 +220,62 @@ const uint8_t subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs[] = {
     0x00,
 };
 
+// TPMS 2-FSK preset: FM238 base with the 3 modem bytes corrected for real TPMS
+// sensors (~19.2 kBaud chip rate, +-28.6 kHz deviation). FM238's stock 4.8 kBaud /
+// 2.38 kHz data-filter setting smears the fast ~52us FSK transitions so the async
+// GDO0 pulse train reaching the decoders is garbage (carrier/RSSI still seen, but
+// nothing decodes). These 3 bytes match the known-good field-captured TPMS preset.
+const uint8_t subghz_device_cc1101_preset_2fsk_tpms_async_regs[] = {
+    CC1101_IOCFG0,
+    0x0D, // GD0 as async serial data output/input
+    CC1101_FSCTRL1,
+    0x06,
+    CC1101_PKTCTRL0,
+    0x32, // Async, continuous, no whitening
+    CC1101_PKTCTRL1,
+    0x04,
+    CC1101_MDMCFG0,
+    0x00,
+    CC1101_MDMCFG1,
+    0x02,
+    CC1101_MDMCFG2,
+    0x04, // 2-FSK, no preamble/sync, DC filter on
+    CC1101_MDMCFG3,
+    0x93, // Data rate ~19.99 kBaud (matches TPMS ~19.2 kBaud, te=52us)
+    CC1101_MDMCFG4,
+    0x59, // Rx BW 325 kHz, DRATE_E=9
+    CC1101_DEVIATN,
+    0x41, // Deviation ~28.6 kHz (matches +-24-28 kHz TPMS)
+    CC1101_MCSM0,
+    0x18,
+    CC1101_FOCCFG,
+    0x16,
+    CC1101_AGCCTRL0,
+    0x91,
+    CC1101_AGCCTRL1,
+    0x00,
+    CC1101_AGCCTRL2,
+    0x07,
+    CC1101_WORCTRL,
+    0xFB,
+    CC1101_FREND0,
+    0x10,
+    CC1101_FREND1,
+    0x56,
+    /* End load reg */
+    0,
+    0,
+    // 2fsk_async_patable[8]
+    0xC0,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+    0x00,
+};
+
 const uint8_t subghz_device_cc1101_preset_2fsk_dev12khz_async_regs[] = {
 
     /* GPIO GD0 */

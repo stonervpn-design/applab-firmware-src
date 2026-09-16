@@ -126,6 +126,11 @@ void subghz_txrx_rx_start(SubGhzTxRx* instance);
  */
 void subghz_txrx_stop(SubGhzTxRx* instance);
 
+/** Release / re-acquire the RX capture buffer (~4 KB internal) around a memory-hungry
+ * operation such as the Saved file browser. No-op while RX is running. */
+void subghz_txrx_release_rx_buffer(SubGhzTxRx* instance);
+void subghz_txrx_reacquire_rx_buffer(SubGhzTxRx* instance);
+
 /**
  * Set sleep mode CC1101
  * 

@@ -10,8 +10,9 @@
 // RollBack Capture scene.
 //
 // Listens for DYNAMIC (rolling-code) frames and stores each decoded frame
-// verbatim into the app's RollbackStore. Once >= 2 frames sharing one serial
-// have landed, the "OK: Replay" hint lights and OK advances to the Replay scene.
+// verbatim into the app's RollbackStore. Once >= target_n frames sharing one
+// serial have landed (and, for target_n >= 3, form a constant-step consecutive
+// run), the "Replay >" hint lights and Right advances to the Replay scene.
 // This does NOT crack the counter — it captures consecutive presses so they can
 // be re-transmitted in order (a resync/rollback technique on receivers that
 // accept a small counter window).

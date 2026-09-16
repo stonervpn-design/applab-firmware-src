@@ -382,6 +382,20 @@ SubGhzProtocolStatus
     return subghz_block_generic_deserialize(&instance->generic, flipper_format);
 }
 
+/* Next-code predictor for MAGIC CODE, Dynamic (51-bit).
+ * The rolling counter is the low 16 bits of the frame in CLEARTEXT - there is no
+ * crypto and the frame's only redundancy (Key at 27..24 vs ~Key at 19..16) tracks
+ * the button, not the counter (see subghz_protocol_scher_khan_dynamic_integrity_ok).
+ * A byte-correct frame for counter+i is therefore the identical frame with only the
+ * low 16 bits replaced by (cnt + i). No parity/checksum recompute is needed, so a
+ * predicted key is directly load/emulate/save-able. Only the 51-bit variant carries
+ * a counter; all other widths set cnt = 0 and produce no prediction. */
+#define SCHER_KHAN_PREDICT_COUNT 3U
+
+static uint64_t subghz_protocol_scher_khan_predict_key(uint64_t data, uint16_t next_cnt) {
+    return (data & ~(uint64_t)0xFFFFULL) | (uint64_t)next_cnt;
+}
+
 void subghz_protocol_decoder_scher_khan_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderScherKhan* instance = context;
@@ -404,6 +418,17 @@ void subghz_protocol_decoder_scher_khan_get_string(void* context, FuriString* ou
         instance->generic.btn,
         instance->generic.cnt,
         instance->protocol_name);
+
+    /* Only the 51-bit MAGIC CODE Dynamic variant carries a cleartext counter. */
+    if(instance->generic.data_count_bit == 51) {
+        for(uint16_t i = 1; i <= SCHER_KHAN_PREDICT_COUNT; i++) {
+            uint16_t next_cnt = (uint16_t)((instance->generic.cnt + i) & 0xFFFF);
+            uint64_t next_key =
+                subghz_protocol_scher_khan_predict_key(instance->generic.data, next_cnt);
+            furi_string_cat_printf(
+                output, "\r\nNext+%u:%016llX", (unsigned int)i, (unsigned long long)next_key);
+        }
+    }
 }
 
 #ifdef ENABLE_EMULATE_FEATURE

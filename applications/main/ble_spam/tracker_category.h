@@ -12,6 +12,10 @@ typedef enum {
     TrackerCatTile,            // Tile
     TrackerCatMeta,            // Meta glasses (mfg 0x058E)
     TrackerCatDrone,           // Drone Remote ID
+    TrackerCatChipolo,         // Chipolo (service UUID 0xFE33/0xFE65)
+    TrackerCatPebblebee,       // Pebblebee (local name PB-/FNDR/Pebblebee)
+    TrackerCatNut,             // Nut / Nutale (local name "nut")
+    TrackerCatSmartwatch,      // Mi Band/Amazfit/Huawei/Fitbit/Garmin wearables
     TrackerCatBugSweep,        // Unknown devices (HAL sweep mode)
     TrackerCatCount,
 } TrackerCategory;

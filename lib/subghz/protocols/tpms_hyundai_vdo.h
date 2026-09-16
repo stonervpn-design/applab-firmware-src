@@ -27,3 +27,9 @@ SubGhzProtocolStatus
     tpms_protocol_decoder_hyundai_vdo_deserialize(void* context, FlipperFormat* flipper_format);
 
 void tpms_protocol_decoder_hyundai_vdo_get_string(void* context, FuriString* output);
+
+// Re-pack generic (Id + pressure/temperature/battery) into the 80-bit Hyundai/VDO
+// frame held in generic->data, recomputing the CRC-8 checksum. Used by the TPMS
+// 0-PSI spoof to rebuild a flat-tire frame. Mirrors tpms_protocol_jeep_pack, but
+// with CRC-8 (poly 0x07, init 0xAA over b[0..8]) and 1.375 kPa/step pressure.
+void tpms_protocol_hyundai_vdo_pack(TPMSBlockGeneric* g);

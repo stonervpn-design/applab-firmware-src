@@ -23,5 +23,27 @@ typedef struct {
 // Next counter to transmit — a SINGLE frame, +1 from the last (spare-fob step).
 // First call: catch up to max(last_cnt, seen_cnt), apply the one-time `jump` margin, +1.
 // Subsequent calls: +1. Updates c->last_cnt and returns it. seen_cnt is a freshly-observed
-// live-fob counter (pass 0 / last_cnt when re-opening without a re-capture).
+// live-fob counter (pass 0 / last_cnt when re-opening without a re-capture). Catch-up is
+// MODULAR (a seen_cnt that is 1..0x7FFF ahead of last_cnt wins, so it works across the
+// 16-bit wrap; a behind/equal seen_cnt is ignored).
 uint16_t keeloq_clone_next(KeeloqClone* c, uint16_t seen_cnt);
+
+// FORCE-RESYNC ("Sync" button). Jump the shared receiver counter ahead by `margin` and
+// return the TWO consecutive counters to transmit BACK-TO-BACK. A KeeLoq receiver whose
+// stored counter has drifted forward (because the ORIGINAL fob was used) re-locks onto THIS
+// remote on the pair's second frame via its double-operating-window resync — but ONLY if
+// `margin` exceeds that drift, so pick a margin larger than the most presses the original
+// could have made since the last sync. Persists state to the second counter
+// (c->last_cnt = *out_second, c->synced = true) so the next ordinary press is second+1 and
+// never desyncs the clone against itself. Returns false and leaves state UNCHANGED when
+// `margin` is outside the valid resync window: it must clear the single window (> 16) and
+// stay out of the replay/behind zone (< 0x8000). seen_cnt is an optional freshly-observed
+// live counter (modular catch-up, as in keeloq_clone_next); pass 0 / last_cnt if none.
+// Cost (inherent to a same-serial clone): after a Sync the ORIGINAL fob is `margin` behind
+// and needs that many presses to catch back up — this is the deliberate "takeover" action.
+bool keeloq_clone_resync_pair(
+    KeeloqClone* c,
+    uint16_t seen_cnt,
+    uint16_t margin,
+    uint16_t* out_first,
+    uint16_t* out_second);

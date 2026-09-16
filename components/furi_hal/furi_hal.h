@@ -38,6 +38,10 @@ void furi_hal_init(void);
  * at boot, to stop the boost converter idling. No-op on boards without the M5PM1. */
 void furi_hal_grove_5v_set(bool on);
 
+/* Enable/disable the StickS3 speaker amplifier (AW8737 via M5PM1 GPIO3). No-op on
+ * boards without the M5PM1 PMIC. Must be OFF to use the IR receiver. */
+void furi_hal_m5pm1_set_speaker_amp(bool on);
+
 /** Read the battery voltage (millivolts) from the M5PM1 PMIC (regs 0x22/0x23).
  * The M5Stick's only battery-voltage source — it has no GPIO ADC divider. Returns
  * false (and leaves *out_mv untouched) on I2C error or on boards without the M5PM1. */

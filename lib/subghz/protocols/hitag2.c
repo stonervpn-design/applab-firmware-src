@@ -50,6 +50,10 @@
 #define HITAG2_MIN_BITS      88
 /* carrier-preamble 1-bits required immediately before the frame (anti-alias) */
 #define HITAG2_PREAMBLE_MIN  14
+/* carrier 1-bits that must sit immediately before the 0x0001 marker word — turns
+ * the marker into a real value check instead of a bare preamble->data boundary.
+ * Kept < HITAG2_TX_PREAMBLE (12) so the encoder's own frames still decode. */
+#define HITAG2_MARKER_PREAMBLE 6
 /* raw-pulse buffer per burst (Manchester ≈ 1.5 pulses/bit + preamble) */
 #define HITAG2_MAXDUR        700
 /* a space longer than this ends a burst (longer than any te_long across the
@@ -130,16 +134,27 @@ static bool subghz_protocol_decoder_hitag2_find_and_emit(
         // (1) require the fixed '0' bit between ks and chk (Figure 11)
         if(b[cs + 79] != 0) continue;
 
-        // (2) verify the actual 16-bit marker WORD = 0x0001 (Figure 11) ending at
-        //     cs (bits[cs-15..cs]), not merely a 14-equal-bit run. cs is the last
-        //     pre-UID bit; UID starts at cs+1. The carrier preamble demods to the
-        //     marker's leading zeros, and the frame is checksum-valid in exactly
-        //     one polarity — the same polarity in which the marker reads 0x0001
-        //     (the inverted polarity yields 0xFFFE). Pins polarity and removes the
-        //     ±1-bit XOR-parity aliases the value-agnostic run check let through.
-        if(cs < 15) continue;
+        // (2) verify the real sync in carrier context: HITAG2_MARKER_PREAMBLE
+        //     carrier 1-bits immediately followed by the 16-bit marker WORD 0x0001
+        //     (Figure 11). The marker ends at cs (bits[cs-15..cs]); cs is the last
+        //     pre-UID bit, UID starts at cs+1. A bare 15-zero-then-1 run is emitted
+        //     by ANY preamble->data boundary (that alias let a Honda RKE burst in);
+        //     requiring genuine carrier 1-bits before the marker's zero field pins
+        //     polarity and makes 0x0001 a real value check, not a run length.
+        if(cs < 15 + HITAG2_MARKER_PREAMBLE) continue;
         uint16_t marker = (uint16_t)hitag2_bits_to_int(b, cs - 15, 16);
         if(marker != 0x0001) continue;
+        bool preamble_ok = true;
+        for(int j = 1; j <= HITAG2_MARKER_PREAMBLE; j++) {
+            if(b[cs - 15 - j] != 1) { preamble_ok = false; break; }
+        }
+        if(!preamble_ok) continue;
+
+        // First structurally-aligned candidate for this polarity (0-bit + carrier
+        // + marker). Validate it ONCE and stop — do NOT slide to further offsets.
+        // The old every-offset re-scan ran the 1/256 XOR-parity test hundreds of
+        // times per burst, which is what produced the accidental matches (#27).
+        // From here a failed check returns false instead of continuing the scan.
 
         // (3) XOR-parity checksum over the 10 bytes preceding chk
         uint8_t x = 0;
@@ -147,12 +162,12 @@ static bool subghz_protocol_decoder_hitag2_find_and_emit(
             x ^= (uint8_t)hitag2_bits_to_int(b, i, 8);
         }
         uint8_t chk = (uint8_t)hitag2_bits_to_int(b, cs + 80, 8);
-        if(x != chk) continue;
+        if(x != chk) return false;
 
         // (4) reject the all-zero / all-one UID — a real remote never has it,
         //     and an empty bit run trivially satisfies the XOR-parity.
         uint32_t uid = hitag2_bits_to_int(b, cs + 1, 32);
-        if(uid == 0 || uid == 0xFFFFFFFF) continue;
+        if(uid == 0 || uid == 0xFFFFFFFF) return false;
 
         // Valid Hitag2 frame at cs
         instance->uid = uid;
@@ -163,10 +178,10 @@ static bool subghz_protocol_decoder_hitag2_find_and_emit(
 
         // (5) lctr/keystream plausibility bound: a genuine rolling frame never
         //     carries an all-zero or all-one counter+keystream (a demod artefact,
-        //     not a real remote). Keep scanning for a valid frame if it fails.
+        //     not a real remote). Part of the single-shot validation: reject.
         if((instance->lctr == 0 && instance->ks == 0) ||
            (instance->lctr == 0x3FF && instance->ks == 0xFFFFFFFF)) {
-            continue;
+            return false;
         }
 
         // generic.data = first 64 bits from UID (UID:32 | btn:4 | lctr:10 | ks_hi:18)

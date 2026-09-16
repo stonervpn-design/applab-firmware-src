@@ -46,6 +46,8 @@ typedef enum {
 typedef struct {
     MfUltralightAuthPassword password; /**< Password to be used for authentication. */
     MfUltralightC3DesAuthKey tdes_key; /**< 3DES key to be used for authentication. */
+    MfUltralightAesKey aes_key; /**< AES-128 key to be used for UL-AES authentication. */
+    MfUltralightAesKeyType aes_key_type; /**< Which on-card AES key slot to authenticate with. */
     MfUltralightAuthPack pack; /**< Pack received on successful authentication. */
     bool auth_success; /**< Set to true if authentication succeeded, false otherwise. */
     bool skip_auth; /**< Set to true if authentication should be skipped, false otherwise. */

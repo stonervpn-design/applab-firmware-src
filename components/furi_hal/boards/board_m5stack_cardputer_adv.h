@@ -97,7 +97,7 @@
 
 /* Key IDs (Navigation) — aligned with hardware manual */
 #define KB_ADV_KEY_OK           0x43   /* Enter (67) */
-#define KB_ADV_KEY_BACK         0x41   /* Del */
+#define KB_ADV_KEY_BACK         0x01   /* Esc / ` (id 1) — only Esc navigates Back; Del deletes a char */
 #define KB_ADV_KEY_UP           0x39   /* Fn+; (57) */
 #define KB_ADV_KEY_DOWN         0x3A   /* Fn+. (58) */
 #define KB_ADV_KEY_LEFT         0x36   /* Fn+, (54) */

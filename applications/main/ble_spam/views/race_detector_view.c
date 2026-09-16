@@ -16,6 +16,17 @@ static char race_status_glyph(RaceStatus s) {
     }
 }
 
+static const char* race_status_word(RaceStatus s) {
+    switch(s) {
+    case RaceStatusVulnerable:  return "VULNERABLE";
+    case RaceStatusClean:       return "no RACE svc";
+    case RaceStatusProbing:     return "probing";
+    case RaceStatusConnectFail: return "unreachable";
+    case RaceStatusUnknown:
+    default:                    return "not probed";
+    }
+}
+
 static void race_detector_draw_callback(Canvas* canvas, void* _model) {
     RaceDetectorModel* model = _model;
     canvas_clear(canvas);
@@ -61,6 +72,21 @@ static void race_detector_draw_callback(Canvas* canvas, void* _model) {
         if(idx == model->selected) {
             canvas_set_color(canvas, ColorBlack);
         }
+    }
+
+    // Aggregate verdict (count vulnerable) + the selected device's worded status.
+    if(model->count > 0) {
+        int vuln = 0;
+        for(uint16_t i = 0; i < model->count; i++) {
+            if(model->devices[i].status == RaceStatusVulnerable) vuln++;
+        }
+        const char* selword =
+            (model->selected < model->count) ?
+                race_status_word(model->devices[model->selected].status) :
+                "";
+        char det[40];
+        snprintf(det, sizeof(det), "V:%d  %s", vuln, selword);
+        canvas_draw_str(canvas, 2, 53, det);
     }
 
     canvas_set_font(canvas, FontPrimary);

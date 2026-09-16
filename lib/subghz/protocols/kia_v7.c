@@ -10,6 +10,7 @@
 #define KIA_V7_TAIL_GAP_US        0x7D0
 #define KIA_V7_KEY_BITS           64U
 #define KIA_V7_DEFAULT_TX_REPEAT  10U
+#define KIA_V7_PREDICT_COUNT      3U
 _Static_assert(
     KIA_V7_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
     "KIA_V7_UPLOAD_CAPACITY exceeds shared upload slab");
@@ -153,6 +154,18 @@ static uint64_t kia_v7_encode_key(
     }
 
     return pp_bytes_to_u64_be(bytes);
+}
+
+/* Next-code predictor: the 16-bit rolling counter is cleartext in bytes[1..2]
+ * and the frame is protected only by CRC8, so cnt+i is exact. Reuses the
+ * existing static encoder to reassemble the frame and recompute the CRC. */
+static uint64_t kia_v7_predict_key(const SubGhzProtocolDecoderKiaV7* instance, uint16_t ahead) {
+    return kia_v7_encode_key(
+        instance->fixed_high_byte,
+        instance->generic.serial & 0x0FFFFFFFU,
+        instance->decoded_button & 0x0FU,
+        (uint16_t)((instance->generic.cnt & 0xFFFFU) + ahead),
+        NULL);
 }
 
 #ifdef ENABLE_EMULATE_FEATURE
@@ -520,6 +533,16 @@ void kia_protocol_decoder_v7_get_string(void* context, FuriString* output) {
         kia_v7_get_button_name(instance->decoded_button),
         instance->crc_calculated,
         instance->crc_valid ? "OK" : "ERR");
+
+    /* Predicted future rolling codes. Only emit when a valid full frame is
+     * present (counter cleartext + CRC checks out); each Next+i is byte-correct
+     * so it is load/emulate/save-able. */
+    if(instance->generic.data_count_bit == KIA_V7_KEY_BITS && instance->crc_valid) {
+        for(uint16_t i = 1; i <= KIA_V7_PREDICT_COUNT; i++) {
+            furi_string_cat_printf(
+                output, "\r\nNext+%u:%016llX", i, kia_v7_predict_key(instance, i));
+        }
+    }
 }
 
 SubGhzProtocolStatus kia_protocol_decoder_v7_serialize(

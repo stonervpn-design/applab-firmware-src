@@ -6,6 +6,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <common_defines.h>
 #include "furi_hal_gpio.h"
 
@@ -65,6 +66,11 @@ void furi_hal_speaker_set_volume(float volume);
  * @warning    no ownership check if called from ISR
  */
 void furi_hal_speaker_stop(void);
+
+/** Play a mono 16-bit PCM clip (blocking) while the speaker is acquired and idle.
+ * Nearest-neighbour resampled to the speaker rate; mono duplicated to stereo.
+ * No-op on boards without a speaker. */
+void furi_hal_speaker_play_pcm(const int16_t* mono, size_t count, uint32_t sample_rate);
 
 /** Mirror a GPIO pin (e.g. CC1101 GDO0) onto the speaker as 1-bit audio.
  *

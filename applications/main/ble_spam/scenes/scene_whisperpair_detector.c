@@ -114,7 +114,9 @@ static WpStatus probe_device(BleSpamApp* app, WpDevice* target) {
         ble_walk_hal_disconnect();
         return WpStatusConnectFail;
     }
-    for(int i = 0; i < 60 && !ble_walk_hal_services_ready(); i++) {
+    // Poll up to ~6s (was 3s): a real Fast Pair device can be slow to finish ATT
+    // service enumeration; 3s misreported connected-but-slow as unreachable.
+    for(int i = 0; i < 120 && !ble_walk_hal_services_ready(); i++) {
         if(app->wp_probe_abort) {
             ble_walk_hal_disconnect();
             return WpStatusConnectFail;
@@ -197,6 +199,7 @@ void ble_spam_scene_whisperpair_detector_on_enter(void* context) {
         scene_manager_previous_scene(app->scene_manager);
         return;
     }
+    ble_walk_hal_clear_devices(); // fresh table so a stale/full list can't block detection
     ble_walk_hal_start_scan();
 }
 
@@ -272,6 +275,11 @@ bool ble_spam_scene_whisperpair_detector_on_event(void* context, SceneManagerEve
         WpDetectorModel* model = view_get_model(app->view_whisperpair_detector);
         if(!model->probing) {
             view_commit_model(app->view_whisperpair_detector, false);
+            // Self-heal: restart a scan that died (transient ENOTSYNCED/EBUSY, or a
+            // just-finished probe left it stopped) so the list can't be empty forever.
+            if(!ble_walk_hal_is_connected() && !ble_walk_hal_is_scanning()) {
+                ble_walk_hal_start_scan();
+            }
             refresh_device_list(app);
         } else {
             view_commit_model(app->view_whisperpair_detector, false);

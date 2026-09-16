@@ -11,6 +11,12 @@ static const char* infrared_scene_gpio_settings_otg_text[] = {
     "ON",
 };
 
+// Diagnostic: raw 38 kHz on the IR LED pin, bypassing the RMT/encoder path.
+static const char* infrared_scene_gpio_settings_test_text[] = {
+    "Off",
+    "Run 3s",
+};
+
 static void infrared_scene_gpio_settings_pin_change_callback(VariableItem* item) {
     InfraredApp* infrared = variable_item_get_context(item);
     const uint8_t index = variable_item_get_current_value_index(item);
@@ -29,6 +35,18 @@ static void infrared_scene_gpio_settings_otg_change_callback(VariableItem* item)
     view_dispatcher_send_custom_event(
         infrared->view_dispatcher,
         infrared_custom_event_pack(InfraredCustomEventTypeGpioOtgChanged, index));
+}
+
+static void infrared_scene_gpio_settings_test_change_callback(VariableItem* item) {
+    InfraredApp* infrared = variable_item_get_context(item);
+    const uint8_t index = variable_item_get_current_value_index(item);
+    variable_item_set_current_value_text(item, infrared_scene_gpio_settings_test_text[index]);
+    // Scrolling to "Run 3s" fires the raw-GPIO IR self-test. It runs in its own
+    // task (non-blocking); point a phone camera at the internal IR LED to see if
+    // it flickers. Scroll back to "Off" and to "Run 3s" again to repeat.
+    if(index == 1) {
+        furi_hal_infrared_led_selftest(3000);
+    }
 }
 
 static void infrared_scene_gpio_settings_init(InfraredApp* infrared) {
@@ -64,6 +82,16 @@ static void infrared_scene_gpio_settings_init(InfraredApp* infrared) {
         variable_item_set_current_value_index(item, 0);
         variable_item_set_current_value_text(item, "Auto");
     }
+
+    // Diagnostic self-test row (raw 38 kHz on the IR LED pin).
+    item = variable_item_list_add(
+        var_item_list,
+        "IR LED Test",
+        COUNT_OF(infrared_scene_gpio_settings_test_text),
+        infrared_scene_gpio_settings_test_change_callback,
+        infrared);
+    variable_item_set_current_value_index(item, 0);
+    variable_item_set_current_value_text(item, infrared_scene_gpio_settings_test_text[0]);
 }
 
 void infrared_scene_gpio_settings_on_enter(void* context) {

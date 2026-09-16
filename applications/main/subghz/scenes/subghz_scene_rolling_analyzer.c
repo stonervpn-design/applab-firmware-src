@@ -10,6 +10,19 @@
 #include <lib/subghz/protocols/hitag2.h> // SUBGHZ_PROTOCOL_HITAG2_NAME (Forge spoke)
 #include <lib/subghz/protocols/subaru.h>
 #include <lib/subghz/protocols/honda_v2_v3.h>
+#include <lib/subghz/protocols/honda_v4.h>
+#include <lib/subghz/protocols/kia_v0.h>
+#include <lib/subghz/protocols/kia_v2.h>
+#include <lib/subghz/protocols/kia_v7.h>
+#include <lib/subghz/protocols/land_rover_v0.h>
+#include <lib/subghz/protocols/porsche_touareg.h>
+#include <lib/subghz/protocols/star_line.h>
+#include <lib/subghz/protocols/ford_v1.h>
+#include <lib/subghz/protocols/mazda_siemens.h>
+#include <lib/subghz/protocols/mazda_v0.h>
+#include <lib/subghz/protocols/ford_v0.h>
+#include <lib/subghz/protocols/scher_khan.h>
+#include <lib/subghz/protocols/alps_rke.h>
 #include <lib/subghz/protocols/protocols_common.h> // FF_CNT field name
 #include <lib/flipper_format/flipper_format.h>
 #include <string.h>
@@ -17,7 +30,7 @@
 // One-action next-code burst: how many consecutive codes to fire, and how long
 // to hold each on-air before advancing. Covers a receiver's forward window in
 // one press (Subaru single-capture; Honda Rolling-PWN consecutive sequence).
-#define SUBGHZ_PREDICT_BURST_N        5U
+#define SUBGHZ_PREDICT_BURST_N        16U /* ~4.2s stream to sustain a comfort-open hold */
 #define SUBGHZ_PREDICT_BURST_DWELL_MS 260U
 
 // Rolling-Code Analyzer = the car-clone attack surface (clone/save/emulate a
@@ -132,8 +145,27 @@ static bool subghz_scene_rolling_analyzer_can_save_generic(
 // they fall through to their own clone/emulate or single-replay paths.
 static bool subghz_scene_rolling_analyzer_can_predict(const char* protocol_name) {
     if(!protocol_name) return false;
+    // Keyless / cleartext-reversible rolling fobs whose encoder re-derives a
+    // byte-correct frame from (serial, cnt): each serialize() writes Cnt and the
+    // encoder rebuilds+rechecksums from it, so the burst's Cnt-override yields
+    // valid consecutive codes. This is what enables HOLD-to-roll-windows (comfort
+    // open/close) — streaming the next N codes mimics a held button. VAG/KeeLoq
+    // keep their own clone paths (matched by earlier branches), so not listed here.
     return strcmp(protocol_name, SUBARU_PROTOCOL_NAME) == 0 ||
-           strcmp(protocol_name, SUBGHZ_PROTOCOL_HONDA_V2_V3_NAME) == 0;
+           strcmp(protocol_name, SUBGHZ_PROTOCOL_HONDA_V2_V3_NAME) == 0 ||
+           strcmp(protocol_name, SUBGHZ_PROTOCOL_HONDA_V4_NAME) == 0 ||
+           strcmp(protocol_name, KIA_PROTOCOL_V0_NAME) == 0 ||
+           strcmp(protocol_name, KIA_PROTOCOL_V2_NAME) == 0 ||
+           strcmp(protocol_name, KIA_PROTOCOL_V7_NAME) == 0 ||
+           strcmp(protocol_name, LAND_ROVER_PROTOCOL_V0_NAME) == 0 ||
+           strcmp(protocol_name, PORSCHE_CAYENNE_PROTOCOL_NAME) == 0 ||
+           strcmp(protocol_name, SUBGHZ_PROTOCOL_STAR_LINE_NAME) == 0 ||
+           strcmp(protocol_name, FORD_PROTOCOL_V1_NAME) == 0 ||
+           strcmp(protocol_name, SUBGHZ_PROTOCOL_SCHER_KHAN_NAME) == 0 ||
+           strcmp(protocol_name, ALPS_RKE_PROTOCOL_NAME) == 0 ||
+           strcmp(protocol_name, FORD_PROTOCOL_V0_NAME) == 0 ||
+           strcmp(protocol_name, MAZDA_PROTOCOL_V0_NAME) == 0 ||
+           strcmp(protocol_name, MAZDA_SIEMENS_PROTOCOL_NAME) == 0;
 }
 #endif
 

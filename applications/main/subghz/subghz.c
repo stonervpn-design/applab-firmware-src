@@ -92,8 +92,40 @@ static void subghz_load_custom_presets(SubGhzSetting* setting) {
 }
 */
 
+bool subghz_tpms_fired_contains(SubGhz* subghz, uint32_t id) {
+    for(uint8_t i = 0; i < subghz->tpms_fired_count; i++) {
+        if(subghz->tpms_fired_ids[i] == id) return true;
+    }
+    return false;
+}
+
+void subghz_tpms_fired_add(SubGhz* subghz, uint32_t id) {
+    if(subghz_tpms_fired_contains(subghz, id)) return;
+    if(subghz->tpms_fired_count <
+       (uint8_t)(sizeof(subghz->tpms_fired_ids) / sizeof(subghz->tpms_fired_ids[0]))) {
+        subghz->tpms_fired_ids[subghz->tpms_fired_count++] = id;
+    }
+}
+
+void subghz_tpms_fired_clear(SubGhz* subghz) {
+    subghz->tpms_fired_count = 0;
+}
+
 SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     SubGhz* subghz = calloc(1, sizeof(SubGhz));
+
+    // rollback_frame (ROLLBACK_MAX_SLOTS*512 = 4K) lives in PSRAM, not inline in the struct,
+    // so the struct's INTERNAL-SRAM calloc above stays 4K smaller. This is the earliest
+    // launch allocation, so it frees exactly the headroom the 8K Desktop stack needs without
+    // OOMing later view-model mutex allocs. PSRAM-safe: only touched by rollback capture/
+    // replay in task context (never ISR/DMA/flash-cache-off). Zeroed to match calloc.
+    subghz->rollback_frame =
+        heap_caps_malloc(ROLLBACK_MAX_SLOTS * 512, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!subghz->rollback_frame)
+        subghz->rollback_frame =
+            heap_caps_malloc(ROLLBACK_MAX_SLOTS * 512, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    furi_check(subghz->rollback_frame);
+    memset(subghz->rollback_frame, 0, ROLLBACK_MAX_SLOTS * 512);
 
     subghz->file_path = furi_string_alloc();
     subghz->file_path_tmp = furi_string_alloc();
@@ -108,6 +140,7 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
     subghz->keeloq_clone_flow = false;
     subghz->keeloq_clone_jump = 0;
     subghz->tpms_scan_mode = false;
+    subghz->tpms_auto_fire_enabled = true; // default: auto-fire 0-PSI on pickup (Fire Mode)
 
     // GUI
     subghz->gui = furi_record_open(RECORD_GUI);
@@ -199,20 +232,15 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
             SubGhzViewIdVariableItemList,
             variable_item_list_get_view(subghz->variable_item_list));
 
-        // Frequency Analyzer
-        // View knows too much
-        subghz->subghz_frequency_analyzer = subghz_frequency_analyzer_alloc(subghz->txrx);
-        view_dispatcher_add_view(
-            subghz->view_dispatcher,
-            SubGhzViewIdFrequencyAnalyzer,
-            subghz_frequency_analyzer_get_view(subghz->subghz_frequency_analyzer));
+        // Frequency Analyzer — lazy-loaded (see subghz_scene_frequency_analyzer.c
+        // on_enter/on_exit). Allocating its view+worker eagerly here claimed scarce
+        // internal SRAM at launch (furi_mutex_alloc OOM on a tight heap); deferring it
+        // frees that headroom so the Desktop file-browser stack can be raised.
+        subghz->subghz_frequency_analyzer = NULL;
 
-        // Fob Analyzer (frequency + modulation + TE)
-        subghz->subghz_fob_analyzer = subghz_fob_analyzer_alloc(subghz->txrx);
-        view_dispatcher_add_view(
-            subghz->view_dispatcher,
-            SubGhzViewIdFobAnalyzer,
-            subghz_fob_analyzer_get_view(subghz->subghz_fob_analyzer));
+        // Fob Analyzer (frequency + modulation + TE) — lazy-loaded like the Frequency
+        // Analyzer above (its eager view+worker alloc was the next launch-time OOM site).
+        subghz->subghz_fob_analyzer = NULL;
 
         // KeeLoq Fob
         subghz->subghz_keeloq_fob = subghz_keeloq_fob_alloc();
@@ -412,12 +440,19 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdVariableItemList);
         variable_item_list_free(subghz->variable_item_list);
 
-        // Frequency Analyzer
-        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFrequencyAnalyzer);
-        subghz_frequency_analyzer_free(subghz->subghz_frequency_analyzer);
+        // Frequency Analyzer — lazy-loaded; free here only if a scene left it up.
+        if(subghz->subghz_frequency_analyzer) {
+            view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFrequencyAnalyzer);
+            subghz_frequency_analyzer_free(subghz->subghz_frequency_analyzer);
+            subghz->subghz_frequency_analyzer = NULL;
+        }
 
-        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFobAnalyzer);
-        subghz_fob_analyzer_free(subghz->subghz_fob_analyzer);
+        // Fob Analyzer — lazy-loaded; free here only if a scene left it up.
+        if(subghz->subghz_fob_analyzer) {
+            view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFobAnalyzer);
+            subghz_fob_analyzer_free(subghz->subghz_fob_analyzer);
+            subghz->subghz_fob_analyzer = NULL;
+        }
 
         // KeeLoq Fob
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdKeeloqFob);
@@ -532,6 +567,7 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
     furi_string_free(subghz->file_path_tmp);
 
     // The rest
+    free(subghz->rollback_frame); // PSRAM-relocated 4K frame buffer
     free(subghz);
 }
 

@@ -158,6 +158,8 @@ void view_draw(View* view, Canvas* canvas) {
 
 bool view_input(View* view, InputEvent* event) {
     furi_check(view);
+    if(event->type == InputTypeText) {
+    }
     if(view->input_callback) {
         return view->input_callback(event, view->context);
     } else {

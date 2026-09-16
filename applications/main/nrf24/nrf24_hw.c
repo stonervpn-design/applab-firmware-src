@@ -122,7 +122,14 @@ static void nrf24_detect_variant(void) {
     uint8_t saved = nrf24_hw_read_reg(NRF_REG_RF_SETUP);
     uint8_t test = (uint8_t)((saved & ~0x28) | 0x20); /* clear DR bits, set DR_LOW */
     nrf24_hw_write_reg(NRF_REG_RF_SETUP, test);
-    nrf24_p_variant = (nrf24_hw_read_reg(NRF_REG_RF_SETUP) == test);
+    /* Mask bit0 (obsolete LNA bit; reads back inconsistently through the SN74
+     * buffer on the shared CSN bus) and require two agreeing reads, so a single
+     * settling glitch can't misbrand a genuine + as non-P. Only the P variant
+     * latches RF_DR_LOW. (The jam carrier no longer depends on this flag; it
+     * still gates the 250 kbps rate in nrf24_negotiate_rf_setup.) */
+    uint8_t rd1 = nrf24_hw_read_reg(NRF_REG_RF_SETUP);
+    uint8_t rd2 = nrf24_hw_read_reg(NRF_REG_RF_SETUP);
+    nrf24_p_variant = ((rd1 & ~0x01u) == (test & ~0x01u)) && (rd1 == rd2);
     nrf24_hw_write_reg(NRF_REG_RF_SETUP, saved);
 }
 
@@ -251,7 +258,17 @@ static void nrf24_hw_jam_power_focus(bool jamming) {
  * (up to Max) passes through unchanged. Raise NRF24_JAM_USB_PA_CAP (1=Low,
  * 2=High, 3=Max) to probe a higher USB ceiling, or run on battery for full
  * power. 0 = Nrf24Pa_Min, the empirically confirmed stable-on-USB floor. */
-#define NRF24_JAM_USB_PA_CAP 0 /* Nrf24Pa_Min — confirmed stable on USB */
+#if defined(BOARD_NRF24_USB_PA_UNCLAMP_OK) && !BOARD_NRF24_USB_PA_UNCLAMP_OK
+/* Cardputer ADV / Hydra RF 424: weaker 5V->3.3V USB path. Now that the jam
+ * carrier is a REAL transmission that actually keys the +PA/LNA front end
+ * (~130 mA continuous), cap USB PA to High so it can't brown out / reboot on
+ * USB. Battery still runs full Max (the clamp only applies when USB-connected). */
+#define NRF24_JAM_USB_PA_CAP 2 /* Nrf24Pa_High on USB (Cardputer) */
+#else
+/* RF Pack S3 (M5Stick): LC-filtered 3.3V rail sized for PA current spikes, so
+ * full PA is USB-safe here (Max passes through unchanged). */
+#define NRF24_JAM_USB_PA_CAP 3 /* Nrf24Pa_Max */
+#endif
 static bool g_nrf24_pa_unclamped = false;
 void nrf24_hw_pa_unclamped(bool on) {
 #if defined(BOARD_NRF24_USB_PA_UNCLAMP_OK) && !BOARD_NRF24_USB_PA_UNCLAMP_OK
@@ -272,59 +289,22 @@ static uint8_t nrf24_jam_pa_for_supply(uint8_t pa_level) {
 }
 
 void nrf24_hw_jammer_start_ex(uint8_t channel, uint8_t pa_level) {
-    pa_level = nrf24_jam_pa_for_supply(pa_level);
-    nrf24_hw_jam_power_focus(true);
-    /* Standby / CE low */
-    furi_hal_gpio_write(&nrf24_ce, false);
-
-    /* Power up. Tpd2stby (~1.5 ms) must elapse before the oscillator/PLL is
-     * stable on a cold start; wait 5 ms like the RF24 library to be safe. */
-    nrf24_hw_write_reg(NRF_REG_CONFIG, NRF_CONFIG_PWR_UP);
-    esp_rom_delay_us(5000);
-
-    /* Continuous carrier, configurable PA, PLL locked. Prefer 2 Mbps but fall
-     * back to 1M/250k if the module won't lock it (verified via readback). */
-    nrf24_negotiate_rf_setup(1 /* prefer 2M */, pa_level, true /* CONT_WAVE|PLL */);
-
-    nrf24_hw_write_reg(NRF_REG_EN_AA, 0x00);
-    nrf24_hw_write_reg(NRF_REG_SETUP_RETR, 0x00);
-    nrf24_hw_write_reg(NRF_REG_SETUP_AW, 0x03); /* 5-byte address */
-
-    if(nrf24_p_variant) {
-        /* Genuine nRF24L01+ only radiates the CONT_WAVE carrier while actually
-         * transmitting, so load a dummy payload and keep re-sending it via
-         * REUSE_TX_PL. Mirrors RF24::startConstCarrier()'s P-variant path. */
-        uint8_t dummy[32];
-        memset(dummy, 0xFF, sizeof(dummy));
-        nrf24_hw_write_buf(NRF_REG_TX_ADDR, dummy, 5);
-        nrf24_hw_cmd(NRF_CMD_FLUSH_TX);
-
-        uint8_t tx[1 + 32];
-        tx[0] = NRF_CMD_W_TX_PAYLOAD;
-        memcpy(&tx[1], dummy, 32);
-        furi_hal_spi_bus_tx(&furi_hal_spi_bus_handle_nrf24, tx, sizeof(tx), 100);
-
-        nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
-
-        /* Settle PLL, transmit once, then enable payload reuse. */
-        esp_rom_delay_us(150);
-        furi_hal_gpio_write(&nrf24_ce, true);
-        esp_rom_delay_us(1000); /* let the first frame go out (datasheet: 1 ms) */
-
-        /* REUSE_TX_PL — toggle CE per RF24::reUseTX so the chip keeps sending. */
-        furi_hal_gpio_write(&nrf24_ce, false);
-        nrf24_hw_write_reg(NRF_REG_STATUS, NRF_STATUS_MAX_RT);
-        nrf24_hw_cmd(NRF_CMD_REUSE_TX_PL);
-        furi_hal_gpio_write(&nrf24_ce, true);
-    } else {
-        /* Non-P clone: CONT_WAVE + PLL_LOCK emit an unmodulated carrier with just
-         * PWR_UP and CE HIGH — no dummy payload / REUSE_TX_PL needed (and the
-         * P-variant payload dance can actually keep such clones silent). Mirrors
-         * RF24::startConstCarrier()'s non-P path. */
-        nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
-        esp_rom_delay_us(150);
-        furi_hal_gpio_write(&nrf24_ce, true);
-    }
+    /* Real-packet carrier (range fix). The old CW jam brought up nRF24 CONT_WAVE
+     * test mode: on a genuine + mis-detected as non-P, or an Si24R1-class clone,
+     * the non-P branch raised CE on a pure unmodulated carrier with an EMPTY TX
+     * FIFO. That never sustains a real transmission, so the RF Pack / Hydra
+     * RFX2401C-class +PA/LNA front end (which auto-keys its ~+20 dBm PA only
+     * while the chip is genuinely transmitting) stayed in bypass and only
+     * bare-die leakage reached the SMA -- "no range unless right next to it".
+     *
+     * Fix: drive a CONTINUOUS PLAIN-PACKET flood instead. W_TX_PAYLOAD + CE high
+     * is the one TX op every variant (genuine +, Si24R1, non-plus) implements
+     * identically, so it always keys the external PA. Variant-agnostic: no
+     * CONT_WAVE (fragile test mode) and no REUSE_TX_PL (the datasheet note and
+     * known Si24R1 behavior warn it can silence clones). flood_start_ex applies
+     * the (now board-aware) PA-for-supply clamp and jam power focus itself. */
+    nrf24_hw_flood_start_ex(channel, 1 /* 2 Mbps, universally locked */, pa_level);
+    nrf24_hw_flood_pump(); /* prime the 3-deep FIFO + CE HIGH -> carrier busy now */
 }
 
 void nrf24_hw_jammer_start(uint8_t channel) {
@@ -332,11 +312,16 @@ void nrf24_hw_jammer_start(uint8_t channel) {
 }
 
 void nrf24_hw_jammer_set_channel(uint8_t channel) {
-    /* Carrier stays on; just retune. */
+    /* A real-packet carrier FIFO drains in ~430 µs @ 2 Mbps (unlike a
+     * self-sustaining CONT_WAVE/REUSE tone), so re-prime and re-key on every
+     * hop to keep the carrier continuous and the PA keyed across the retune. */
+    furi_hal_gpio_write(&nrf24_ce, false);
+    nrf24_hw_cmd(NRF_CMD_FLUSH_TX);
     nrf24_hw_write_reg(NRF_REG_RF_CH, channel);
-    /* The PLL needs ~130 µs to re-lock after a retune. Dwell here so the carrier
-     * actually settles and radiates on this channel instead of smearing across a
-     * too-fast hop (the same settle class fixed in the standalone jammer FAP). */
+    nrf24_hw_write_reg(NRF_REG_STATUS, NRF_STATUS_TX_DS | NRF_STATUS_MAX_RT);
+    nrf24_hw_flood_pump(); /* refill FIFO + CE HIGH */
+    /* PLL needs ~130 µs to re-lock after a retune; dwell so the carrier settles
+     * and radiates on this channel instead of smearing across a too-fast hop. */
     esp_rom_delay_us(180);
 }
 

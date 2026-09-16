@@ -196,15 +196,19 @@
 #define BOARD_PIN_RFID_TX       UINT16_MAX
 #define BOARD_RFID_UART_NUM     1
 
-/* ---- NFC on QWIIC/Grove I2C; IRQ/RST unmanaged -> polling mode.
- * Auto-detects any of: PN532 @0x24, WS1850S/M5 RFID2 @0x28, ST25R3916 @0x50. ---- */
+/* ---- ONBOARD PN532 @0x24 on the main I2C bus (SDA8/SCL18). Per LilyGO's own
+ * schematic (Xinyuan-LilyGO/T-Embed-CC1101): PN532 RSTPDN = GPIO45 (BOARD_PN532_RF_REST),
+ * IRQ = GPIO17. The RST line MUST be driven HIGH to release the PN532 from reset —
+ * furi_hal_nfc_init() drives BOARD_PIN_NFC_RST HIGH when it is != UINT16_MAX. Leaving
+ * it unmanaged held the PN532 in reset, so it never ACKed on I2C. ---- */
 #define BOARD_PIN_NFC_SCL       BOARD_PIN_QWIIC_SCL
 #define BOARD_PIN_NFC_SDA       BOARD_PIN_QWIIC_SDA
-#define BOARD_PIN_NFC_IRQ       UINT16_MAX
-#define BOARD_PIN_NFC_RST       UINT16_MAX
+#define BOARD_PIN_NFC_IRQ       17   /* onboard PN532 IRQ */
+#define BOARD_PIN_NFC_RST       45   /* onboard PN532 RSTPDN — driven HIGH to release reset */
 #define BOARD_NFC_I2C_PORT      I2C_NUM_0
 #define BOARD_NFC_I2C_ADDR      0x24
-#define BOARD_HAS_ST25R3916     1  /* probe an ST25R3916 unit @0x50 too (QWIIC) */
+#define BOARD_HAS_ST25R3916     1  /* keep the ST25R3916 backend COMPILED (furi_hal_nfc.c's runtime dispatch references it), but... */
+#define BOARD_NFC_PN532_ONLY    1  /* ...this board has an ONBOARD PN532 @0x24 (SDA8/SCL18), no ST25R3916. Skip the ST25R3916 PROBE in furi_hal_nfc_init so pn532_i2c_init owns a clean I2C bus (the ST25R3916-first probe left the PN532 undetectable). */
 #define BOARD_ST25R3916_I2C_ADDR 0x50
 
 /* ---- Grove / Qwiic I2C (== the main I2C bus on this board) ---- */

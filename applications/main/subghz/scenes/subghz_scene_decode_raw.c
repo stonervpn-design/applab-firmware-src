@@ -231,6 +231,15 @@ bool subghz_scene_decode_raw_on_event(void* context, SceneManagerEvent event) {
         case SubGhzCustomEventViewReceiverOK:
             subghz->idx_menu_chosen = subghz_view_receiver_get_idx_menu(subghz->subghz_receiver);
             subghz->state_notifications = SubGhzNotificationStateIDLE;
+            // Stop the file-decoder worker before leaving for Receiver Info. Otherwise it
+            // keeps the source RAW file open and spins in its worker_running loop; the
+            // subsequent Save then blocks opening/writing its file through the same storage
+            // service on the held handle — the device appears to freeze at "Saving". The
+            // Back path already stops+frees it; here we only stop (it is freed when the
+            // decode view is finally dismissed).
+            if(subghz_file_encoder_worker_is_running(subghz->decode_raw_file_worker_encoder)) {
+                subghz_file_encoder_worker_stop(subghz->decode_raw_file_worker_encoder);
+            }
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiverInfo);
             consumed = true;
             break;

@@ -18,6 +18,11 @@ DEFS="-D_ATTRIBUTE(x)=__attribute__(x)"
 SRC="$HT/test_toyota_keeloq.c \
   $LP/toyota_keeloq.c $LP/protocols_common.c"
 
+# toyota_keeloq.c now performs KeeLoq manufacturer-key recovery, so it links the
+# real KeeLoq crypto (keeloq_common.c) + a host keystore shim (keystore_host.c,
+# which loads the plaintext keeloq_mfcodes_user asset incl. the Toyota entry).
+SRC="$SRC $LP/keeloq_common.c $HT/keystore_host.c"
+
 COMPAT="\
   components/furi/core/furi_string.c \
   components/flipper_format/flipper_format.c \

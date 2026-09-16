@@ -297,6 +297,34 @@ SubGhzProtocolStatus subghz_protocol_decoder_mazda_siemens_deserialize(
     return ret;
 }
 
+// Next-code predictor. The displayed/loadable Key is generic.data, i.e. the
+// plaintext (deobfuscated) 64-bit frame, so no crypto is needed: the 16-bit BE
+// rolling counter is cleartext at data[5..6] and is protected only by the
+// additive checksum data[7]=sum(data[0..6]). This reuses the exact
+// counter-advance + checksum-recompute already proven in mzs_build_upload
+// (the XOR obfuscation there is applied only for RF TX and is irrelevant to
+// the displayed/loadable Key). Byte-correct → predicted frames are
+// load/emulate/save-able.
+#define MZS_PREDICT_COUNT 3
+
+static uint64_t mzs_predict_key(uint64_t frame, uint16_t add) {
+    uint8_t data[8];
+    for(int i = 0; i < 8; i++) data[i] = (uint8_t)((frame >> (56 - 8 * i)) & 0xFF);
+
+    uint16_t cnt = (uint16_t)(((uint16_t)data[5] << 8) | data[6]);
+    cnt = (uint16_t)(cnt + add);
+    data[5] = (uint8_t)(cnt >> 8);
+    data[6] = (uint8_t)(cnt & 0xFF);
+
+    uint8_t checksum = 0;
+    for(int i = 0; i < 7; i++) checksum = (uint8_t)(checksum + data[i]);
+    data[7] = checksum;
+
+    uint64_t packed = 0;
+    for(int i = 0; i < 8; i++) packed = (packed << 8) | data[i];
+    return packed;
+}
+
 void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderMazdaSiemens* instance = context;
@@ -312,6 +340,15 @@ void subghz_protocol_decoder_mazda_siemens_get_string(void* context, FuriString*
         (unsigned long)instance->generic.serial,
         (unsigned int)instance->generic.btn,
         (unsigned int)instance->generic.cnt);
+
+    // Predicted future rolling codes (only when a valid frame is present).
+    if(instance->generic.data_count_bit == MZS_BIT_COUNT) {
+        for(uint16_t i = 1; i <= MZS_PREDICT_COUNT; i++) {
+            uint64_t next_key = mzs_predict_key(instance->generic.data, i);
+            furi_string_cat_printf(
+                output, "\r\nNext+%u:%016llX", (unsigned int)i, (unsigned long long)next_key);
+        }
+    }
 }
 
 #ifdef ENABLE_EMULATE_FEATURE
@@ -331,10 +368,9 @@ static bool mzs_build_upload(SubGhzProtocolEncoderMazdaSiemens* instance, uint8_
     uint8_t data[8];
     for(int i = 0; i < 8; i++) data[i] = (uint8_t)((instance->generic.data >> (56 - 8 * i)) & 0xFF);
 
-    // roll counter + apply button, recompute checksum (matches KAT encode)
-    uint8_t cnt_lo = (uint8_t)(data[6] + 1);
-    data[6] = cnt_lo;
-    if(cnt_lo == 0) data[5] = (uint8_t)(data[5] + 1);
+    // Counter comes straight from generic.data (deserialize set it to the exact
+    // requested Cnt); apply button + recompute checksum. NO hidden +1 — the caller
+    // supplies the target counter, so Next/Burst advance correctly (mirrors mazda_v0).
     data[4] = button;
 
     uint8_t checksum = 0;
@@ -407,6 +443,12 @@ SubGhzProtocolStatus subghz_protocol_encoder_mazda_siemens_deserialize(
     uint32_t btn = (uint32_t)((instance->generic.data >> 24) & 0xFF);
     uint32_t cnt = (uint32_t)((instance->generic.data >> 8) & 0xFFFF);
     pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, NULL);
+
+    // Honor an overridden Cnt (Rolling-Code Analyzer Next/Burst overrides ONLY the
+    // Cnt field): rebuild the frame for the exact requested counter so build_upload
+    // emits it verbatim. Mirrors mazda_v0's encoder; build_upload no longer adds +1.
+    instance->generic.data = ((uint64_t)serial << 32) | ((uint64_t)(btn & 0xFF) << 24) |
+                             ((uint64_t)(cnt & 0xFFFF) << 8);
 
     instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 3);
     if(!mzs_build_upload(instance, (uint8_t)btn)) {

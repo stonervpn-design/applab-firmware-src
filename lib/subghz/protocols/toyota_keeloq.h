@@ -40,3 +40,12 @@ SubGhzProtocolStatus subghz_protocol_decoder_toyota_keeloq_deserialize(
     void* context,
     FlipperFormat* flipper_format);
 void subghz_protocol_decoder_toyota_keeloq_get_string(void* context, FuriString* output);
+
+// One-shot VERBATIM replay encoder (emulate builds only). The 32-bit KeeLoq hop
+// is encrypted under a non-resident per-manufacturer key, so the rolling counter
+// cannot be advanced and there is NO next-code predictor -- this only re-sends
+// the exact captured frame once.
+void* subghz_protocol_encoder_toyota_keeloq_alloc(SubGhzEnvironment* environment);
+SubGhzProtocolStatus subghz_protocol_encoder_toyota_keeloq_deserialize(
+    void* context,
+    FlipperFormat* flipper_format);

@@ -3,6 +3,7 @@
 #include <flipper.h>
 #include <applications.h>
 #include <loader/loader.h>
+#include "hwid_lock.h"
 
 #include <esp_log.h>
 #include <esp_rom_uart.h>
@@ -144,6 +145,11 @@ void app_main(void) {
 
         furi_delay_ms(10);
     }
+
+    // HWID lock (private builds): halt with a locked screen on unauthorized hardware.
+    // Placed after services start so RECORD_GUI is available; no-op on authorized
+    // devices and on public builds.
+    hwid_lock_enforce();
 
     for(size_t i = 0; i < FLIPPER_ON_SYSTEM_START_COUNT; i++) {
         FLIPPER_ON_SYSTEM_START[i]();

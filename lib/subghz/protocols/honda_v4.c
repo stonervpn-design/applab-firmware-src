@@ -161,6 +161,24 @@ static uint8_t honda_v4_get_btn_code(void) {
 }
 
 // ============================================================================
+// NEXT-CODE PREDICTOR
+// ============================================================================
+
+#define HONDA_V4_PREDICT_COUNT 3
+
+/**
+ * Build a byte-correct 51-bit Honda V4 frame for an absolute 16-bit counter.
+ * Reuses the exact field layout of the encoder:
+ *   serial(19) | button(8) | inverse(8) | counter(16), inverse = 0xFF - button.
+ * The counter is cleartext, so cnt+i is an exact future transmission.
+ */
+static uint64_t honda_v4_predict_key(uint32_t serial, uint8_t btn, uint16_t cnt) {
+    uint8_t inv = 0xFF - (btn & 0xFF);
+    return ((uint64_t)(serial & 0x7FFFF) << 32) | ((uint64_t)(btn & 0xFF) << 24) |
+           ((uint64_t)inv << 16) | (uint64_t)(cnt & 0xFFFF);
+}
+
+// ============================================================================
 // DECODER
 // ============================================================================
 
@@ -417,6 +435,16 @@ void subghz_protocol_decoder_honda_v4_get_string(void* context, FuriString* outp
         (unsigned long)instance->generic.serial,
         honda_v4_get_button_name(instance->generic.btn),
         (unsigned long)instance->generic.cnt);
+
+    // Next-code predictor: cleartext counter -> exact future frames (cnt+1..+N).
+    if(instance->generic.data_count_bit >= subghz_protocol_honda_v4_const.min_count_bit_for_found) {
+        for(uint32_t i = 1; i <= HONDA_V4_PREDICT_COUNT; i++) {
+            uint16_t next_cnt = (uint16_t)((instance->generic.cnt + i) & 0xFFFF);
+            uint64_t next_key =
+                honda_v4_predict_key(instance->generic.serial, instance->generic.btn, next_cnt);
+            furi_string_cat_printf(output, "Next+%lu:%013llX\r\n", (unsigned long)i, next_key);
+        }
+    }
 }
 
 // ============================================================================

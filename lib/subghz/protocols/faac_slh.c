@@ -284,7 +284,7 @@ static bool subghz_protocol_faac_slh_gen_data(SubGhzProtocolEncoderFaacSLH* inst
     }
     for
         M_EACH(manufacture_code, *subghz_keystore_get_data(instance->keystore), SubGhzKeyArray_t) {
-            res = strcmp(furi_string_get_cstr(manufacture_code->name), instance->manufacture_name);
+            res = strcmp(manufacture_code->name, instance->manufacture_name);
             if(res == 0) {
                 switch(manufacture_code->type) {
                 case KEELOQ_LEARNING_FAAC:
@@ -624,7 +624,7 @@ static void subghz_protocol_faac_slh_check_remote_controller(
                 man = subghz_protocol_keeloq_common_faac_learning(
                     instance->seed, manufacture_code->key);
                 decrypt = subghz_protocol_keeloq_common_decrypt(code_hop, man);
-                *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                *manufacture_name = manufacture_code->name;
                 break;
             }
         }
@@ -649,12 +649,19 @@ SubGhzProtocolStatus subghz_protocol_decoder_faac_slh_serialize(
     furi_assert(context);
     SubGhzProtocolDecoderFaacSLH* instance = context;
 
-    // Reset seed leftover from previous decoded signal
+    // Reset seed leftover from a previous decoded signal.
     instance->generic.seed = 0x0;
     temp_fix_backup = 0x0;
 
     SubGhzProtocolStatus res =
         subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+
+    // Recover THIS frame's seed (a prog-mode / master-remote capture carries it) BEFORE
+    // writing it. The old order wrote Seed from the just-zeroed generic.seed (always 0) and
+    // only recovered it afterwards — so a saved FAAC SLH capture lost its seed and degraded
+    // to raw replay instead of a rolling clone. For FAAC the seed IS the reusable device key.
+    subghz_protocol_faac_slh_check_remote_controller(
+        &instance->generic, instance->keystore, &instance->manufacture_name);
 
     uint8_t seed_data[sizeof(uint32_t)] = {0};
     for(size_t i = 0; i < sizeof(uint32_t); i++) {
@@ -665,11 +672,6 @@ SubGhzProtocolStatus subghz_protocol_decoder_faac_slh_serialize(
         FURI_LOG_E(TAG, "Unable to add Seed");
         res = SubGhzProtocolStatusError;
     }
-    instance->generic.seed = seed_data[0] << 24 | seed_data[1] << 16 | seed_data[2] << 8 |
-                             seed_data[3];
-
-    subghz_protocol_faac_slh_check_remote_controller(
-        &instance->generic, instance->keystore, &instance->manufacture_name);
 
     return res;
 }

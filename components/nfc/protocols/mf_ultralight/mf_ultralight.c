@@ -15,6 +15,7 @@
 #define MF_ULTRALIGHT_PAGES_READ_KEY      "Pages read"
 #define MF_ULTRALIGHT_PAGE_KEY            "Page"
 #define MF_ULTRALIGHT_FAILED_ATTEMPTS_KEY "Failed authentication attempts"
+#define MF_ULTRALIGHT_AES_SIGNATURE_KEY   "AES signature"
 
 typedef struct {
     const char* device_name;
@@ -150,6 +151,17 @@ static const MfUltralightFeatures mf_ultralight_features[MfUltralightTypeNum] = 
                 MfUltralightFeatureSupportSectorSelect | MfUltralightFeatureSupportFastWrite |
                 MfUltralightFeatureSupportDynamicLock,
         },
+    [MfUltralightTypeUltralightAES] =
+        {
+            .device_name = "Mifare Ultralight AES",
+            .total_pages = MF_ULTRALIGHT_AES_TOTAL_PAGES, // 60 (0x00-0x3B)
+            .config_page = 0, // config not modeled via MfUltralightConfigPages; use raw pages
+            // NOTE: ReadCounter/IncCounter deliberately omitted for now — the generic counter
+            // handler dereferences MfUltralightConfigPages, which UL-AES does not populate
+            // (config_page 0). Counters need a UL-AES-aware read (page 0x2A gating); deferred.
+            .feature_set =
+                MfUltralightFeatureSupportReadVersion | MfUltralightFeatureSupportAuthenticate,
+        },
 };
 
 const NfcDeviceBase nfc_device_mf_ultralight = {
@@ -185,6 +197,8 @@ void mf_ultralight_reset(MfUltralightData* data) {
     furi_check(data);
 
     iso14443_3a_reset(data->iso14443_3a_data);
+    data->aes_signature_present = false;
+    memset(data->aes_signature, 0, sizeof(data->aes_signature));
 }
 
 void mf_ultralight_copy(MfUltralightData* data, const MfUltralightData* other) {
@@ -205,6 +219,8 @@ void mf_ultralight_copy(MfUltralightData* data, const MfUltralightData* other) {
     data->type = other->type;
     data->version = other->version;
     data->signature = other->signature;
+    data->aes_signature_present = other->aes_signature_present;
+    memcpy(data->aes_signature, other->aes_signature, sizeof(data->aes_signature));
 
     data->pages_read = other->pages_read;
     data->pages_total = other->pages_total;
@@ -331,6 +347,19 @@ bool mf_ultralight_load(MfUltralightData* data, FlipperFormat* ff, uint32_t vers
             data->auth_attempts = 0;
         }
 
+        // Optional UL-AES 48-byte signature. Absent for all other types and legacy dumps, so a
+        // rewind + best-effort read keeps this backward compatible.
+        data->aes_signature_present = false;
+        memset(data->aes_signature, 0, sizeof(data->aes_signature));
+        if(flipper_format_rewind(ff) &&
+           flipper_format_read_hex(
+               ff,
+               MF_ULTRALIGHT_AES_SIGNATURE_KEY,
+               data->aes_signature,
+               sizeof(data->aes_signature))) {
+            data->aes_signature_present = true;
+        }
+
         parsed = true;
     } while(false);
 
@@ -413,6 +442,16 @@ bool mf_ultralight_save(const MfUltralightData* data, FlipperFormat* ff) {
                ff, MF_ULTRALIGHT_FAILED_ATTEMPTS_KEY, &data->auth_attempts, 1))
             break;
 
+        // UL-AES 48-byte originality signature (optional; only when captured)
+        if(data->aes_signature_present) {
+            if(!flipper_format_write_hex(
+                   ff,
+                   MF_ULTRALIGHT_AES_SIGNATURE_KEY,
+                   data->aes_signature,
+                   sizeof(data->aes_signature)))
+                break;
+        }
+
         saved = true;
     } while(false);
 
@@ -437,6 +476,9 @@ bool mf_ultralight_is_equal(const MfUltralightData* data, const MfUltralightData
 
         if(memcmp(&data->version, &other->version, sizeof(data->version)) != 0) break;
         if(memcmp(&data->signature, &other->signature, sizeof(data->signature)) != 0) break;
+        if(data->aes_signature_present != other->aes_signature_present) break;
+        if(memcmp(data->aes_signature, other->aes_signature, sizeof(data->aes_signature)) != 0)
+            break;
 
         for(size_t i = 0; i < COUNT_OF(data->counter); i++) {
             if(memcmp(&data->counter[i], &other->counter[i], sizeof(data->counter[i])) != 0) {
@@ -519,7 +561,10 @@ MfUltralightType mf_ultralight_get_type_by_version(MfUltralightVersion* version)
     } else if(version->storage_size == 0x0E) {
         type = MfUltralightTypeUL21;
     } else if(version->storage_size == 0x0F) {
-        type = MfUltralightTypeNTAG213;
+        // storage_size 0x0F is shared by NTAG213 (NTAG family) and MF0AES20 (Ultralight family);
+        // split on the product-family nibble of prod_type (0x03 = Ultralight, 0x04 = NTAG).
+        type = ((version->prod_type & 0x0F) == 0x03) ? MfUltralightTypeUltralightAES :
+                                                       MfUltralightTypeNTAG213;
     } else if(version->storage_size == 0x11) {
         type = MfUltralightTypeNTAG215;
     } else if(version->prod_subtype == 5 && version->prod_ver_major == 2) {
@@ -576,7 +621,7 @@ uint8_t mf_ultralight_get_write_end_page(MfUltralightType type) {
         type == MfUltralightTypeUL11 || type == MfUltralightTypeUL21 ||
         type == MfUltralightTypeNTAG213 || type == MfUltralightTypeNTAG215 ||
         type == MfUltralightTypeNTAG216 || type == MfUltralightTypeOrigin ||
-        type == MfUltralightTypeMfulC);
+        type == MfUltralightTypeMfulC || type == MfUltralightTypeUltralightAES);
 
     uint8_t end_page = mf_ultralight_get_config_page_num(type);
     if(type == MfUltralightTypeNTAG213 || type == MfUltralightTypeNTAG215 ||
@@ -585,6 +630,9 @@ uint8_t mf_ultralight_get_write_end_page(MfUltralightType type) {
     } else if(type == MfUltralightTypeOrigin || type == MfUltralightTypeMfulC) {
         // ULC: 48 pages total, write pages 4-47 (includes auth config + 3DES key)
         end_page = mf_ultralight_features[type].total_pages;
+    } else if(type == MfUltralightTypeUltralightAES) {
+        // UL-AES: user memory is pages 0x04-0x27 (write end page exclusive = 0x28)
+        end_page = MF_ULTRALIGHT_AES_WRITE_END_PAGE;
     }
 
     return end_page;
@@ -698,6 +746,19 @@ const uint8_t* mf_ultralight_3des_get_key(const MfUltralightData* data) {
     furi_check(data->type == MfUltralightTypeMfulC);
 
     return data->page[44].data;
+}
+
+void mf_ultralight_aes_get_key(const MfUltralightData* data, uint8_t* key) {
+    furi_check(data);
+    furi_check(key);
+    furi_check(data->type == MfUltralightTypeUltralightAES);
+
+    // DataProtKey is stashed reversed across pages 0x30-0x33 (card byte order); un-reverse it.
+    // page[] is a contiguous array of 4-byte pages, so 16 bytes span pages 0x30-0x33.
+    const uint8_t* mem = data->page[MF_ULTRALIGHT_AES_DATA_KEY_PAGE].data;
+    for(size_t i = 0; i < MF_ULTRALIGHT_AES_KEY_SIZE; i++) {
+        key[i] = mem[MF_ULTRALIGHT_AES_KEY_SIZE - 1 - i];
+    }
 }
 
 void mf_ultralight_3des_encrypt(

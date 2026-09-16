@@ -513,7 +513,7 @@ FuriHalNfcError furi_hal_nfc_init(void) {
      * first and only reconfigured the bus afterward, and could probe before the
      * just-powered module was ready — so the ST25R3916 went undetected even though
      * the chip ACKs at 0x50. If it's here, use it and skip the PN532 path. */
-#if defined(BOARD_HAS_ST25R3916) && BOARD_HAS_ST25R3916
+#if defined(BOARD_HAS_ST25R3916) && BOARD_HAS_ST25R3916 && !defined(BOARD_NFC_PN532_ONLY)
     furi_delay_ms(150);
     if(st25r3916_hal_present()) {
         nfc_backend = NfcBackendSt25r3916;
@@ -580,7 +580,7 @@ FuriHalNfcError furi_hal_nfc_init(void) {
     if(nfc_err != FuriHalNfcErrorNone) {
         /* No PN532 on the bus — try the ST25R3916 (M5Stack NFC Universal Unit)
          * at 0x50 before giving up. */
-#if defined(BOARD_HAS_ST25R3916) && BOARD_HAS_ST25R3916
+#if defined(BOARD_HAS_ST25R3916) && BOARD_HAS_ST25R3916 && !defined(BOARD_NFC_PN532_ONLY)
         if(st25r3916_hal_present()) {
             nfc_backend = NfcBackendSt25r3916;
             nfc_hal_ready = true;
@@ -1856,7 +1856,7 @@ FuriHalNfcError furi_hal_nfc_poller_tx(const uint8_t* tx_data, size_t tx_bits) {
         return FuriHalNfcErrorCommunicationTimeout;
     }
 
-    FURI_LOG_D(TAG, "TRX: %u bytes dep=%d cmd=%02X",
+    FURI_LOG_I(TAG, "TRX: %u bytes dep=%d cmd=%02X",
         (unsigned)payload_len, pn532_iso_dep_mode,
         payload_len > 0 ? payload[0] : 0);
 
@@ -1902,6 +1902,24 @@ FuriHalNfcError furi_hal_nfc_poller_tx(const uint8_t* tx_data, size_t tx_bits) {
 
     FuriHalNfcError err = pn532_send_command(cmd, payload_len + cmd_hdr, resp, &resp_len, 5000);
 
+    /* ISO-DEP heavy commands — EMV GET PROCESSING OPTIONS / READ RECORD — make the
+     * card run crypto and involve a larger exchange, so on a marginal tap the PN532
+     * InDataExchange can transiently return a timeout STATUS (0x01: card present but
+     * the exchange did not complete in time). A single such timeout used to invalidate
+     * the whole target cache and abort the entire read (no records -> no PAN, no
+     * transaction log). Retry the exact same read-only exchange a few times before
+     * giving up so one RF glitch does not kill the read. Gated on the fast 0x01 STATUS
+     * (not the 5 s host CommunicationTimeout) so a removed card cannot cause a long
+     * hang: 0x01 returns quickly, and we only retry while the card is still there. */
+    for(uint8_t rtry = 0; pn532_iso_dep_mode && rtry < 3 && err == FuriHalNfcErrorNone &&
+                          resp_len >= 1 && resp[0] == PN532_STATUS_TIMEOUT;
+        rtry++) {
+        FURI_LOG_I(TAG, "ISO-DEP exchange 0x01 timeout, retry %u/3", rtry + 1);
+        furi_delay_ms(25);
+        resp_len = sizeof(resp);
+        err = pn532_send_command(cmd, payload_len + cmd_hdr, resp, &resp_len, 5000);
+    }
+
     if(err == FuriHalNfcErrorNone && resp_len >= 1) {
         uint8_t status = resp[0];
         if(status == PN532_STATUS_OK) {
@@ -1940,7 +1958,7 @@ FuriHalNfcError furi_hal_nfc_poller_tx(const uint8_t* tx_data, size_t tx_bits) {
                     FuriHalNfcEventTxEnd | FuriHalNfcEventRxStart | FuriHalNfcEventRxEnd);
         } else {
             err = pn532_status_to_error(status);
-            FURI_LOG_D(TAG, "TRX err: %02X", status);
+            FURI_LOG_I(TAG, "TRX err: %02X", status);
             /* Self-heal stale cache: clear on any PN532 status that means "the
              * cached target is no longer present / valid". Comm-level errors
              * (CRC 0x02, parity 0x03, framing 0x05 within ISO-DEP, collision
@@ -1950,7 +1968,7 @@ FuriHalNfcError furi_hal_nfc_poller_tx(const uint8_t* tx_data, size_t tx_bits) {
              *   0x2A UID mismatch, anything >= 0x40 catastrophic. */
             if(status == 0x01 || status == 0x0A || status == 0x25 || status == 0x26 ||
                status == 0x29 || status == 0x2A || status >= 0x40) {
-                FURI_LOG_D(TAG, "InDataExchange err 0x%02X -> invalidate cache", status);
+                FURI_LOG_I(TAG, "InDataExchange err 0x%02X -> invalidate cache", status);
                 pn532_target_number = 0;
                 pn532_iso_dep_active = false;
                 pn532_iso_dep_mode = false;

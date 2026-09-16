@@ -22,6 +22,10 @@
 #define HYUNDAI_TL_PROTOCOL_NAME "Hyundai TL"
 
 typedef struct SubGhzProtocolDecoderHyundaiTl SubGhzProtocolDecoderHyundaiTl;
+// Forward typedef for the encoder struct (defined in hyundai_tl.c under ENABLE_EMULATE_FEATURE).
+// A forward typedef of an incomplete type is harmless where the encoder isn't compiled; it lets
+// the encoder's own tl_build_upload(SubGhzProtocolEncoderHyundaiTl*) resolve when it IS.
+typedef struct SubGhzProtocolEncoderHyundaiTl SubGhzProtocolEncoderHyundaiTl;
 
 extern const SubGhzProtocol hyundai_tl_protocol;
 

@@ -48,6 +48,23 @@ extern "C" {
 #define MF_ULTRALIGHT_C_AUTH_RND_B_BLOCK_OFFSET (8)
 #define MF_ULTRALIGHT_C_ENCRYPTED_PACK_SIZE     (MF_ULTRALIGHT_C_AUTH_DATA_SIZE + 1)
 
+// MIFARE Ultralight AES (NXP MF0AES20 / MF0AESH20) constants. Ref: Unleashed PR #1058
+// (commit 25d00f1), cross-verified against NXP MF0AES(H)20 datasheet Rev. 3.2.
+#define MF_ULTRALIGHT_AES_KEY_SIZE          (16)
+#define MF_ULTRALIGHT_AES_BLOCK_SIZE        (16)
+#define MF_ULTRALIGHT_AES_SIGNATURE_SIZE    (48) // secp192r1 originality signature
+#define MF_ULTRALIGHT_AES_CMAC_SIZE         (8) // 8 odd-indexed bytes of the full CMAC
+#define MF_ULTRALIGHT_AES_AUTH_P1_RESP_SIZE (1 + 16) // 0xAF + ek(RndB)
+#define MF_ULTRALIGHT_AES_AUTH_P2_CMD_SIZE  (1 + 32) // 0xAF + ek(RndA||RndB')
+#define MF_ULTRALIGHT_AES_AUTH_P2_RESP_SIZE (1 + 16) // 0x00 + ek(RndA')
+#define MF_ULTRALIGHT_AES_DATA_KEY_PAGE     (0x30) // DataProtKey (pages 0x30-0x33)
+#define MF_ULTRALIGHT_AES_UID_KEY_PAGE      (0x34) // UIDRetrKey  (pages 0x34-0x37)
+#define MF_ULTRALIGHT_AES_CFG_PAGE          (0x29)
+#define MF_ULTRALIGHT_AES_ACCESS_PAGE       (0x2A)
+#define MF_ULTRALIGHT_AES_LOCK_KEYS_PAGE    (0x2D)
+#define MF_ULTRALIGHT_AES_TOTAL_PAGES       (60) // 0x00 - 0x3B
+#define MF_ULTRALIGHT_AES_WRITE_END_PAGE    (0x28) // user memory 0x04-0x27
+
 typedef enum {
     MfUltralightErrorNone,
     MfUltralightErrorNotPresent,
@@ -69,6 +86,7 @@ typedef enum {
     MfUltralightTypeNTAGI2C2K,
     MfUltralightTypeNTAGI2CPlus1K,
     MfUltralightTypeNTAGI2CPlus2K,
+    MfUltralightTypeUltralightAES,
 
     MfUltralightTypeNum,
 } MfUltralightType;
@@ -133,6 +151,17 @@ typedef struct {
 } MfUltralightC3DesAuthKey;
 
 typedef struct {
+    uint8_t data[MF_ULTRALIGHT_AES_KEY_SIZE];
+} MfUltralightAesKey;
+
+// AUTHENTICATE (0x1A) argument byte: which on-card AES key to use.
+typedef enum {
+    MfUltralightAesKeyTypeData = 0x00, // DataProtKey  (pages 0x30-0x33)
+    MfUltralightAesKeyTypeUid = 0x01, // UIDRetrKey   (pages 0x34-0x37)
+    MfUltralightAesKeyTypeOriginality = 0x02, // OriginalityKey (internal)
+} MfUltralightAesKeyType;
+
+typedef struct {
     uint8_t data[MF_ULTRALIGHT_AUTH_PACK_SIZE];
 } MfUltralightAuthPack;
 
@@ -180,6 +209,8 @@ typedef struct {
     MfUltralightType type;
     MfUltralightVersion version;
     MfUltralightSignature signature;
+    bool aes_signature_present; // UL-AES: 48-byte secp192r1 sig (separate from `signature`)
+    uint8_t aes_signature[MF_ULTRALIGHT_AES_SIGNATURE_SIZE];
     MfUltralightCounter counter[MF_ULTRALIGHT_COUNTER_NUM];
     MfUltralightTearingFlag tearing_flag[MF_ULTRALIGHT_TEARING_FLAG_NUM];
     MfUltralightPage page[MF_ULTRALIGHT_MAX_PAGE_NUM];
@@ -244,6 +275,10 @@ void mf_ultralight_3des_shift_data(uint8_t* const arr);
 bool mf_ultralight_3des_key_valid(const MfUltralightData* data);
 
 const uint8_t* mf_ultralight_3des_get_key(const MfUltralightData* data);
+
+// UL-AES: read the recovered DataProtKey back out of pages 0x30-0x33, un-reversing the stored
+// card byte order. `key` receives MF_ULTRALIGHT_AES_KEY_SIZE bytes.
+void mf_ultralight_aes_get_key(const MfUltralightData* data, uint8_t* key);
 
 void mf_ultralight_3des_encrypt(
     mbedtls_des3_context* ctx,

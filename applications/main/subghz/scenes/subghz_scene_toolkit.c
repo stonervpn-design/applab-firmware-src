@@ -69,7 +69,7 @@ static bool subghz_scene_toolkit_export_keystore(SubGhz* subghz) {
                     "Manufacturer: %s\n"
                     "Key (Hex): %016llX\n"
                     "Type: %hu\n\n",
-                    furi_string_get_cstr(key->name),
+                    key->name,
                     key->key,
                     key->type);
             }

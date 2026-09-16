@@ -9,7 +9,7 @@ static const SubGhzBlockConst kia_protocol_v5_const = {
     .te_short = 400,
     .te_long = 800,
     .te_delta = 150,
-    .min_count_bit_for_found = 64,
+    .min_count_bit_for_found = 67,
 };
 
 static void build_keystore_from_mfkey(uint8_t* result) {
@@ -578,8 +578,12 @@ void kia_protocol_decoder_v5_feed(void* context, bool level, uint32_t duration) 
         } else {
             if(instance->bit_count >= kia_protocol_v5_const.min_count_bit_for_found) {
                 instance->generic.data = instance->saved_key;
+                // Store exactly min_count_bit_for_found so a saved capture's
+                // Bit: field matches the framework's exact-equality deserialize
+                // check (was: variable bit_count 64-67 -> "Protocol not found!"
+                // when reloading in the receiver/full-dpad info scene).
                 instance->generic.data_count_bit =
-                    (instance->bit_count > 67) ? 67 : instance->bit_count;
+                    kia_protocol_v5_const.min_count_bit_for_found;
 
                 instance->crc = (uint8_t)(instance->decoded_data & 0x07);
 
@@ -609,8 +613,13 @@ void kia_protocol_decoder_v5_feed(void* context, bool level, uint32_t duration) 
                     instance->generic.cnt,
                     instance->crc);
 
+                // The embedded CRC is only 3 bits, so ~1/8 of degenerate bursts
+                // (regular PWM -> repeating-tile key like 0x2492492... / 0xB6DB6D...)
+                // still pass it. Also reject any key that is a low-entropy repeating
+                // pattern -- a real rolling key never is.
                 if(instance->base.callback &&
-                   instance->crc == kia_v5_calculate_crc(instance->saved_key))
+                   instance->crc == kia_v5_calculate_crc(instance->saved_key) &&
+                   !pp_value_is_degenerate(instance->saved_key, 8))
                     instance->base.callback(&instance->base, instance->base.context);
             }
 

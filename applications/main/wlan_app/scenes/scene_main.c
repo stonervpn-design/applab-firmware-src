@@ -5,18 +5,10 @@ enum MainIndex {
     MainIndexAttack,
     MainIndexSwitchWifi,
     MainIndexDisconnect,
-    // Channel-Aktionen (immer sichtbar, unter dem Separator).
-    MainIndexChannelHandshake = 10,
-    MainIndexChannelDeauth = 11,
-    MainIndexChannelSniffer = 12,
-    MainIndexChannelSsidSpam = 13,
-    MainIndexChannelEvilPortal = 14,
-    MainIndexUpdateSd = 15,
-    MainIndexReconPlus = 16,
-#ifndef PUBLIC_BUILD
-    MainIndexMgmtFuzzer = 17,
-    MainIndexWpsScan = 18,
-#endif
+    // Grouped actions below the separator (always visible).
+    MainIndexChannelAttacks = 10,
+    MainIndexReconPlus = 11,
+    MainIndexUpdateSd = 12,
 };
 
 static void wlan_app_scene_main_submenu_cb(void* context, uint32_t index) {
@@ -29,9 +21,10 @@ void wlan_app_scene_main_on_enter(void* context) {
     submenu_reset(app->submenu);
     submenu_set_header_centered(app->submenu, "WiFi");
 
-    // Channel-Aktionen sind immer sichtbar; Verbindungs-Aktionen sind state-abhängig.
+    // Entering the hub clears channel mode; the connection actions below are
+    // state-dependent, the grouped actions are always shown.
     app->channel_mode_active = false;
-    // Hub-Scene: ein evtl. abgebrochener Update-SD-Flow wird hier zurückgesetzt.
+    // Hub scene: reset any Update-SD flow that was aborted earlier.
     app->update_sd_flow = false;
 
     if(!app->connected && !app->target_selected) {
@@ -58,34 +51,14 @@ void wlan_app_scene_main_on_enter(void* context) {
     submenu_add_separator(app->submenu);
 
     submenu_add_item(
-        app->submenu, "Capture Handshake", MainIndexChannelHandshake,
-        wlan_app_scene_main_submenu_cb, app);
-    submenu_add_item(
-        app->submenu, "Deauth", MainIndexChannelDeauth,
-        wlan_app_scene_main_submenu_cb, app);
-    submenu_add_item(
-        app->submenu, "Sniffer", MainIndexChannelSniffer,
-        wlan_app_scene_main_submenu_cb, app);
-    submenu_add_item(
-        app->submenu, "SSID Spam", MainIndexChannelSsidSpam,
-        wlan_app_scene_main_submenu_cb, app);
-    submenu_add_item(
-        app->submenu, "Evil Portal", MainIndexChannelEvilPortal,
-        wlan_app_scene_main_submenu_cb, app);
-    submenu_add_item(
-        app->submenu, "Update SD", MainIndexUpdateSd,
+        app->submenu, "Channel Attacks", MainIndexChannelAttacks,
         wlan_app_scene_main_submenu_cb, app);
     submenu_add_item(
         app->submenu, "Recon+", MainIndexReconPlus,
         wlan_app_scene_main_submenu_cb, app);
-#ifndef PUBLIC_BUILD
     submenu_add_item(
-        app->submenu, "Mgmt Fuzzer", MainIndexMgmtFuzzer,
+        app->submenu, "Update SD", MainIndexUpdateSd,
         wlan_app_scene_main_submenu_cb, app);
-    submenu_add_item(
-        app->submenu, "WPS Scan", MainIndexWpsScan,
-        wlan_app_scene_main_submenu_cb, app);
-#endif
 
     view_dispatcher_switch_to_view(app->view_dispatcher, WlanAppViewSubmenu);
 }
@@ -103,8 +76,8 @@ bool wlan_app_scene_main_on_event(void* context, SceneManagerEvent event) {
             break;
         case MainIndexAttack:
             if(app->connected) {
-                // Erster Aufruf nach Connect/Disconnect: ARP-Scan; danach
-                // direkt zur LAN-Liste, bis Re-Scan getriggert wird.
+                // First entry after connect/disconnect runs the ARP scan; later
+                // entries go straight to the LAN list until a re-scan is triggered.
                 if(app->lan_scan_complete) {
                     scene_manager_next_scene(app->scene_manager, WlanAppSceneLan);
                 } else {
@@ -116,7 +89,7 @@ bool wlan_app_scene_main_on_event(void* context, SceneManagerEvent event) {
             consumed = true;
             break;
         case MainIndexDisconnect:
-            // Session 1: state-only toggle
+            // State-only toggle back to the disconnected hub.
             app->connected = false;
             app->target_selected = false;
             app->lan_scan_complete = false;
@@ -125,58 +98,25 @@ bool wlan_app_scene_main_on_event(void* context, SceneManagerEvent event) {
             wlan_app_scene_main_on_enter(app);
             consumed = true;
             break;
-        case MainIndexChannelHandshake:
-            app->channel_mode_active = true;
-            if(app->channel_action_channel == 0) app->channel_action_channel = 1;
-            scene_manager_next_scene(app->scene_manager, WlanAppSceneHandshake);
-            consumed = true;
-            break;
-        case MainIndexChannelDeauth:
-            app->channel_mode_active = true;
-            if(app->channel_action_channel == 0) app->channel_action_channel = 1;
-            scene_manager_next_scene(app->scene_manager, WlanAppSceneNetworkDeauth);
-            consumed = true;
-            break;
-        case MainIndexChannelSniffer:
-            app->channel_mode_active = true;
-            if(app->channel_action_channel == 0) app->channel_action_channel = 1;
-            scene_manager_next_scene(app->scene_manager, WlanAppScenePackageSniffer);
-            consumed = true;
-            break;
-        case MainIndexChannelSsidSpam:
-            // SSID Spam ist target-unabhängig (reine Beacon-Frames) → kein channel_mode.
-            scene_manager_next_scene(app->scene_manager, WlanAppSceneSsidSpam);
-            consumed = true;
-            break;
-        case MainIndexChannelEvilPortal:
-            scene_manager_next_scene(app->scene_manager, WlanAppSceneEvilPortalMenu);
-            consumed = true;
-            break;
-        case MainIndexUpdateSd:
-            app->update_sd_flow = true;
-            if(app->connected) {
-                // Bereits verbunden → direkt zur Bestätigung.
-                scene_manager_next_scene(app->scene_manager, WlanAppSceneUpdateSd);
-            } else {
-                // Kein WLAN → gleicher Connect-Flow wie "Select Wifi".
-                scene_manager_next_scene(app->scene_manager, WlanAppSceneConnect);
-            }
+        case MainIndexChannelAttacks:
+            scene_manager_next_scene(app->scene_manager, WlanAppSceneChannelAttacks);
             consumed = true;
             break;
         case MainIndexReconPlus:
             scene_manager_next_scene(app->scene_manager, WlanAppSceneReconMenu);
             consumed = true;
             break;
-#ifndef PUBLIC_BUILD
-        case MainIndexMgmtFuzzer:
-            scene_manager_next_scene(app->scene_manager, WlanAppSceneMgmtFuzzerConfig);
+        case MainIndexUpdateSd:
+            app->update_sd_flow = true;
+            if(app->connected) {
+                // Already connected: go straight to the confirm dialog.
+                scene_manager_next_scene(app->scene_manager, WlanAppSceneUpdateSd);
+            } else {
+                // No WiFi yet: same connect flow as "Select Wifi".
+                scene_manager_next_scene(app->scene_manager, WlanAppSceneConnect);
+            }
             consumed = true;
             break;
-        case MainIndexWpsScan:
-            scene_manager_next_scene(app->scene_manager, WlanAppSceneWpsScan);
-            consumed = true;
-            break;
-#endif
         }
     }
 

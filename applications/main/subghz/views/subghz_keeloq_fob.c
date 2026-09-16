@@ -78,10 +78,16 @@ static void keeloq_fob_draw_callback(Canvas* canvas, void* _model) {
         if(m->real_btn == btns[i].code) canvas_draw_disc(canvas, x + w - 6, y + 4, 2);
         if(i == m->sel) canvas_invert_color(canvas);
     }
-    // VAG has only 3 tiles; the empty 4th cell carries the desync caution.
+    // VAG has only 3 tiles; the empty 4th cell is the SYNC (force-resync) affordance:
+    // hold OK jumps the counter past a drifted receiver to recover from desync.
     if(m->desync_caution) {
-        canvas_draw_str_aligned(canvas, 66 + 30, 35 + 5, AlignCenter, AlignCenter, "adv cnt");
-        canvas_draw_str_aligned(canvas, 66 + 30, 35 + 14, AlignCenter, AlignCenter, "desync!");
+        uint8_t sx, sy, sw, sh;
+        fob_tile_rect(3, 4, &sx, &sy, &sw, &sh);
+        canvas_draw_rframe(canvas, sx, sy, sw, sh, 3);
+        canvas_draw_str_aligned(
+            canvas, sx + sw / 2, sy + sh / 2 - 4, AlignCenter, AlignCenter, "SYNC");
+        canvas_draw_str_aligned(
+            canvas, sx + sw / 2, sy + sh / 2 + 5, AlignCenter, AlignCenter, "hold OK");
     }
     char st[36];
     // VAG counter is 24-bit (%06lX); KeeLoq is 16-bit — keep its original %04X look.
@@ -97,6 +103,15 @@ static void keeloq_fob_draw_callback(Canvas* canvas, void* _model) {
 
 static bool keeloq_fob_input_callback(InputEvent* event, void* context) {
     SubGhzKeeloqFob* inst = context;
+    // Long-press OK = force-resync ("Sync"). Handled before the tap gate so the nav keys
+    // keep responding only to taps. On the 2-button M5Stick this is the only spare
+    // affordance (Down/Up cycle, OK sends, Back exits). The scene ignores it for non-clone
+    // signals, where a KeeLoq resync pair is meaningless.
+    if(event->type == InputTypeLong && event->key == InputKeyOk) {
+        with_view_model(inst->view, SubGhzKeeloqFobModel * m, { m->sent = false; }, false);
+        if(inst->callback) inst->callback(SubGhzCustomEventViewKeeloqFobSync, inst->context);
+        return true;
+    }
     if(event->type != InputTypeShort && event->type != InputTypeRepeat) return false;
     uint8_t navkey = 0xFF;
     switch(event->key) {
@@ -106,6 +121,23 @@ static bool keeloq_fob_input_callback(InputEvent* event, void* context) {
     case InputKeyDown:
     case InputKeyUp:
         navkey = FOB_CYCLE;
+        break;
+#elif defined(BOARD_HAS_ENCODER) && BOARD_HAS_ENCODER
+    // Rotary encoder (single axis, e.g. LilyGO T-Embed): a plain turn cycles LINEARLY
+    // through every tile (CW/Down = next, CCW/Up = prev), so all fob buttons are reachable
+    // with the knob alone — no Left/Right modifier gesture needed. Left/Right (hold Back +
+    // turn) still does spatial grid moves for anyone who wants them.
+    case InputKeyDown:
+        navkey = FOB_CYCLE;
+        break;
+    case InputKeyUp:
+        navkey = FOB_CYCLE_REV;
+        break;
+    case InputKeyLeft:
+        navkey = FOB_LEFT;
+        break;
+    case InputKeyRight:
+        navkey = FOB_RIGHT;
         break;
 #else
     // Cardputer / full keyboard: arrows move the highlight spatially.

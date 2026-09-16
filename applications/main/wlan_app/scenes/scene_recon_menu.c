@@ -7,6 +7,9 @@ enum ReconIndex {
     ReconIdxProbe,
     ReconIdxStations,
     ReconIdxLoot,
+#ifndef PUBLIC_BUILD
+    ReconIdxWps,
+#endif
 };
 
 static void recon_menu_cb(void* context, uint32_t index) {
@@ -23,6 +26,9 @@ void wlan_app_scene_recon_menu_on_enter(void* context) {
     submenu_add_item(app->submenu, "Attack Detector", ReconIdxDetector, recon_menu_cb, app);
     submenu_add_item(app->submenu, "Probe Sniffer", ReconIdxProbe, recon_menu_cb, app);
     submenu_add_item(app->submenu, "Station Scanner", ReconIdxStations, recon_menu_cb, app);
+#ifndef PUBLIC_BUILD
+    submenu_add_item(app->submenu, "WPS Scan", ReconIdxWps, recon_menu_cb, app);
+#endif
     submenu_add_item(app->submenu, "Loot", ReconIdxLoot, recon_menu_cb, app);
     view_dispatcher_switch_to_view(app->view_dispatcher, WlanAppViewSubmenu);
 }
@@ -46,6 +52,11 @@ bool wlan_app_scene_recon_menu_on_event(void* context, SceneManagerEvent event) 
     case ReconIdxStations:
         scene_manager_next_scene(app->scene_manager, WlanAppSceneStationScanner);
         return true;
+#ifndef PUBLIC_BUILD
+    case ReconIdxWps:
+        scene_manager_next_scene(app->scene_manager, WlanAppSceneWpsScan);
+        return true;
+#endif
     case ReconIdxLoot:
         scene_manager_next_scene(app->scene_manager, WlanAppSceneLootBrowser);
         return true;

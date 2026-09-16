@@ -4,8 +4,15 @@
 #include "lib/subghz/blocks/generic.h"
 #include <lib/subghz/devices/devices.h>
 #include <lib/subghz/protocols/vag.h>
+#include <lib/subghz/protocols/keeloq.h>
 
 #define TAG "SubGhzKeeloqFob"
+
+// Default on-demand resync leap for VAG / generic car fobs when the user hasn't dialled in a
+// jump. Must exceed how far the receiver drifted (real-fob presses since) to re-lock; small
+// enough that the real key catches back up in a reasonable number of presses. User-tunable
+// via the SetJump scene (keeloq_clone_jump).
+#define SUBGHZ_FOB_SYNC_DEFAULT_MARGIN 256u
 
 // Bridges the fob View's callback events onto the scene manager.
 static void subghz_scene_keeloq_fob_callback(SubGhzCustomEvent event, void* context) {
@@ -22,6 +29,20 @@ static void subghz_scene_keeloq_fob_refresh_cnt(SubGhz* subghz) {
     flipper_format_rewind(fff);
     flipper_format_read_uint32(fff, "Cnt", &cnt, 1);
     subghz_keeloq_fob_set_sent(subghz->subghz_keeloq_fob, cnt);
+}
+
+// Persist the post-TX counter to the backing .sub on disk so a reopened clone resumes
+// forward instead of replaying already-accepted counters — a same-serial clone shares the
+// receiver's counter slot, so a stale reload would be rejected until it catches up. Only
+// for Garage-opened entries (scene state 1) with a known file_path; a freshly-built clone
+// is in-RAM until the user Saves it, so we must never write to a stale path. The whole
+// fff_data (already advanced + persisted in RAM by the encoder) is written via the standard
+// save helper, so it works for KeeLoq clones, VAG, and generic car fobs alike.
+static void subghz_scene_keeloq_fob_persist(SubGhz* subghz) {
+    if(scene_manager_get_scene_state(subghz->scene_manager, SubGhzSceneKeeloqFob) != 1) return;
+    if(furi_string_empty(subghz->file_path)) return;
+    FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
+    subghz_save_protocol_to_file(subghz, fff, furi_string_get_cstr(subghz->file_path));
 }
 
 // Generic-protocol counter advance+persist after a successful TX. The car
@@ -161,6 +182,12 @@ static bool subghz_scene_keeloq_fob_enter_generic(SubGhz* subghz) {
 
 void subghz_scene_keeloq_fob_on_enter(void* context) {
     SubGhz* subghz = context;
+
+    // Persist the advancing counter to disk only for clones opened from the Garage (they
+    // have a backing .sub at subghz->file_path). A freshly-built clone is in-RAM until the
+    // user Saves it, so scene-state 0 keeps it from writing to a stale path.
+    scene_manager_set_scene_state(
+        subghz->scene_manager, SubGhzSceneKeeloqFob, subghz->keeloq_fob_from_garage ? 1 : 0);
 
     // Generic multi-button path (every supported car protocol other than the
     // VAG/KeeLoq special cases below). The routing scene set keeloq_fob_generic +
@@ -314,7 +341,71 @@ bool subghz_scene_keeloq_fob_on_event(void* context, SceneManagerEvent event) {
             flipper_format_insert_or_update_uint32(fff, btn_field, &btn, 1);
             subghz_txrx_hopper_pause(subghz->txrx);
             subghz->state_notifications = SubGhzNotificationStateIDLE;
-            subghz_block_generic_global.endless_tx = false; // single [N,N+1] burst (clone repeat=2)
+            // Ordinary clone press: one frame at the next counter (+1), encoder repeat=3.
+            // (Long-press OK = Sync, which arms the KeeLoq (N,N+1) force-resync pair below.)
+            subghz_block_generic_global.endless_tx = false;
+            if(subghz_tx_start(subghz, fff)) {
+                subghz->state_notifications = SubGhzNotificationStateTx;
+            } else {
+                subghz_txrx_rx_start(subghz->txrx);
+                subghz_txrx_hopper_unpause(subghz->txrx);
+                subghz->state_notifications = SubGhzNotificationStateRx;
+            }
+            return true;
+        } else if(event.event == SubGhzCustomEventViewKeeloqFobSync) {
+            // Long-press OK = FORCE-RESYNC: recover a rolling remote whose receiver counter
+            // drifted forward (the real fob was used since). Two mechanisms by protocol:
+            //  - KeeLoq clone: arm the encoder's double-window (N, N+1) pair jumped ahead by
+            //    `margin` — the receiver re-locks on the pair's 2nd frame.
+            //  - VAG / generic car fob: jump THIS remote's rolling counter forward by `margin`
+            //    and send one frame at the new value, landing in the receiver's resync window
+            //    ahead of its stored counter (the on-demand form of the existing "jump" lead;
+            //    the VAG 4th tile advertises it).
+            if(subghz->state_notifications == SubGhzNotificationStateTx) return true;
+            FlipperFormat* fff = subghz_txrx_get_fff_data(subghz->txrx);
+            FuriString* proto = furi_string_alloc();
+            flipper_format_rewind(fff);
+            bool is_keeloq = flipper_format_read_string(fff, "Protocol", proto) &&
+                             furi_string_equal_str(proto, SUBGHZ_PROTOCOL_KEELOQ_NAME);
+            furi_string_free(proto);
+            uint32_t clone_mode = 0;
+            flipper_format_rewind(fff);
+            flipper_format_read_uint32(fff, "CloneMode", &clone_mode, 1);
+
+            uint8_t nibble = subghz_keeloq_fob_selected_nibble(subghz->subghz_keeloq_fob);
+            uint32_t btn = nibble;
+
+            if(is_keeloq && clone_mode == 1 && !subghz->keeloq_fob_generic) {
+                // KeeLoq clone: (N, N+1) double-window resync pair via the encoder.
+                flipper_format_insert_or_update_uint32(fff, "Btn", &btn, 1);
+                uint16_t margin =
+                    (subghz->keeloq_clone_jump > 16 && subghz->keeloq_clone_jump < 0x8000) ?
+                        (uint16_t)subghz->keeloq_clone_jump :
+                        0; // 0 -> encoder's built-in default
+                subghz_protocol_keeloq_encoder_request_resync(margin);
+            } else {
+                // VAG / generic car fob: jump the rolling counter forward, then send one frame.
+                uint32_t margin = subghz->keeloq_clone_jump ? subghz->keeloq_clone_jump :
+                                                              SUBGHZ_FOB_SYNC_DEFAULT_MARGIN;
+                const char* cnt_field =
+                    subghz->keeloq_fob_generic ? subghz->keeloq_fob_cnt_field : "Cnt";
+                const char* btn_field =
+                    subghz->keeloq_fob_generic ? subghz->keeloq_fob_field : "Btn";
+                uint32_t cur = 0;
+                flipper_format_rewind(fff);
+                flipper_format_read_uint32(fff, cnt_field, &cur, 1);
+                uint32_t target = cur + margin;
+                flipper_format_insert_or_update_uint32(fff, cnt_field, &target, 1);
+                // Keep the generic post-TX advance in step with the jump so the next ordinary
+                // press is target+1 (VAG self-advances + is read back via refresh_cnt, so this
+                // assignment is harmless for it).
+                subghz->keeloq_fob_cnt_seed = target;
+                flipper_format_insert_or_update_uint32(fff, btn_field, &btn, 1);
+            }
+
+            subghz_txrx_hopper_pause(subghz->txrx);
+            subghz->state_notifications = SubGhzNotificationStateIDLE;
+            subghz_block_generic_global.endless_tx = false;
             if(subghz_tx_start(subghz, fff)) {
                 subghz->state_notifications = SubGhzNotificationStateTx;
             } else {
@@ -343,6 +434,9 @@ bool subghz_scene_keeloq_fob_on_event(void* context, SceneManagerEvent event) {
                 // VAG/KeeLoq: their encoder already advanced + persisted Cnt.
                 subghz_scene_keeloq_fob_refresh_cnt(subghz);
             }
+            // Write the advanced counter through to the backing .sub (Garage clones only),
+            // so reopening the clone resumes forward instead of replaying stale counters.
+            subghz_scene_keeloq_fob_persist(subghz);
         }
         return true;
     }

@@ -82,6 +82,7 @@ void psa_brute_force_run(PsaBfState* state) {
         }
         if((counter & (PSA_BF_PROGRESS_INTERVAL - 1)) == 0) {
             state->progress_current = counter - PSA_CRYPTO_BF1_START;
+            furi_delay_tick(1); /* yield: idle runs -> ESP32 task WDT (10s) fed, no freeze */
         }
 
         uint32_t wk2 = PSA_CRYPTO_BF1_CONST_U4;
@@ -118,6 +119,7 @@ void psa_brute_force_run(PsaBfState* state) {
         if((counter & (PSA_BF_PROGRESS_INTERVAL - 1)) == 0) {
             state->progress_current =
                 (PSA_CRYPTO_BF1_END - PSA_CRYPTO_BF1_START) + (counter - PSA_CRYPTO_BF2_START);
+            furi_delay_tick(1); /* yield: idle runs -> ESP32 task WDT (10s) fed, no freeze */
         }
 
         uint32_t working_key[4] = {

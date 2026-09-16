@@ -36,6 +36,7 @@ ADD_SCENE(wlan_app, loot_browser, LootBrowser)
 ADD_SCENE(wlan_app, loot_entries, LootEntries)
 ADD_SCENE(wlan_app, loot_preview, LootPreview)
 ADD_SCENE(wlan_app, recon_menu, ReconMenu)
+ADD_SCENE(wlan_app, channel_attacks, ChannelAttacks)
 #ifndef PUBLIC_BUILD
 // 802.11 management-frame fuzzer (WF1) -- PRIVATE only. Mirrors the subghz
 // Protocol Fuzzer gating precedent (subghz_scene_config.h).

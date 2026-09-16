@@ -19,6 +19,7 @@ typedef struct {
     bool can_send;
     bool can_save;
     bool tx_active; // OK long-held → invert Send button label
+    bool zero_psi_firing; // continuous 0-PSI spoof active (Left long-press toggle)
 } SubGhzViewTpmsInfoModel;
 
 void subghz_view_tpms_info_set_callback(
@@ -84,6 +85,15 @@ void subghz_view_tpms_info_set_values(
             model->generic->temperature = temperature;
             model->generic->battery_low = battery_low;
         },
+        true);
+}
+
+void subghz_view_tpms_info_set_zero_psi_firing(SubGhzViewTpmsInfo* tpms_info, bool firing) {
+    furi_assert(tpms_info);
+    with_view_model(
+        tpms_info->view,
+        SubGhzViewTpmsInfoModel * model,
+        { model->zero_psi_firing = firing; },
         true);
 }
 
@@ -158,12 +168,29 @@ static void subghz_view_tpms_info_draw(Canvas* canvas, SubGhzViewTpmsInfoModel* 
     snprintf(buffer, sizeof(buffer), "%d bit", model->generic->data_count_bit);
     canvas_draw_str_aligned(canvas, 128, 55, AlignRight, AlignBottom, buffer);
 
-    // Action button hints along the bottom
-    if(model->can_send) {
-        elements_button_center(canvas, model->tx_active ? "Sending" : "Send");
-    }
-    if(model->can_save) {
-        elements_button_right(canvas, "Save");
+    // Action button hints along the bottom — or the 0-PSI firing banner.
+    if(model->zero_psi_firing) {
+        // Firing banner on the left; keep the right corner free so the user can
+        // still Save the ORIGINAL captured sensor (history is left intact while
+        // the flat-tire frame is transmitted from a throwaway buffer).
+        canvas_set_color(canvas, ColorBlack);
+        canvas_draw_box(canvas, 0, 54, 92, 10);
+        canvas_set_color(canvas, ColorWhite);
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str_aligned(
+            canvas, 2, 62, AlignLeft, AlignBottom, "0PSI Firing  L:stop");
+        canvas_set_color(canvas, ColorBlack);
+        if(model->can_save) {
+            elements_button_right(canvas, "Save");
+        }
+    } else {
+        if(model->can_send) {
+            elements_button_center(canvas, model->tx_active ? "Sending" : "Send");
+            elements_button_left(canvas, "0PSI"); // hold Left: continuous flat-tire spoof
+        }
+        if(model->can_save) {
+            elements_button_right(canvas, "Save");
+        }
     }
 }
 
@@ -257,6 +284,14 @@ static bool subghz_view_tpms_info_input(InputEvent* event, void* context) {
     if(event->key == InputKeyLeft && event->type == InputTypeShort) {
         // Track: add this sensor's ID to the watch list (private car-tracker).
         subghz_view_tpms_info_fire(tpms_info, SubGhzViewTpmsInfoActionTrack);
+        return true;
+    }
+    if(event->key == InputKeyLeft && event->type == InputTypeLong && can_send) {
+        // Left long-press: toggle the continuous 0-PSI (flat-tire) spoof — sets the
+        // picked-up sensor to 0 bar, re-packs, and endlessly re-transmits until
+        // toggled off. The scene owns the firing state and calls
+        // subghz_view_tpms_info_set_zero_psi_firing() to reflect it.
+        subghz_view_tpms_info_fire(tpms_info, SubGhzViewTpmsInfoActionZeroPsiToggle);
         return true;
     }
 #endif

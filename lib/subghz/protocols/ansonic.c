@@ -1,4 +1,5 @@
 #include "ansonic.h"
+#include "protocols_common.h"
 #include "../blocks/const.h"
 #include "../blocks/decoder.h"
 #include "../blocks/encoder.h"
@@ -244,7 +245,14 @@ void subghz_protocol_decoder_ansonic_feed(void* context, bool level, uint32_t du
 
                     instance->generic.data = instance->decoder.decode_data;
                     instance->generic.data_count_bit = instance->decoder.decode_count_bit;
-                    if(instance->base.callback)
+                    // Anti-phantom: Ansonic has no CRC and accepts any length >= 12, so
+                    // a regular-PWM/noise burst that demodulates into an all-zero (or
+                    // all-FF / repeating-tile) payload otherwise fires a phantom frame.
+                    // A real code is never such a degenerate value -- reject it here.
+                    if(instance->base.callback &&
+                       !pp_value_is_degenerate(
+                           instance->generic.data,
+                           (uint8_t)((instance->generic.data_count_bit + 7) / 8)))
                         instance->base.callback(&instance->base, instance->base.context);
                 }
                 break;

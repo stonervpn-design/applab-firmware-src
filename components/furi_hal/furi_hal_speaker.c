@@ -14,6 +14,8 @@
  */
 
 #include "furi_hal_speaker.h"
+#include "furi_hal_mic.h"
+#include "furi_hal.h" /* furi_hal_m5pm1_set_speaker_amp (StickS3 AW8737 amp) */
 #include "boards/board.h"
 #include <furi.h>
 
@@ -62,7 +64,15 @@ typedef enum {
 /* ---- Static state ---- */
 static FuriMutex* speaker_mutex = NULL;
 static i2s_chan_handle_t i2s_tx_handle = NULL;
+#ifdef BOARD_PIN_SPEAKER_DIN
+static i2s_chan_handle_t i2s_rx_handle = NULL; /* full-duplex RX (ES8311 ADC / mic) */
+static bool i2s_rx_enabled = false;
+#endif
 static bool i2s_channel_enabled = false;
+/* Set true only after I2S init fully succeeds. If audio init fails (e.g. a bad
+ * pin/config), it is logged and left false so acquire() no-ops instead of the
+ * whole device aborting at boot. */
+static bool speaker_available = false;
 
 /* Active mode — read by writer thread, written by API callers under ownership. */
 static volatile SpeakerMode speaker_mode = SpeakerModeIdle;
@@ -106,6 +116,7 @@ static esp_err_t es8311_write(uint8_t reg, uint8_t val) {
     return ret;
 }
 
+
 /* Register init for DAC/speaker playback on the Cardputer-ADV. Values follow
  * M5Unified's `_speaker_enabled_cb_cardputer_adv` (m5stack/M5Unified), which is
  * the known-good sequence for THIS board. The critical bit is reg 0x01=0xB5:
@@ -115,14 +126,33 @@ static esp_err_t es8311_write(uint8_t reg, uint8_t val) {
  * es8311_seq[0] is a reset with a 20 ms settle before the rest is written. */
 static const uint8_t es8311_seq[][2] = {
     {0x00, 0x1F}, /* reset digital + analog (20 ms settle follows) */
+#ifdef BOARD_PIN_SPEAKER_DIN
+    {0x00, 0x00}, /* deassert reset (full-duplex/mic path) */
+#endif
     {0x00, 0x80}, /* CSM power on */
-    {0x01, 0xB5}, /* clock manager: MCLK sourced from BCLK/SCLK (no MCLK pin) */
+#ifdef BOARD_PIN_SPEAKER_DIN
+    /* --- StickS3 full-duplex (speaker + mic) --- */
+    {0x45, 0x00}, /* clear GP */
+    {0x44, 0x00}, /* SDOUT source = ADC */
+    {0x01, 0xBF}, /* clock: MCLK from BCLK + BOTH DAC and ADC clocks (0xB5=DAC-only,
+                     0xBA=ADC-only, 0xBF=both — needed to play AND capture at once) */
+#else
+    /* --- Cardputer-ADV: playback only, no MCLK pin (proven value) --- */
+    {0x01, 0xB5}, /* clock manager: MCLK sourced from BCLK/SCLK */
+#endif
     {0x02, 0x18}, /* clock manager: MULT_PRE=3 */
     {0x0D, 0x01}, /* power up analog circuitry */
     {0x12, 0x00}, /* power up DAC */
     {0x13, 0x10}, /* enable output drive (to speaker/HP) */
     {0x32, 0xBF}, /* DAC volume ~0 dB */
     {0x37, 0x08}, /* bypass DAC equalizer */
+#ifdef BOARD_PIN_SPEAKER_DIN
+    /* ADC / microphone path — EXACTLY the M5 StickS3 mic-enable registers. */
+    {0x0E, 0x02}, /* power up analog PGA + ADC modulator */
+    {0x14, 0x10}, /* mic input select (M5 StickS3 value) */
+    {0x17, 0xFF}, /* ADC volume max */
+    {0x1C, 0x6A}, /* ADC EQ bypass + DC offset cancellation */
+#endif
 };
 
 static void es8311_ensure_init(void) {
@@ -263,20 +293,36 @@ void furi_hal_speaker_init(void) {
     chan_cfg.dma_desc_num = SPEAKER_DMA_DESC_NUM;
     chan_cfg.dma_frame_num = SPEAKER_DMA_FRAME_NUM;
     chan_cfg.auto_clear = true; /* send silence when no data */
-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s_tx_handle, NULL));
+#ifdef BOARD_PIN_SPEAKER_DIN
+    esp_err_t nc_err = i2s_new_channel(&chan_cfg, &i2s_tx_handle, &i2s_rx_handle);
+#else
+    esp_err_t nc_err = i2s_new_channel(&chan_cfg, &i2s_tx_handle, NULL);
+#endif
+    if(nc_err != ESP_OK) {
+        FURI_LOG_E(TAG, "i2s_new_channel failed: %s — speaker disabled", esp_err_to_name(nc_err));
+        i2s_tx_handle = NULL;
+        return; /* speaker_available stays false; acquire() no-ops */
+    }
 
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(SPEAKER_SAMPLE_RATE),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
-            /* No MCLK pin: the ADV's ES8311 derives its master clock from BCLK
-             * (reg 0x01=0xB5) and the standard Cardputer's NS4168 needs none.
-             * Routing MCLK to GPIO0 (BOOT strap) was both unnecessary and wrong. */
+            /* Cardputer-ADV/standard Cardputer: no MCLK pin (derive from BCLK).
+             * StickS3: route MCLK (GPIO18) — its ES8311 ADC needs a real MCLK. */
+#ifdef BOARD_PIN_SPEAKER_MCLK
+            .mclk = (gpio_num_t)BOARD_PIN_SPEAKER_MCLK,
+#else
             .mclk = I2S_GPIO_UNUSED,
+#endif
             .bclk = (gpio_num_t)BOARD_PIN_SPEAKER_BCLK,
             .ws = (gpio_num_t)BOARD_PIN_SPEAKER_WCLK,
             .dout = (gpio_num_t)BOARD_PIN_SPEAKER_DOUT,
+#ifdef BOARD_PIN_SPEAKER_DIN
+            .din = (gpio_num_t)BOARD_PIN_SPEAKER_DIN,
+#else
             .din = I2S_GPIO_UNUSED,
+#endif
             .invert_flags = {
                 .mclk_inv = false,
                 .bclk_inv = false,
@@ -284,13 +330,35 @@ void furi_hal_speaker_init(void) {
             },
         },
     };
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(i2s_tx_handle, &std_cfg));
+    esp_err_t std_err = i2s_channel_init_std_mode(i2s_tx_handle, &std_cfg);
+    if(std_err != ESP_OK) {
+        FURI_LOG_E(
+            TAG,
+            "i2s_channel_init_std_mode failed: %s (BCLK=%d WS=%d DOUT=%d) — speaker disabled",
+            esp_err_to_name(std_err), BOARD_PIN_SPEAKER_BCLK, BOARD_PIN_SPEAKER_WCLK,
+            BOARD_PIN_SPEAKER_DOUT);
+        i2s_del_channel(i2s_tx_handle);
+        i2s_tx_handle = NULL;
+        return; /* speaker_available stays false; acquire() no-ops */
+    }
+
+#ifdef BOARD_PIN_SPEAKER_DIN
+    /* Init the RX (mic) side of the full-duplex channel. If it fails, keep the
+     * speaker working and just disable the mic. */
+    esp_err_t rx_err = i2s_channel_init_std_mode(i2s_rx_handle, &std_cfg);
+    if(rx_err != ESP_OK) {
+        FURI_LOG_E(TAG, "i2s rx (mic) init failed: %s — mic disabled", esp_err_to_name(rx_err));
+        i2s_del_channel(i2s_rx_handle);
+        i2s_rx_handle = NULL;
+    }
+#endif
 
     /* Start the writer thread (it idles until speaker_mode != Idle) */
     speaker_thread = furi_thread_alloc_ex("SpeakerWorker", SPEAKER_THREAD_STACK, speaker_writer_thread, NULL);
     speaker_thread_run = true;
     furi_thread_start(speaker_thread);
 
+    speaker_available = true;
     FURI_LOG_I(TAG, "Init OK (I2S, BCLK=%d WS=%d DOUT=%d)",
                BOARD_PIN_SPEAKER_BCLK, BOARD_PIN_SPEAKER_WCLK, BOARD_PIN_SPEAKER_DOUT);
 }
@@ -298,19 +366,24 @@ void furi_hal_speaker_init(void) {
 void furi_hal_speaker_deinit(void) {
     furi_check(speaker_mutex != NULL);
 
-    /* Stop writer thread */
-    speaker_thread_run = false;
-    furi_thread_join(speaker_thread);
-    furi_thread_free(speaker_thread);
-    speaker_thread = NULL;
-
-    /* Tear down I2S */
-    if(i2s_channel_enabled) {
-        i2s_channel_disable(i2s_tx_handle);
-        i2s_channel_enabled = false;
+    /* Stop writer thread (only started when init fully succeeded) */
+    if(speaker_thread) {
+        speaker_thread_run = false;
+        furi_thread_join(speaker_thread);
+        furi_thread_free(speaker_thread);
+        speaker_thread = NULL;
     }
-    i2s_del_channel(i2s_tx_handle);
-    i2s_tx_handle = NULL;
+
+    /* Tear down I2S (handle is NULL if init failed) */
+    if(i2s_tx_handle) {
+        if(i2s_channel_enabled) {
+            i2s_channel_disable(i2s_tx_handle);
+            i2s_channel_enabled = false;
+        }
+        i2s_del_channel(i2s_tx_handle);
+        i2s_tx_handle = NULL;
+    }
+    speaker_available = false;
 
     /* Free buffer */
     if(wave_buffer) {
@@ -325,6 +398,8 @@ void furi_hal_speaker_deinit(void) {
 bool furi_hal_speaker_acquire(uint32_t timeout) {
     furi_check(!FURI_IS_IRQ_MODE());
 
+    if(!speaker_available) return false; /* init failed/disabled: no-op, never crash */
+
     if(furi_mutex_acquire(speaker_mutex, timeout) == FuriStatusOk) {
         /* Enable I2S channel on first acquire */
         if(!i2s_channel_enabled) {
@@ -336,6 +411,9 @@ bool furi_hal_speaker_acquire(uint32_t timeout) {
          * bus is up by first speaker use — configure the codec once. */
         es8311_ensure_init();
 #endif
+        /* Power on the output amplifier (StickS3 AW8737 via M5PM1 GPIO3, off at
+         * boot). No-op on boards without the M5PM1 PMIC. */
+        furi_hal_m5pm1_set_speaker_amp(true);
         return true;
     }
     return false;
@@ -346,8 +424,97 @@ void furi_hal_speaker_release(void) {
     furi_check(furi_hal_speaker_is_mine());
 
     furi_hal_speaker_stop();
+    /* Power the output amp back down (StickS3 AW8737; no-op elsewhere). Also frees
+     * the IR receiver, which cannot run while the amp is on. */
+    furi_hal_m5pm1_set_speaker_amp(false);
     furi_check(furi_mutex_release(speaker_mutex) == FuriStatusOk);
 }
+
+void furi_hal_speaker_play_pcm(const int16_t* mono, size_t count, uint32_t sample_rate) {
+    /* Blocking playback of a mono 16-bit clip while the speaker is acquired and
+     * idle (the writer thread does not touch I2S in Idle mode). Nearest-neighbour
+     * resample to SPEAKER_SAMPLE_RATE and duplicate mono -> stereo. */
+    if(!speaker_available || !i2s_tx_handle || !mono || count == 0 || sample_rate == 0) return;
+
+    enum { CHUNK_FRAMES = 256 };
+    static int16_t chunk[CHUNK_FRAMES * 2];
+    const uint64_t step = ((uint64_t)sample_rate << 16) / SPEAKER_SAMPLE_RATE; /* 16.16 */
+    uint64_t pos = 0;
+
+    while((size_t)(pos >> 16) < count) {
+        size_t f = 0;
+        for(; f < CHUNK_FRAMES; f++) {
+            size_t si = (size_t)(pos >> 16);
+            if(si >= count) break;
+            chunk[f * 2] = mono[si];
+            chunk[f * 2 + 1] = mono[si];
+            pos += step;
+        }
+        if(f == 0) break;
+        size_t bytes_written = 0;
+        i2s_channel_write(i2s_tx_handle, chunk, f * 2 * sizeof(int16_t), &bytes_written, 1000);
+    }
+}
+
+#ifdef BOARD_PIN_SPEAKER_DIN
+bool furi_hal_mic_start(void) {
+    if(!speaker_available || !i2s_rx_handle) return false;
+    /* The I2S clocks are generated by the (master) TX channel — enable it so the
+     * ES8311 is clocked, configure the codec (DAC+ADC), then enable RX capture. */
+    if(!i2s_channel_enabled) {
+        if(i2s_channel_enable(i2s_tx_handle) != ESP_OK) return false;
+        i2s_channel_enabled = true;
+    }
+#if defined(BOARD_HAS_ES8311) && BOARD_HAS_ES8311
+    es8311_ensure_init();
+#endif
+    if(!i2s_rx_enabled) {
+        if(i2s_channel_enable(i2s_rx_handle) != ESP_OK) return false;
+        i2s_rx_enabled = true;
+    }
+    return true;
+}
+
+size_t furi_hal_mic_read(int16_t* mono_out, size_t frames, uint32_t timeout_ms) {
+    if(!i2s_rx_handle || !i2s_rx_enabled || !mono_out || frames == 0) return 0;
+    /* The slot is stereo 16-bit; the ES8311 is mono so its sample is on the left
+     * channel. Read stereo in blocks and extract the left channel to mono_out. */
+    static int16_t stereo[256 * 2];
+    size_t done = 0;
+    while(done < frames) {
+        size_t want = frames - done;
+        if(want > 256) want = 256;
+        size_t br = 0;
+        if(i2s_channel_read(i2s_rx_handle, stereo, want * 2 * sizeof(int16_t), &br, timeout_ms) !=
+           ESP_OK)
+            break;
+        size_t got = br / (2 * sizeof(int16_t));
+        if(got == 0) break;
+        for(size_t i = 0; i < got; i++) mono_out[done + i] = stereo[i * 2];
+        done += got;
+    }
+    return done;
+}
+
+void furi_hal_mic_stop(void) {
+    if(i2s_rx_handle && i2s_rx_enabled) {
+        i2s_channel_disable(i2s_rx_handle);
+        i2s_rx_enabled = false;
+    }
+}
+#else
+bool furi_hal_mic_start(void) {
+    return false;
+}
+size_t furi_hal_mic_read(int16_t* mono_out, size_t frames, uint32_t timeout_ms) {
+    (void)mono_out;
+    (void)frames;
+    (void)timeout_ms;
+    return 0;
+}
+void furi_hal_mic_stop(void) {
+}
+#endif
 
 bool furi_hal_speaker_is_mine(void) {
     return (FURI_IS_IRQ_MODE()) ||
@@ -439,6 +606,24 @@ void furi_hal_speaker_set_volume(float volume) {
 }
 
 void furi_hal_speaker_stop(void) {
+}
+
+void furi_hal_speaker_play_pcm(const int16_t* mono, size_t count, uint32_t sample_rate) {
+    (void)mono;
+    (void)count;
+    (void)sample_rate;
+}
+
+bool furi_hal_mic_start(void) {
+    return false;
+}
+size_t furi_hal_mic_read(int16_t* mono_out, size_t frames, uint32_t timeout_ms) {
+    (void)mono_out;
+    (void)frames;
+    (void)timeout_ms;
+    return 0;
+}
+void furi_hal_mic_stop(void) {
 }
 
 #endif /* BOARD_HAS_SPEAKER */

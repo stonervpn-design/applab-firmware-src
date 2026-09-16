@@ -72,7 +72,7 @@ void subghz_keystore_free(SubGhzKeystore* instance) {
 
     for
         M_EACH(manufacture_code, instance->data, SubGhzKeyArray_t) {
-            furi_string_free(manufacture_code->name);
+            free(manufacture_code->name);
             manufacture_code->key = 0;
         }
     SubGhzKeyArray_clear(instance->data);
@@ -98,6 +98,19 @@ static bool subghz_keystore_have_heap_headroom(SubGhzKeystore* instance) {
     return false;
 }
 
+/* Duplicate a key name into PSRAM (not internal DRAM). With ~229 keys the FuriString
+ * name structs were the dominant internal-RAM consumer, starving the SubGHz UI. Names
+ * are read-only after load and read only from the worker thread, so PSRAM is safe. */
+static char* subghz_keystore_name_dup_psram(const char* s) {
+    size_t n = strlen(s) + 1;
+    /* Prefer PSRAM (T-Embed); on no-PSRAM boards (M5Stick/Cardputer) SPIRAM returns
+     * NULL, so fall back to internal so the name still loads as it did before. */
+    char* p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!p) p = heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if(p) memcpy(p, s, n);
+    return p;
+}
+
 static void subghz_keystore_add_key(
     SubGhzKeystore* instance,
     const char* name,
@@ -106,7 +119,7 @@ static void subghz_keystore_add_key(
     /* Skip (don't crash) once the board can no longer safely hold more keys. */
     if(!subghz_keystore_have_heap_headroom(instance)) return;
     SubGhzKey* manufacture_code = SubGhzKeyArray_push_raw(instance->data);
-    manufacture_code->name = furi_string_alloc_set(name);
+    manufacture_code->name = subghz_keystore_name_dup_psram(name);
     manufacture_code->key = key;
     manufacture_code->type = type;
 }
@@ -329,7 +342,7 @@ bool subghz_keystore_save(SubGhzKeystore* instance, const char* file_name, uint8
                     (uint32_t)(key->key >> 32),
                     (uint32_t)key->key,
                     key->type,
-                    furi_string_get_cstr(key->name));
+                    key->name ? key->name : "");
                 // Verify length and align
                 furi_assert(len > 0);
                 if(len % 16 != 0) {

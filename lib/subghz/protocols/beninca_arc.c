@@ -197,6 +197,19 @@ static uint64_t
     // Fixed constant value AA 55
     generic->seed = ((uint16_t)encrypted_data[14] << 8) | encrypted_data[15];
 
+    // Integrity gate: the Beninca ARC plaintext always carries the fixed constant 0xAA55 in
+    // its last two bytes. If it is absent, the AES-128 key was wrong or missing (the type-9
+    // Beninca key is not in the keystore) and the "decrypt" is garbage — zero the recovered
+    // fields instead of presenting a fabricated serial/counter as a real remote (mirrors how
+    // Jarolift/KingGates zero their fields on a decrypt mismatch, so a bad decode is
+    // detectable as serial==0 rather than fed into a clone).
+    if(generic->seed != 0xAA55) {
+        generic->serial = 0;
+        generic->btn = 0;
+        generic->cnt = 0;
+        return 0;
+    }
+
     // Save original button for later use
     if(subghz_custom_btn_get_original() == 0) {
         subghz_custom_btn_set_original(generic->btn);

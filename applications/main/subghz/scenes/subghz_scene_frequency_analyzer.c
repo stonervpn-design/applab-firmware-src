@@ -44,6 +44,15 @@ static void subghz_fa_apply_preset_for_mod(SubGhz* subghz) {
 
 void subghz_scene_frequency_analyzer_on_enter(void* context) {
     SubGhz* subghz = context;
+    // Lazy-load the analyzer view+worker on entry (freed on exit) so its internal RAM
+    // stays out of the SubGhz launch path. Mirrors the jammer/playlist lazy pattern.
+    if(!subghz->subghz_frequency_analyzer) {
+        subghz->subghz_frequency_analyzer = subghz_frequency_analyzer_alloc(subghz->txrx);
+        view_dispatcher_add_view(
+            subghz->view_dispatcher,
+            SubGhzViewIdFrequencyAnalyzer,
+            subghz_frequency_analyzer_get_view(subghz->subghz_frequency_analyzer));
+    }
     subghz_frequency_analyzer_set_callback(
         subghz->subghz_frequency_analyzer, subghz_scene_frequency_analyzer_callback, subghz);
     subghz_frequency_analyzer_feedback_level(
@@ -109,9 +118,17 @@ void subghz_scene_frequency_analyzer_on_exit(void* context) {
     SubGhz* subghz = context;
     notification_message(subghz->notifications, &sequence_reset_rgb);
 
-    subghz->last_settings->frequency_analyzer_feedback_level =
-        subghz_frequency_analyzer_feedback_level(subghz->subghz_frequency_analyzer, 0, false);
-    subghz->last_settings->frequency_analyzer_trigger =
-        subghz_frequency_analyzer_get_trigger_level(subghz->subghz_frequency_analyzer);
-    subghz_last_settings_save(subghz->last_settings);
+    // Persist analyzer settings, then free the lazily-allocated view+worker to return its
+    // internal RAM. Whole block guarded so a NULL (alloc-failed) analyzer is safe.
+    if(subghz->subghz_frequency_analyzer) {
+        subghz->last_settings->frequency_analyzer_feedback_level =
+            subghz_frequency_analyzer_feedback_level(subghz->subghz_frequency_analyzer, 0, false);
+        subghz->last_settings->frequency_analyzer_trigger =
+            subghz_frequency_analyzer_get_trigger_level(subghz->subghz_frequency_analyzer);
+        subghz_last_settings_save(subghz->last_settings);
+
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFrequencyAnalyzer);
+        subghz_frequency_analyzer_free(subghz->subghz_frequency_analyzer);
+        subghz->subghz_frequency_analyzer = NULL;
+    }
 }

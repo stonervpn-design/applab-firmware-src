@@ -5,17 +5,29 @@
  * GND and read with internal pull-ups (pressed / active == level 0).
  *
  *   Encoder A/B (GPIO4 / GPIO5): quadrature rotation.
- *   Encoder push (GPIO0)       : Ok  (full Press/Long/Short/Release stream).
- *   Back button  (GPIO6)       : Back.
+ *   Encoder push (GPIO0)       : Ok  (full Press/Long/Short/Repeat/Release stream).
+ *   Back button  (GPIO6)       : Back  (and the "shift" modifier, see below).
  *
- * Nav mapping — DUAL-AXIS rotation: each detent emits BOTH a vertical and a
- * horizontal event so plain turning works on vertical menus AND on horizontal
- * action bars (the "<Analyze  Send  Save>" style bars in Sub-GHz etc.):
- *   turn CW  -> Down + Right
- *   turn CCW -> Up   + Left
- * Whichever axis the focused view ignores is harmless. The one rough edge is the
- * on-screen keyboard / byte-input, where the cursor then moves diagonally (two
- * cells per click) — an accepted tradeoff for one-knob Left/Right selection.
+ * Nav mapping — SINGLE AXIS + per-view remap (NOT the old dual-axis hack):
+ *   Plain turn            -> Up (CCW) / Down (CW), tagged INPUT_SEQUENCE_SOURCE_HARDWARE.
+ *   Back held + turn      -> Left (CCW) / Right (CW), tagged INPUT_SEQUENCE_SOURCE_KEYBOARD.
+ *
+ * Why: the view dispatcher already remaps a single HARDWARE axis per the focused
+ * view's ViewInputMode (view_dispatcher.c). So a plain turn is context-aware for
+ * free — it scrolls Up/Down in vertical lists/menus, and the same turn is remapped
+ * to Left/Right inside horizontal button bars (widgets with buttons, dialogs,
+ * Read RAW, ...). That means plain turning NEVER injects a raw Left/Right into a
+ * vertical menu, which is what used to make "scroll left" jump into menus.
+ *
+ * The one thing a single axis cannot do on its own is drive a genuine 2-D view
+ * (the number pad, date/time setup, SubBrute repeat count, TPMS actions, KeeLoq
+ * fob grid, byte-input mini-editor). For those, hold Back and turn: that emits raw
+ * Left/Right tagged KEYBOARD, which bypasses the per-view remap and reaches the
+ * second axis directly. A turn while Back is held suppresses the Back tap, so the
+ * modifier never doubles as a back-navigation.
+ *
+ * Ok (encoder push) is deliberately left as a pure button so long-press Ok
+ * (e.g. KeeLoq "Sync") keeps working.
  *
  * Called every INPUT_POLL_MS (4 ms) from the input service — fast enough to catch
  * every quadrature transition of a hand-turned encoder, so no GPIO ISR is needed.
@@ -47,9 +59,10 @@
 #define INPUT_REPEAT_MS     150U
 #define KEY_DEBOUNCE_MS     30U
 
-static void publish(FuriPubSub* pubsub, InputKey key, InputType type, uint32_t* seq) {
+static void
+    publish(FuriPubSub* pubsub, InputKey key, InputType type, uint32_t* seq, uint8_t source) {
     InputEvent event = {
-        .sequence_source = INPUT_SEQUENCE_SOURCE_KEYBOARD,
+        .sequence_source = source,
         .sequence_counter = ++(*seq),
         .key = key,
         .type = type,
@@ -58,10 +71,10 @@ static void publish(FuriPubSub* pubsub, InputKey key, InputType type, uint32_t* 
 }
 
 /* Emit a complete synthetic tap (Press -> Short -> Release) for a resolved key. */
-static void publish_tap(FuriPubSub* pubsub, InputKey key, uint32_t* seq) {
-    publish(pubsub, key, InputTypePress, seq);
-    publish(pubsub, key, InputTypeShort, seq);
-    publish(pubsub, key, InputTypeRelease, seq);
+static void publish_tap(FuriPubSub* pubsub, InputKey key, uint32_t* seq, uint8_t source) {
+    publish(pubsub, key, InputTypePress, seq, source);
+    publish(pubsub, key, InputTypeShort, seq, source);
+    publish(pubsub, key, InputTypeRelease, seq, source);
 }
 
 typedef struct {
@@ -74,6 +87,10 @@ typedef struct {
 
 static BtnState s_ok;
 static BtnState s_back;
+
+/* A turn happened while Back was held -> this hold is a Left/Right shift, so its
+ * eventual Back tap must be suppressed. */
+static bool s_back_shift_used;
 
 /* Quadrature decoder state */
 static uint8_t s_enc_prev; /* last (A<<1|B) 2-bit reading */
@@ -102,6 +119,7 @@ void target_input_init(void) {
 
     s_ok = (BtnState){0};
     s_back = (BtnState){0};
+    s_back_shift_used = false;
     s_enc_accum = 0;
     s_enc_prev = (uint8_t)((gpio_get_level(ENC_A_GPIO) << 1) | gpio_get_level(ENC_B_GPIO));
     s_ready = true;
@@ -131,8 +149,12 @@ static bool debounce(BtnState* btn, bool raw_now, uint32_t now, bool* now_presse
     return false;
 }
 
-/* Read the encoder and emit dual-axis events (Down+Right / Up+Left) per detent. */
-static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq) {
+/* Read the encoder and emit ONE axis per detent.
+ *   back_held == false : Up/Down tagged HARDWARE  -> per-view ViewInputMode remap
+ *                        makes it Up/Down in lists, Left/Right in horizontal bars.
+ *   back_held == true  : Left/Right tagged KEYBOARD -> bypasses the remap, giving
+ *                        raw horizontal input for genuine 2-D views. */
+static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq, bool back_held) {
     uint8_t state = (uint8_t)((gpio_get_level(ENC_A_GPIO) << 1) | gpio_get_level(ENC_B_GPIO));
     if(state == s_enc_prev) return;
 
@@ -149,12 +171,22 @@ static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq) {
             dir = -ENC_DIR;
         }
 
-        if(dir > 0) {
-            publish_tap(pubsub, InputKeyDown, seq);
-            publish_tap(pubsub, InputKeyRight, seq);
+        if(back_held) {
+            /* Back-shift: raw Left/Right, KEYBOARD source bypasses the per-view remap. */
+            s_back_shift_used = true;
+            publish_tap(
+                pubsub,
+                dir > 0 ? InputKeyRight : InputKeyLeft,
+                seq,
+                INPUT_SEQUENCE_SOURCE_KEYBOARD);
         } else {
-            publish_tap(pubsub, InputKeyUp, seq);
-            publish_tap(pubsub, InputKeyLeft, seq);
+            /* Plain turn: single axis, HARDWARE source so the view dispatcher can
+             * remap it per the focused view's ViewInputMode. */
+            publish_tap(
+                pubsub,
+                dir > 0 ? InputKeyDown : InputKeyUp,
+                seq,
+                INPUT_SEQUENCE_SOURCE_HARDWARE);
         }
     }
 }
@@ -169,8 +201,6 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
     bool raw_ok = (gpio_get_level(BTN_OK_GPIO) == 0);
     bool raw_bk = (gpio_get_level(BTN_BK_GPIO) == 0);
 
-    poll_encoder(pubsub, sequence_counter);
-
     /* ---- OK = encoder push (full Press/Long/Short/Repeat/Release stream) ---- */
     bool changed_ok, state_ok = false;
     changed_ok = debounce(&s_ok, raw_ok, now, &state_ok);
@@ -178,39 +208,45 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
         if(state_ok) {
             s_ok.press_started_at = now;
             s_ok.long_fired = false;
-            publish(pubsub, InputKeyOk, InputTypePress, sequence_counter);
+            publish(pubsub, InputKeyOk, InputTypePress, sequence_counter, INPUT_SEQUENCE_SOURCE_HARDWARE);
         } else {
             if(!s_ok.long_fired) {
-                publish(pubsub, InputKeyOk, InputTypeShort, sequence_counter);
+                publish(
+                    pubsub, InputKeyOk, InputTypeShort, sequence_counter, INPUT_SEQUENCE_SOURCE_HARDWARE);
             }
-            publish(pubsub, InputKeyOk, InputTypeRelease, sequence_counter);
+            publish(
+                pubsub, InputKeyOk, InputTypeRelease, sequence_counter, INPUT_SEQUENCE_SOURCE_HARDWARE);
         }
     } else if(s_ok.pressed) {
         if(!s_ok.long_fired && (now - s_ok.press_started_at) >= long_ticks) {
             s_ok.long_fired = true;
             s_ok.press_started_at = now;
-            publish(pubsub, InputKeyOk, InputTypeLong, sequence_counter);
+            publish(pubsub, InputKeyOk, InputTypeLong, sequence_counter, INPUT_SEQUENCE_SOURCE_HARDWARE);
         } else if(s_ok.long_fired && (now - s_ok.press_started_at) >= repeat_ticks) {
             s_ok.press_started_at = now;
-            publish(pubsub, InputKeyOk, InputTypeRepeat, sequence_counter);
+            publish(
+                pubsub, InputKeyOk, InputTypeRepeat, sequence_counter, INPUT_SEQUENCE_SOURCE_HARDWARE);
         }
     }
 
-    /* ---- Back = dedicated button (tap = Back; a long hold fires Back once) ---- */
+    /* ---- Back = dedicated button. A plain tap emits Back on release. Holding Back
+     * turns the encoder into a Left/Right shift (poll_encoder); in that case the
+     * tap is suppressed so the shift never navigates back. ---- */
     bool changed_bk, state_bk = false;
     changed_bk = debounce(&s_back, raw_bk, now, &state_bk);
     if(changed_bk) {
         if(state_bk) {
-            s_back.press_started_at = now;
-            s_back.long_fired = false;
+            /* pressed: begin a potential shift-hold */
+            s_back_shift_used = false;
         } else {
-            if(!s_back.long_fired) {
-                publish_tap(pubsub, InputKeyBack, sequence_counter);
+            /* released: real Back only if no turn happened during the hold */
+            if(!s_back_shift_used) {
+                publish_tap(pubsub, InputKeyBack, sequence_counter, INPUT_SEQUENCE_SOURCE_HARDWARE);
             }
+            s_back_shift_used = false;
         }
-    } else if(s_back.pressed && !s_back.long_fired &&
-              (now - s_back.press_started_at) >= long_ticks) {
-        s_back.long_fired = true;
-        publish_tap(pubsub, InputKeyBack, sequence_counter);
     }
+
+    /* Encoder last, using Back's debounced state as the shift modifier. */
+    poll_encoder(pubsub, sequence_counter, s_back.pressed);
 }

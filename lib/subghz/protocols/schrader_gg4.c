@@ -123,13 +123,24 @@ static bool tpms_protocol_schrader_gg4_check_crc(TPMSProtocolDecoderSchraderGG4*
 }
 
 static void tpms_protocol_schrader_gg4_analyze(TPMSBlockGeneric* instance) {
-    instance->id = instance->data >> 24;
+    // 28-bit ID. The top nibble of byte1 is part of the FLAGS field
+    // (rtl_433: flags = (b0 & 0x0F) << 4 | b1 >> 4), NOT the ID — including it
+    // makes the ID vary frame-to-frame for one sensor. Mask it off so the ID is
+    // stable and matches rtl_433 (verified on the Schrader/MRX-GG4 corpus:
+    // ID 0x03A38B2 across flags 03/04/07).
+    instance->id = (instance->data >> 24) & 0x0FFFFFFFUL;
 
-    // TODO: locate and decode battery-low bit (not yet known)
-    instance->battery_low = TPMS_NO_BATT;
+    // Battery: the MRX-GG4 protocol has no documented battery-low bit — the
+    // upstream rtl_433 schraeder.c decodes none, and the flags nibble is not a
+    // battery indicator. Default to OK (0).
+    instance->battery_low = 0;
 
     instance->temperature = ((instance->data >> 8) & 0xFF) - 50;
-    instance->pressure = ((instance->data >> 16) & 0xFF) * 2.5f * 0.069f;
+    // Pressure raw byte * 2.5 = kPa (rtl_433 schraeder.c), -> bar (/100).
+    // VERIFIED against the rtl_433 corpus: byte5=77 -> 192.5 kPa = 1.93 bar,
+    // 160 -> 400 kPa = 4.0 bar, 2 -> 5 kPa = 0.05 bar. (The earlier * 2.5 PSI
+    // formula, matching Sor3nt, was ~7x too high — Sor3nt's pressure is wrong.)
+    instance->pressure = ((instance->data >> 16) & 0xFF) * 2.5f * 0.01f;
 }
 
 static ManchesterEvent level_and_duration_to_event(bool level, uint32_t duration) {
@@ -262,7 +273,7 @@ void tpms_protocol_decoder_schrader_gg4_get_string(void* context, FuriString* ou
         "%s\r\n"
         "Id:0x%08lX\r\n"
         "Bat:%d\r\n"
-        "Temp:%2.0f C Bar:%2.1f",
+        "Temp:%2.0f C Bar:%2.2f",
         instance->generic.protocol_name,
         instance->generic.id,
         instance->generic.battery_low,

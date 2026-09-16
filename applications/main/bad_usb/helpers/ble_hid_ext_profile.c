@@ -3,10 +3,20 @@
 #include <furi.h>
 #include <string.h>
 
-static FuriHalBleProfileBase* ble_profile_hid_ext_start(FuriHalBleProfileParams profile_params) {
-    UNUSED(profile_params);
+/* [BLE-FIX] fwd decl so start() can build the GAP config from the UI params. */
+static void
+    ble_profile_hid_ext_get_config(GapConfig* config, FuriHalBleProfileParams profile_params);
 
-    return ble_profile_hid->start(NULL);
+static FuriHalBleProfileBase* ble_profile_hid_ext_start(FuriHalBleProfileParams profile_params) {
+    /* [BLE-FIX] The old code passed NULL, so the device advertised under the
+     * default "Control ..." identity/MAC instead of the configured BadUSB name.
+     * Build the real GAP config from the params and start with it. */
+    if(!profile_params) {
+        return ble_profile_hid->start(NULL); /* no params -> default identity */
+    }
+    GapConfig config = {0};
+    ble_profile_hid_ext_get_config(&config, profile_params);
+    return ble_profile_hid_start_with_config(ble_profile_hid, &config);
 }
 
 static void ble_profile_hid_ext_stop(FuriHalBleProfileBase* profile) {

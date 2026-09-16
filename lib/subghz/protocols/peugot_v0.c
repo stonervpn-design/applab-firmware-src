@@ -482,8 +482,17 @@ static void subghz_protocol_encoder_peugot_v0_get_upload(SubGhzProtocolEncoderPe
             instance, &index, &cur_level, &have_level, (instance->data_16 >> i) & 1);
     }
 
-    // END GAP: long low so the decoder finalizes and searches the frame.
-    instance->encoder.upload[index++] = level_duration_make(false, (uint32_t)PEUGOT_V0_END_GAP_US);
+    // END GAP: a long pulse so the decoder finalizes and searches the frame. Emit it at the
+    // OPPOSITE level of the last data pulse. On a real radio (and in the merge-aware harness)
+    // two consecutive same-level entries physically coalesce into one pulse. When the final
+    // data bit completes on a LOW pulse (a trailing 0-bit — e.g. Key2's LSB) a same-level LOW
+    // gap would merge with it into a single over-long LOW that reads as the gap alone,
+    // swallowing the 80th bit so the frame drops below the 80-bit minimum and never re-decodes.
+    // An opposite-level gap keeps that completing pulse a distinct transition.
+    bool last_level =
+        (index > 0) ? level_duration_get_level(instance->encoder.upload[index - 1]) : true;
+    instance->encoder.upload[index++] =
+        level_duration_make(!last_level, (uint32_t)PEUGOT_V0_END_GAP_US);
 
     instance->encoder.size_upload = index;
 }

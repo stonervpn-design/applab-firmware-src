@@ -1,4 +1,5 @@
 #include "came_atomo.h"
+#include "protocols_common.h"
 #include <lib/toolbox/manchester_decoder.h>
 #include <lib/toolbox/manchester_encoder.h>
 #include "../blocks/const.h"
@@ -532,7 +533,15 @@ void subghz_protocol_decoder_came_atomo_feed(void* context, bool level, uint32_t
                    subghz_protocol_came_atomo_const.min_count_bit_for_found) {
                     instance->generic.data = instance->decoder.decode_data;
                     instance->generic.data_count_bit = instance->decoder.decode_count_bit;
-                    if(instance->base.callback)
+                    // Anti-phantom: Atomo is a rolling code, so its decoded payload is
+                    // never a degenerate/low-entropy value. Regular PWM/noise, however,
+                    // Manchester-demodulates into an all-FF (or all-0 / tile) 62-bit
+                    // burst. Reject those before firing. Full-byte count (bits/8) so an
+                    // all-ones 62-bit burst (partial top byte) is still caught.
+                    if(instance->base.callback &&
+                       !pp_value_is_degenerate(
+                           instance->generic.data,
+                           (uint8_t)(instance->generic.data_count_bit / 8)))
                         instance->base.callback(&instance->base, instance->base.context);
                 }
                 instance->decoder.decode_data = 0;
@@ -646,18 +655,21 @@ static void subghz_protocol_came_atomo_remote_controller(SubGhzBlockGeneric* ins
     *        0x0 - Last zero nibble
     * */
 
-    instance->data ^= 0xFFFFFFFFFFFFFFFF;
-    instance->data <<= 4;
+    // Work on a LOCAL copy so instance->data (the captured codeword) is preserved. Mutating
+    // it in place corrupted generic.data when get_string ran twice, or when serialize ran
+    // after a display pass — poisoning a saved/cloned Atomo remote.
+    uint64_t data = instance->data ^ 0xFFFFFFFFFFFFFFFF;
+    data <<= 4;
 
     uint8_t pack[8] = {};
-    pack[0] = (instance->data >> 56);
-    pack[1] = ((instance->data >> 48) & 0xFF);
-    pack[2] = ((instance->data >> 40) & 0xFF);
-    pack[3] = ((instance->data >> 32) & 0xFF);
-    pack[4] = ((instance->data >> 24) & 0xFF);
-    pack[5] = ((instance->data >> 16) & 0xFF);
-    pack[6] = ((instance->data >> 8) & 0xFF);
-    pack[7] = (instance->data & 0xFF);
+    pack[0] = (data >> 56);
+    pack[1] = ((data >> 48) & 0xFF);
+    pack[2] = ((data >> 40) & 0xFF);
+    pack[3] = ((data >> 32) & 0xFF);
+    pack[4] = ((data >> 24) & 0xFF);
+    pack[5] = ((data >> 16) & 0xFF);
+    pack[6] = ((data >> 8) & 0xFF);
+    pack[7] = (data & 0xFF);
 
     atomo_decrypt(pack);
 

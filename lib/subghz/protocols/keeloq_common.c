@@ -201,6 +201,44 @@ inline uint32_t subghz_protocol_keeloq_common_decrypt_derived(
         outer_limit);
 }
 
+// Inverse of manufacturer_nl_extend. A forward round is x_new = rotr(x_old,1) with bit0 ^= fb,
+// where fb = NLF(g5 @ 0,8,19,25,30) ^ keybit ^ bit15(x_old). fb depends on no x_old bit that the
+// rotr lands at bit1, so the inverse round is rotl(x,1) with the SAME fb XORed into bit1 (fb
+// computed from the rotl'd value), run over the active rounds in REVERSE order. Proven the exact
+// inverse: enc(dec)==dec(enc)==identity over 9M random vectors (nl_extend_inverse_test.c) for
+// outer_limit 0x210 / 0x240 / 0x40.
+static inline uint32_t subghz_protocol_keeloq_common_manufacturer_nl_extend_encrypt(
+    uint32_t x,
+    uint32_t k_lo,
+    uint32_t k_hi,
+    uint32_t outer_limit) {
+    uint64_t key64 = ((uint64_t)k_hi << 32) | (uint64_t)k_lo;
+    uint32_t active = (outer_limit < 0x210u) ? outer_limit : 0x210u;
+    for(int32_t r5 = (int32_t)active - 1; r5 >= 0; r5--) {
+        uint32_t s = (15u - (uint32_t)r5) & 0x3Fu;
+        uint32_t k_bit = (uint32_t)((key64 >> s) & 1u);
+        uint32_t old = (x << 1) | (x >> 31); // rotl(x,1)
+        uint32_t a = (old >> 15) & 1u;
+        uint32_t g = g5(old, 0, 8, 19, 25, 30);
+        uint32_t nlf_bit = (KEELOQ_NLF >> g) & 1u;
+        uint32_t fb = nlf_bit ^ k_bit ^ a;
+        old ^= (fb << 1);
+        x = old;
+    }
+    return x;
+}
+
+inline uint32_t subghz_protocol_keeloq_common_encrypt_derived(
+    uint32_t plaintext,
+    uint64_t derived_manufacturing_key,
+    uint32_t outer_limit) {
+    return subghz_protocol_keeloq_common_manufacturer_nl_extend_encrypt(
+        plaintext,
+        (uint32_t)derived_manufacturing_key,
+        (uint32_t)(derived_manufacturing_key >> 32u),
+        outer_limit);
+}
+
 // Protocol (Manufacturer) specific learning
 // TODO: Better documentation for these functions
 

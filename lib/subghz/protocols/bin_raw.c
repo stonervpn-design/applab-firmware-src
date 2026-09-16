@@ -10,6 +10,7 @@
 #include <lib/flipper_format/flipper_format_i.h>
 
 #include <math.h>
+#include <esp_heap_caps.h>
 
 #define TAG "SubGhzProtocolBinRaw"
 
@@ -352,11 +353,30 @@ LevelDuration subghz_protocol_encoder_bin_raw_yield(void* context) {
 void* subghz_protocol_decoder_bin_raw_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolDecoderBinRAW* instance = malloc(sizeof(SubGhzProtocolDecoderBinRAW));
+    if(!instance) return NULL;
     instance->base.protocol = &subghz_protocol_bin_raw;
     instance->generic.protocol_name = instance->base.protocol->name;
     instance->data_raw_ind = 0;
-    instance->data_raw = malloc(BIN_RAW_BUF_RAW_SIZE * sizeof(int32_t));
-    instance->data = malloc(BIN_RAW_BUF_RAW_SIZE * sizeof(uint8_t));
+    // These ~10KB buffers are the single largest decoder allocation and run at every
+    // Sub-GHz Read. Prefer PSRAM so they don't eat scarce internal SRAM (which is what
+    // starves app launches); fall back to internal only if PSRAM is unavailable. On
+    // total failure return NULL — subghz_receiver_alloc_init() now skips a NULL decoder.
+    instance->data_raw = heap_caps_malloc(
+        BIN_RAW_BUF_RAW_SIZE * sizeof(int32_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!instance->data_raw)
+        instance->data_raw = heap_caps_malloc(
+            BIN_RAW_BUF_RAW_SIZE * sizeof(int32_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    instance->data = heap_caps_malloc(
+        BIN_RAW_BUF_RAW_SIZE * sizeof(uint8_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!instance->data)
+        instance->data = heap_caps_malloc(
+            BIN_RAW_BUF_RAW_SIZE * sizeof(uint8_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if(!instance->data_raw || !instance->data) {
+        free(instance->data_raw);
+        free(instance->data);
+        free(instance);
+        return NULL;
+    }
     memset(instance->data_markup, 0x00, BIN_RAW_MAX_MARKUP_COUNT * sizeof(BinRAW_Markup));
     instance->adaptive_threshold_rssi = BIN_RAW_THRESHOLD_RSSI;
     return instance;

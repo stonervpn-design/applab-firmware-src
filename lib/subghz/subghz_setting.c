@@ -4,6 +4,7 @@
 #include <furi.h>
 #include <m-list.h>
 #include <lib/subghz/devices/cc1101_configs.h>
+#include <esp_heap_caps.h>
 
 #define TAG "SubGhzSetting"
 
@@ -170,9 +171,16 @@ static void subghz_setting_load_default_preset(
     }
     preset_data_count += 2;
     item->custom_preset_data_size = sizeof(uint8_t) * preset_data_count + sizeof(uint8_t) * 8;
-    item->custom_preset_data = malloc(item->custom_preset_data_size);
+    // PSRAM: preset register blob is non-DMA (memcpy'd to CC1101 SPI in thread ctx).
+    // No-PSRAM boards (M5Stick/Cardputer): SPIRAM is NULL, fall back to internal.
+    item->custom_preset_data =
+        heap_caps_malloc(item->custom_preset_data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if(!item->custom_preset_data)
+        item->custom_preset_data =
+            heap_caps_malloc(item->custom_preset_data_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     //load preset register + pa table
-    memcpy(&item->custom_preset_data[0], &preset_data[0], item->custom_preset_data_size);
+    if(item->custom_preset_data)
+        memcpy(&item->custom_preset_data[0], &preset_data[0], item->custom_preset_data_size);
 }
 
 static void subghz_setting_load_default_region(
@@ -201,6 +209,10 @@ static void subghz_setting_load_default_region(
         instance, "AM650", subghz_device_cc1101_preset_ook_650khz_async_regs);
     subghz_setting_load_default_preset(
         instance, "FM238", subghz_device_cc1101_preset_2fsk_dev2_38khz_async_regs);
+    // TPMS-tuned 2-FSK (19.2 kBaud / 28.6 kHz dev) — FM238's slow 4.8 kBaud smears
+    // real TPMS transitions so nothing decodes; the TPMS Spoofer scan uses this.
+    subghz_setting_load_default_preset(
+        instance, "TPMS", subghz_device_cc1101_preset_2fsk_tpms_async_regs);
     subghz_setting_load_default_preset(
         instance, "FM476", subghz_device_cc1101_preset_2fsk_dev47_6khz_async_regs);
     subghz_setting_load_default_preset(
@@ -395,8 +407,12 @@ bool subghz_setting_load_custom_preset(
             break;
         }
         item->custom_preset_data_size = sizeof(uint8_t) * temp_data32;
-        item->custom_preset_data = malloc(item->custom_preset_data_size);
-        // Memory-safety: malloc can return NULL under OOM (no PSRAM); do not
+        item->custom_preset_data =
+            heap_caps_malloc(item->custom_preset_data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if(!item->custom_preset_data)
+            item->custom_preset_data =
+                heap_caps_malloc(item->custom_preset_data_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        // Memory-safety: alloc can return NULL under OOM; do not
         // pass a NULL buffer to read_hex.
         if(!item->custom_preset_data) {
             item->custom_preset_data_size = 0;

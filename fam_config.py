@@ -48,6 +48,12 @@ APPS = [
     "tagtinker",
     "lfrfid",
     "wlan",
+    # Claude Console: drive the active PC Claude session over WiFi via the
+    # pc_bridge relay. Links the shared wlan_hal (see APP_REQUIRES below).
+    "claude_ctl",
+    # Immo Keys: offline immobiliser key calculator (AUT64/DST80/Megamos). Pure
+    # compute + GUI, no radios; you enter Proxmark-captured values by keyboard.
+    "immo_keys",
     "nrf24",
     "ble_spam",
     "wiegand",
@@ -111,6 +117,17 @@ APPS = [
     # duplicate globals/icons of other apps when compiled into one image (they are
     # designed as standalone .faps) and are left off.
     "esubghz_chat",
+    # VIN Decoder (github.com/evillero/vin_decoder, grafted from Fox 2.0.7): pure-logic
+    # WMI->manufacturer (~1835 rows, const->flash) + model-year decode. No radio/BLE/HAL.
+    # Complements the car RKE tooling: decode a fob capture's target, then the car's VIN.
+    "vin_decoder",
+    "fordradiocode",
+    "nfc_comparator",
+    "nfc_maker",
+    "mfc_editor",
+    # "pocsag_pager",  # DEFERRED: SubGhz-derived, shares helper symbols w/ esubghz_chat (radio_device_loader etc.)
+    # "fox_rf_jammer",  # DEFERRED: bundles own radio_device_loader (symbol collision w/ esubghz_chat, differing sig)
+    # "ulc_brute",  # DEFERRED: drives ST25R3916 registers directly; needs full furi_hal_nfc rewrite
     "grove_i2c_scan",
     "st25r_nfc_diag",
     # Flipper Share NFC (ISO14443-3A device-to-device file transfer over the
@@ -132,6 +149,13 @@ APPS = [
     # global assets_icons.h + all enabled asset dirs). appid != dir for dice.
     "blackjack",
     "dice_app",
+    # On-device AI buddy (applications_user/buddy) — Phase 0: animated face +
+    # button-driven command control. Voice/audio phases added later.
+    "buddy",
+    # qFlipper USB bridge toggle (applications_user/qflipper_menu) — main-menu
+    # front-end for the desktop's background qflipper_bridge (moved out of the
+    # lock menu at the user's request).
+    "qflipper_menu",
     # "tamagotchi_p1",  # removed per user request
     # Education app (github.com/PerfectoWeb/flipper-pocketlab): pure UI/scene app,
     # no radios/BLE; content is const->flash. EXTERNAL->MENUEXTERNAL in its .fam.
@@ -154,8 +178,9 @@ _variant = os.environ.get("FLIPPER_VARIANT", "private").strip().lower()
 _is_public = _variant == "public"
 # StickS3 NFC = external M5Stack NFC Unit (ST25R3916 @0x50 on Grove/QWIIC), backend
 # verified working — so the core `nfc` app IS kept (matches Cardputer ADV).
-# T-Embed CC1101 phase 1 keeps NFC (PN532) off.
-_boards_without_nfc = {"lilygo_t_embed_cc1101"}
+# T-Embed CC1101 has an ONBOARD PN532 @0x24 (SDA8/SCL18) — NFC re-enabled after the
+# ST25R3916-probe fix (BOARD_HAS_ST25R3916=0) so the PN532 owns a clean I2C bus.
+_boards_without_nfc = set()
 _boards_without_ir = set()
 # Neither Cardputer has an RDM6300/RFID front-end (BOARD_HAS_RFID=0); StickS3 has none
 # either; the T-Embed CC1101 has no 125 kHz front-end.
@@ -270,7 +295,10 @@ if _board in _boards_without_wolf3d:
 # drone RF attack detector) so it stays in the public build. Private and hardened
 # both keep everything.
 if _is_public:
-    _car_apps = {"can_commander"}
+    # Automotive apps: CAN Commander (OBD/CAN), VIN Decoder (vehicle make/model
+    # WMI table) and Ford Radio Code (per-vehicle radio unlock) all ship car
+    # make/model strings -> NO car material on public (owner guardrail). Stripped.
+    _car_apps = {"can_commander", "vin_decoder", "fordradiocode"}
     APPS = [a for a in APPS if a not in _car_apps]
     # TagTinker (IR ESL / e-ink shelf-label tool) is PRIVATE-only per the owner's
     # scope; never ship it in public webflasher builds.
@@ -310,21 +338,60 @@ if _is_public:
 # (e.g. Settings -> power_reboot from the `power` service), so it's ALWAYS compiled —
 # dropping it breaks the link. This set mirrors the applab catalog.
 OPTIONAL_APPS = {
-    "subghz", "subghz_remote", "esubghz_chat", "lora_monitor", "meshtastic_sniffer",
+    # subghz is intentionally NOT optional: the js_subghz module, cli_subghz,
+    # radio_scanner and subghz_load_dangerous_settings all hard-link the subghz
+    # app, and js_app/js_modules.c references js_subghz_ep gated only on
+    # BOARD_HAS_SUBGHZ — so on a subghz-capable board the subghz feature cannot be
+    # dropped without dangling that symbol. It is always built; deselecting it on
+    # the site is a no-op. (Decoupling js_subghz to allow lean subghz-less builds
+    # would need a per-app build define; deferred.)
+    "subghz_remote", "esubghz_chat", "lora_monitor", "meshtastic_sniffer",
     "nfc", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
     "flipper_xremote", "ibutton", "ble_spam", "wlan", "esp_now", "nrf24",
     "fz_nrf24_jammer", "lan_attack", "bad_usb", "u2f", "gpio", "pin_config",
     "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
-    "clock", "qrcode", "pocketlab", "defender",
+    "clock", "qrcode", "pocketlab", "defender", "claude_ctl", "immo_keys",
     # Owner-authorized on public via the applab custom-build only (see the public
     # block above); built solely when explicitly selected.
     "proto_pirate",
 }
+# When a custom build SELECTS an app, some apps hard-link against OTHER catalog
+# apps (function symbols, not just the shared libs), so those providers must be
+# co-included or the link fails with "undefined reference". Derived from the
+# public build's per-app object symbols (see scratchpad/dep_graph.py):
+#   defender      -> ble_spam,subghz,wlan  (scene_ble_spam/scene_ble_tracker ->
+#                    ble_walk_hal_*/ble_tracker_hal_*; scene_jammer ->
+#                    subghz_threshold_rssi_*; defender_wifi_tap -> wlan_hal_*)
+#   flippergotchi -> wlan                   (fg_attack/fg_capture -> pmkid_*/wlan_hs_*)
+#   esubghz_chat  -> subghz                 (chat scenes -> subghz app symbols)
+# (wiegand also needs gpio_catalog_* but is self-contained via the vendored
+# applications/main/wiegand/gpio_pin_catalog.c, so it needs no edge here.)
+APP_REQUIRES = {
+    "claude_ctl": {"wlan"},
+    "defender": {"ble_spam", "subghz", "wlan"},
+    "flippergotchi": {"wlan"},
+    "esubghz_chat": {"subghz"},
+}
+
 _apps_env = os.environ.get("FLIPPER_APPS", "").strip()
 if _apps_env:
     _want = {a.strip() for a in _apps_env.split(",") if a.strip()}
-    # Keep every core app; among OPTIONAL apps keep only the requested ones.
+    # Transitively pull in each selected app's required providers so the link
+    # succeeds. A provider already removed by a board/variant filter above stays
+    # absent (harmless no-op) — we never re-add across those safety filters.
+    _stack = list(_want)
+    while _stack:
+        _dep = _stack.pop()
+        for _prov in APP_REQUIRES.get(_dep, ()):
+            if _prov not in _want:
+                _want.add(_prov)
+                _stack.append(_prov)
+    # Keep every core app; among OPTIONAL apps keep only the requested ones
+    # (plus any providers pulled in just above). subghz is not in OPTIONAL_APPS so
+    # it is always kept — its satellites (cli_subghz/js_subghz/radio_scanner/
+    # subghz_load_dangerous_settings) and js_modules.c's js_subghz_ep therefore
+    # always resolve.
     APPS = [a for a in APPS if a not in OPTIONAL_APPS or a in _want]
 
 EXTRA_EXT_APPS = []

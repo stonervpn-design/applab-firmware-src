@@ -7,6 +7,9 @@ struct SubGhzTxRx {
 
     SubGhzEnvironment* environment;
     SubGhzReceiver* receiver;
+    // true when `receiver` holds only ONE decoder (loaded for a known-protocol saved
+    // file to save internal RAM on no-PSRAM boards). RX rebuilds the full set first.
+    bool receiver_single_mode;
     SubGhzTransmitter* transmitter;
     SubGhzProtocolDecoderBase* decoder_result;
     FlipperFormat* fff_data;

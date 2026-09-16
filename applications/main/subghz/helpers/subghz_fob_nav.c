@@ -31,6 +31,7 @@ uint8_t subghz_fob_nav_move_n(uint8_t idx, uint8_t key, uint8_t n) {
             break;
         }
         case FOB_CYCLE: idx = (uint8_t)((idx + 1) % n); break;
+        case FOB_CYCLE_REV: idx = (uint8_t)((idx + n - 1) % n); break;
         default: break;
         }
         return idx;
@@ -43,6 +44,7 @@ uint8_t subghz_fob_nav_move_n(uint8_t idx, uint8_t key, uint8_t n) {
     case FOB_RIGHT:
     case FOB_DOWN:
     case FOB_CYCLE: return (uint8_t)((idx + 1) % n);
+    case FOB_CYCLE_REV: return (uint8_t)((idx + n - 1) % n);
     default:        return idx;
     }
 }

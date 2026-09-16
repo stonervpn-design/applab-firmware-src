@@ -22,6 +22,17 @@ typedef void (*SubGhzReceiverCallback)(
 SubGhzReceiver* subghz_receiver_alloc_init(SubGhzEnvironment* environment);
 
 /**
+ * Allocate a SubGhzReceiver holding ONLY the decoder named `only_name` (RAM-lean:
+ * for re-parsing a saved file whose protocol is already known). Falls back to the
+ * full decoder set if `only_name` is NULL or not a registry protocol name.
+ * @param environment Pointer to a SubGhzEnvironment instance
+ * @param only_name   Protocol name to load exclusively, or NULL for the full set
+ * @return SubGhzReceiver* pointer to a SubGhzReceiver instance
+ */
+SubGhzReceiver*
+    subghz_receiver_alloc_init_single(SubGhzEnvironment* environment, const char* only_name);
+
+/**
  * Free SubGhzReceiver.
  * @param instance Pointer to a SubGhzReceiver instance
  */

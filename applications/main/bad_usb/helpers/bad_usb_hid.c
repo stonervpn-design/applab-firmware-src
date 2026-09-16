@@ -237,7 +237,7 @@ void* hid_ble_init(BadUsbHidConfig* hid_cfg) {
 
 void hid_ble_deinit(void* inst) {
     BleHidInstance* ble_hid = inst;
-    furi_assert(ble_hid);
+    if(!ble_hid) return; /* [BLE-FIX] worker calls deinit even when init returned NULL */
 
     if(ble_hid->bt) {
         bt_set_status_changed_callback(ble_hid->bt, NULL, NULL);

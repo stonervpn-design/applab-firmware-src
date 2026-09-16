@@ -9,6 +9,15 @@ void subghz_scene_fob_analyzer_callback(SubGhzCustomEvent event, void* context) 
 
 void subghz_scene_fob_analyzer_on_enter(void* context) {
     SubGhz* subghz = context;
+    // Lazy-load the fob analyzer view+worker on entry (freed on exit) to keep its
+    // internal RAM out of the SubGhz launch path.
+    if(!subghz->subghz_fob_analyzer) {
+        subghz->subghz_fob_analyzer = subghz_fob_analyzer_alloc(subghz->txrx);
+        view_dispatcher_add_view(
+            subghz->view_dispatcher,
+            SubGhzViewIdFobAnalyzer,
+            subghz_fob_analyzer_get_view(subghz->subghz_fob_analyzer));
+    }
     subghz_fob_analyzer_set_callback(
         subghz->subghz_fob_analyzer, subghz_scene_fob_analyzer_callback, subghz);
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdFobAnalyzer);
@@ -28,4 +37,10 @@ bool subghz_scene_fob_analyzer_on_event(void* context, SceneManagerEvent event) 
 void subghz_scene_fob_analyzer_on_exit(void* context) {
     SubGhz* subghz = context;
     notification_message(subghz->notifications, &sequence_reset_rgb);
+    // Free the lazily-allocated fob analyzer to return its internal RAM.
+    if(subghz->subghz_fob_analyzer) {
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFobAnalyzer);
+        subghz_fob_analyzer_free(subghz->subghz_fob_analyzer);
+        subghz->subghz_fob_analyzer = NULL;
+    }
 }

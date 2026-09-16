@@ -119,3 +119,17 @@ uint32_t subghz_protocol_keeloq_common_decrypt_derived(
     uint32_t hop_encrypted,
     uint64_t derived_manufacturing_key,
     uint32_t outer_limit);
+
+/** AERF hop ENCRYPT — exact inverse of subghz_protocol_keeloq_common_decrypt_derived
+ * (manufacturer_nl_extend). AERF remotes use the nl_extend cipher, NOT the standard KeeLoq
+ * cipher, so a same-serial AERF clone must encode its hop with THIS, or a real AERF receiver
+ * rejects it. Verified enc(dec)==dec(enc)==identity over 9M vectors (nl_extend_inverse_test).
+ * @param plaintext   0xBSSSCCCC-style plaintext (btn/serial-disc/counter)
+ * @param derived_manufacturing_key device key (`man`) from learning_aerf
+ * @param outer_limit round budget (match the decode side: 0x210 for the hop)
+ * @return nl_extend-encrypted hop
+ */
+uint32_t subghz_protocol_keeloq_common_encrypt_derived(
+    uint32_t plaintext,
+    uint64_t derived_manufacturing_key,
+    uint32_t outer_limit);

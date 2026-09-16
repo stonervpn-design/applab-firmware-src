@@ -27,6 +27,7 @@ typedef enum {
     SubGhzCustomEventSceneAnalyzerUnlock,
     SubGhzCustomEventSceneSettingLock,
     SubGhzCustomEventSceneSettingResetToDefault,
+    SubGhzCustomEventSceneSettingProtoFilter,
 
     SubGhzCustomEventSceneExit,
     SubGhzCustomEventSceneStay,
@@ -69,6 +70,7 @@ typedef enum {
     SubGhzCustomEventTpmsEditTemperature,
     SubGhzCustomEventTpmsEditId,
     SubGhzCustomEventTpmsToggleBattery,
+    SubGhzCustomEventTpmsZeroPsiToggle, // Left long-press: toggle continuous 0-PSI spoof TX
 
     SubGhzCustomEventSceneRollingAnalyzerClone,
     SubGhzCustomEventSceneRollingAnalyzerSave, /* Rolling-Code Analyzer -> KeeLoq no-desync clone */
@@ -76,11 +78,20 @@ typedef enum {
     SubGhzCustomEventSceneRollingAnalyzerBurst, /* -> next N consecutive codes in one action */
     SubGhzCustomEventSceneRollingAnalyzerForge, /* Hitag2 -> known-key counter-recovery + forge */
     SubGhzCustomEventSceneHitag2ForgeDone, /* Hitag2 forge: off-thread counter recovery finished */
+    SubGhzCustomEventSceneHitag2CrackDone, /* Hitag2 crack: off-thread key-dictionary sweep finished */
+    SubGhzCustomEventSceneHitag2CrackProgress, /* Hitag2 crack/hell: off-thread progress tick (pct in s_htc) */
+    SubGhzCustomEventSceneHitag2HellDone, /* Hitag2 L5: off-thread Hell guess-and-determine finished */
     SubGhzCustomEventSceneRollingAnalyzerInstant, /* KeeLoq known-key -> instant-unlock next code */
     SubGhzCustomEventSceneKeeloqInstantSend, /* KeeLoq instant-unlock preview -> TX next code */
 
     SubGhzCustomEventSceneRollbackUpdate,
     SubGhzCustomEventSceneRollbackDone,
+
+    SubGhzCustomEventSceneVulnAssessAdd,
+    SubGhzCustomEventSceneVulnAssessBack,
+    SubGhzCustomEventSceneVulnReportExport,
+    SubGhzCustomEventSceneVulnReportClear,
+    SubGhzCustomEventSceneVulnReportBack,
 
     SubGhzCustomEventViewProtoviewFreeze,
     SubGhzCustomEventViewProtoviewDecode,
@@ -98,6 +109,11 @@ typedef enum {
 
     SubGhzCustomEventViewKeeloqFobSend,
     SubGhzCustomEventViewKeeloqFobBack,
+    SubGhzCustomEventViewKeeloqFobSync, /* long-press OK on a KeeLoq clone -> force-resync (N,N+1) pair */
+
+    SubGhzCustomEventSceneGenieSend, /* Genie sender -> TX the next recorded code */
+    SubGhzCustomEventSceneGenieReset, /* Genie sender -> reset the emit cursor to 0 */
+    SubGhzCustomEventSceneGenieRecordRx, /* Genie recorder -> a Genie code was captured (refresh) */
 
     SubGhzCustomEventViewSpectrumTune, /* Spectrum -> tune receiver to peak (private) */
     SubGhzCustomEventViewSpectrumBandUp,

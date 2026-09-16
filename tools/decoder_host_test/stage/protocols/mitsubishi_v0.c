@@ -371,6 +371,10 @@ SubGhzProtocolStatus subghz_protocol_decoder_mitsubishi_serialize(
             instance->generic.btn,
             instance->generic.cnt,
             0);
+        // Preserve the full on-air frame (incl. the 40-bit rolling hop in
+        // bytes 7-11) so the saved capture is not lossy; fields alone drop it.
+        flipper_format_write_hex(
+            flipper_format, "Data", instance->decode_data, MITSUBISHI_DATA_BYTES);
     }
     return ret;
 }

@@ -40,6 +40,14 @@ void target_input_set_tilt_enabled(bool enabled);
 /** Current tilt-nav enabled state (for the settings toggle's initial value). */
 bool target_input_get_tilt_enabled(void);
 
+/**
+ * Runtime suppression of tilt -> Left/Right nav WITHOUT touching the persisted
+ * enable (tilt-to-wake stays active). The Sub-GHz Read / Read RAW capture views
+ * set this true while a capture is live so an accidental roll can't open the
+ * frequency menu mid-capture. No-op on boards without a tilt driver.
+ */
+void target_input_set_tilt_nav_suppressed(bool suppressed);
+
 #ifdef __cplusplus
 }
 #endif

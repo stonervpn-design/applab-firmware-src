@@ -78,8 +78,17 @@ esp_err_t st25r3916_i2c_init(void) {
          * call after the first boot probe (which alone hits the fresh path above).
          * That made the chip read "absent" post-boot even though it's a genuine,
          * fully-readable ST25R3916 (check_chip_id returns ic_type=5). Reuse the
-         * already-configured bus; do NOT re-param_config (reconfiguring the live
-         * bus glitches the next transaction). */
+         * already-configured bus, but RE-ASSERT our 200 kHz first: when the primary
+         * ST25 probe misses (module still on the 150 ms boost-settle / Grove glitch),
+         * furi_hal_nfc_init() falls through to pn532_i2c_init(), which reprograms this
+         * shared bus to 100 kHz and never restores it. The secondary ST25 probe then
+         * succeeds via this reuse branch and the chip runs the WHOLE session at half
+         * speed — doubling the I2C wire-time of every MIFARE auth, so a dict/mfkey
+         * sweep crawls. Re-param_config here mirrors exactly what pn532_i2c_init() does
+         * at 100 kHz every boot; probe()'s 4x IC-ID retry absorbs any single glitched
+         * read, and this path only runs at init/chip_init, never mid-transaction. On a
+         * real-PN532 board the PN532's own 100 kHz force runs after this, so it wins. */
+        i2c_param_config(BOARD_NFC_I2C_PORT, &conf); /* conf.clk_speed = 200000 */
         return ESP_OK;
     }
     /* A genuine failure (e.g. ESP_ERR_INVALID_ARG / bad pin config) on a fresh

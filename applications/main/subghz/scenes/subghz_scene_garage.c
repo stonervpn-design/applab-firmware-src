@@ -88,7 +88,24 @@ bool subghz_scene_garage_on_event(void* context, SceneManagerEvent event) {
         storage_file_free(dir);
         furi_record_close(RECORD_STORAGE);
 
+#ifndef PUBLIC_BUILD
+        // Genie ".gne" next-code tables are not .sub key files -> open the Genie Sender.
+        if(found) {
+            const char* pstr = furi_string_get_cstr(path);
+            size_t plen = strlen(pstr);
+            if(plen >= 4 && strcmp(pstr + plen - 4, ".gne") == 0) {
+                furi_string_set(subghz->file_path, path);
+                furi_string_free(path);
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneGenieSend);
+                return true;
+            }
+        }
+#endif
+
         if(found && subghz_key_load(subghz, furi_string_get_cstr(path), false)) {
+            // Remember the source path so a clone opened from here persists its advancing
+            // counter back to this same .sub after each transmit.
+            furi_string_set(subghz->file_path, path);
             furi_string_free(path);
 #ifndef PUBLIC_BUILD
             // Clone entries (KeeLoq CloneMode=1 / VAG) resume in the Fob Emulator;

@@ -50,6 +50,7 @@ extern const SubGhzProtocol kia_protocol_v6;
 extern const SubGhzProtocol kia_protocol_v7;
 extern const SubGhzProtocol land_rover_v0_protocol;
 extern const SubGhzProtocol land_rover_rke_protocol;
+extern const SubGhzProtocol bmw_ook_protocol;
 extern const SubGhzProtocol mazda_v0_protocol;
 extern const SubGhzProtocol mitsubishi_v0_protocol;
 extern const SubGhzProtocol porsche_touareg_protocol;
@@ -91,6 +92,15 @@ extern const SubGhzProtocol subghz_protocol_renault_v3;
 extern const SubGhzProtocol subghz_protocol_renault_v4;
 extern const SubGhzProtocol subghz_protocol_toyota_v0;
 extern const SubGhzProtocol toyota_keeloq_protocol;
+extern const SubGhzProtocol subghz_protocol_compustar;
+extern const SubGhzProtocol subghz_protocol_astrostart;
+extern const SubGhzProtocol subghz_protocol_audiovox;
+extern const SubGhzProtocol subghz_protocol_gm_rke;
+extern const SubGhzProtocol subghz_protocol_continental_rke;
+extern const SubGhzProtocol subghz_protocol_nidec_rke;
+extern const SubGhzProtocol subghz_protocol_alps_rke;
+extern const SubGhzProtocol vag_polo_protocol;
+extern const SubGhzProtocol subghz_protocol_retekess;
 
 // EXACTLY the &... entries of protocol_items.c's automotive array (in file order),
 // minus subghz_protocol_raw / subghz_protocol_bin_raw.
@@ -107,6 +117,7 @@ static const SubGhzProtocol* const REGISTRY[] = {
     &kia_protocol_v3_v4,         &kia_protocol_v5,
     &kia_protocol_v6,            &kia_protocol_v7,
     &land_rover_v0_protocol,     &land_rover_rke_protocol,
+    &bmw_ook_protocol,
     &mazda_v0_protocol,
     &mitsubishi_v0_protocol,     &porsche_touareg_protocol,
     &psa_protocol,               &subghz_protocol_scher_khan,
@@ -130,6 +141,12 @@ static const SubGhzProtocol* const REGISTRY[] = {
     &subghz_protocol_renault_v2,     &subghz_protocol_renault_v3,
     &subghz_protocol_renault_v4,     &subghz_protocol_toyota_v0,
     &toyota_keeloq_protocol,
+    // grafted aftermarket remote-start + OEM RKE (decode-only)
+    &subghz_protocol_compustar,      &subghz_protocol_astrostart,
+    &subghz_protocol_audiovox,       &subghz_protocol_gm_rke,
+    &subghz_protocol_continental_rke, &subghz_protocol_nidec_rke,
+    &subghz_protocol_alps_rke,       &vag_polo_protocol,
+    &subghz_protocol_retekess,
 };
 #define REG_N (sizeof(REGISTRY) / sizeof(REGISTRY[0]))
 
@@ -540,26 +557,30 @@ done:
 
 int main(int argc, char** argv) {
     if(argc < 2) {
-        fprintf(stderr, "usage: %s <capture.sub>\n", argv[0]);
+        fprintf(stderr, "usage: %s <capture.sub> [more.sub ...]\n", argv[0]);
         return 2;
     }
-    const char* path = argv[1];
+    for(int ai = 1; ai < argc; ai++) {
+    const char* path = argv[ai];
     size_t n = 0;
     int* raw = load_raw(path, &n);
     if(!raw || n == 0) {
         printf("%s\tNO_RAW\n", path);
-        return 1;
+        if(raw) free(raw);
+        continue;
     }
     if(getenv("PPDBG")) fprintf(stderr, "[dbg] n=%zu first=%d last=%d\n", n, raw[0], raw[n - 1]);
 
     for(size_t i = 0; i < REG_N; i++) {
         const SubGhzProtocol* proto = REGISTRY[i];
         if(!proto->decoder || !proto->decoder->alloc) continue;
+        if(getenv("TRACE")) { fprintf(stderr, "[trace] %s : %s\n", path, proto->name); fflush(stderr); }
         // non-NULL dummy environment: keeloq decoders bail on NULL; the host
         // keystore shim ignores the pointer and hands back an empty keystore.
         static char dummy_env;
         void* dec = proto->decoder->alloc((SubGhzEnvironment*)&dummy_env);
         SubGhzProtocolDecoderBase* base = (SubGhzProtocolDecoderBase*)dec;
+        if(proto->decoder->reset) proto->decoder->reset(dec); // device parity: worker resets before feed
         HitFlag hf = {0};
         const char* fd = getenv("FRAMEDUMP");
         int dumping = fd && strcmp(fd, proto->name) == 0;
@@ -609,5 +630,6 @@ int main(int argc, char** argv) {
         if(proto->decoder->free) proto->decoder->free(dec);
     }
     free(raw);
+    } // for each file arg
     return 0;
 }

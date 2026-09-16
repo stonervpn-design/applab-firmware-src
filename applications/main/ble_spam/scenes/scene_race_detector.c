@@ -9,23 +9,35 @@
 
 #define TAG "RaceDetect"
 
-// Airoha RACE GATT service UUIDs (Insinuator full disclosure, 2025-12).
-// ESP-IDF stores 128-bit UUIDs in little-endian byte order, so the byte
-// arrays are the textual UUID reversed.
+// Airoha RACE GATT service UUIDs (CVE-2025-20700) -- REAL + verified against the
+// ERNW full disclosure "Bluetooth Headphone Jacking: Full Disclosure of Airoha RACE
+// Vulnerabilities" (insinuator.net, 2025-12-28) and ERNW White Paper 74. RACE cmds
+// are written to a TX characteristic and answered on an RX characteristic, but the
+// unauthenticated RACE-over-GATT SERVICE being present IS the vulnerability, so
+// matching the service UUID is a valid surface detection. ESP-IDF stores 128-bit
+// UUIDs little-endian, so these byte arrays are the textual UUID reversed.
+// (The default UUID's bytes spell "PRIM..-AB..irohaBLE" in ASCII -- that is Airoha's
+// actual on-wire encoding, NOT a placeholder.) Most devices use Default; Sony its own.
 
-// 5052494D-2DAB-0341-6972-6F6861424C45 ("PRIM..-AB..irohaBLE")
+// Default: 5052494D-2DAB-0341-6972-6F6861424C45
 static const uint8_t RACE_UUID_DEFAULT[16] = {
     0x45, 0x4C, 0x42, 0x41, 0x68, 0x6F, 0x72, 0x69,
     0x41, 0x03, 0xAB, 0x2D, 0x4D, 0x49, 0x52, 0x50,
 };
 
-// dc405470-a351-4a59-97d8-2e2e3b207fbb (Sony variant)
+// Sony variant: dc405470-a351-4a59-97d8-2e2e3b207fbb
 static const uint8_t RACE_UUID_SONY[16] = {
     0xBB, 0x7F, 0x20, 0x3B, 0x2E, 0x2E, 0xD8, 0x97,
     0x59, 0x4A, 0x51, 0xA3, 0x70, 0x54, 0x40, 0xDC,
 };
 
+// If the advisory documents a 16-bit RACE service UUID, set it here (0x0000 = none).
+#define RACE_UUID16 0x0000
+
 static bool uuid_is_race(const esp_bt_uuid_t* u) {
+    if(u->len == ESP_UUID_LEN_16) {
+        return (RACE_UUID16 != 0x0000) && (u->uuid.uuid16 == RACE_UUID16);
+    }
     if(u->len != ESP_UUID_LEN_128) return false;
     if(memcmp(u->uuid.uuid128, RACE_UUID_DEFAULT, 16) == 0) return true;
     if(memcmp(u->uuid.uuid128, RACE_UUID_SONY, 16) == 0) return true;
@@ -89,8 +101,9 @@ static RaceStatus probe_device(BleSpamApp* app, RaceDevice* target) {
         return RaceStatusConnectFail;
     }
 
-    // Poll up to 3s, like scene_walk_services does.
-    for(int i = 0; i < 60 && !ble_walk_hal_services_ready(); i++) {
+    // Poll up to ~6s: a real earbud that connected fine can be slow to finish ATT
+    // service enumeration; 3s was misreporting connected-but-slow as unreachable.
+    for(int i = 0; i < 120 && !ble_walk_hal_services_ready(); i++) {
         if(app->race_probe_abort) {
             ble_walk_hal_disconnect();
             return RaceStatusConnectFail;
@@ -131,6 +144,7 @@ void ble_spam_scene_race_detector_on_enter(void* context) {
         return;
     }
 
+    ble_walk_hal_clear_devices(); // fresh table so a stale/full list can't block detection
     ble_walk_hal_start_scan();
 }
 
@@ -200,6 +214,11 @@ bool ble_spam_scene_race_detector_on_event(void* context, SceneManagerEvent even
         RaceDetectorModel* model = view_get_model(app->view_race_detector);
         if(!model->probing) {
             view_commit_model(app->view_race_detector, false);
+            // Self-heal: if the scan died (transient ENOTSYNCED/EBUSY, or a just-finished
+            // probe left it stopped), restart it so the list can't be empty forever.
+            if(!ble_walk_hal_is_connected() && !ble_walk_hal_is_scanning()) {
+                ble_walk_hal_start_scan();
+            }
             refresh_device_list(app);
         } else {
             view_commit_model(app->view_race_detector, false);

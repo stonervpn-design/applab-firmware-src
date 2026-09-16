@@ -59,7 +59,7 @@
  *  "Jeep V0"         | REPLAY       | -  16-bit codes baked into Key
  *  "Peugot V0"       | REPLAY       | -
  *  "Opel V0"         | REPLAY       | -
- *  "LDV V0"          | UNSUPPORTED  | -  stub encoder, no Send flag
+ *  "LDV V0"          | REPLAY       | -  verbatim 128-bit clone (Send flag enabled)
  *  "Land Rover V0"   | SUPPORTED    | 2  0x2/0x4
  *  "ChevroletV0"     | REPLAY       | -
  *  "Nissan V0"       | REPLAY       | -
@@ -293,7 +293,8 @@ bool subghz_fob_single_button_synth(const char* protocol_name) {
 #ifndef PUBLIC_BUILD
     if(!protocol_name) return false;
     return strcmp(protocol_name, "Kia V5") == 0 || strcmp(protocol_name, "PSA") == 0 ||
-           strcmp(protocol_name, "Fiat V0") == 0;
+           strcmp(protocol_name, "Fiat V0") == 0 ||
+           strcmp(protocol_name, "MazdaSiemens") == 0;
 #else
     // PRIVATE-only: the car protocol name literals must not ship in a public
     // build (verify_public_no_car). No single-button-synth protocol is public.

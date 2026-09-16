@@ -26,6 +26,13 @@ SubGhzWorker* subghz_worker_alloc(void);
  */
 void subghz_worker_free(SubGhzWorker* instance);
 
+/** Temporarily release the RX capture buffer to free ~4 KB internal RAM while it is not
+ * needed (e.g. the Saved file browser is open). No-op if the worker is running. */
+void subghz_worker_buffer_release(SubGhzWorker* instance);
+
+/** Re-allocate the RX capture buffer released by subghz_worker_buffer_release(). */
+void subghz_worker_buffer_reacquire(SubGhzWorker* instance);
+
 /** 
  * Overrun callback SubGhzWorker.
  * @param instance Pointer to a SubGhzWorker instance

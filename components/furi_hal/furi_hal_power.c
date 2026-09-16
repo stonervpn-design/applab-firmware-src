@@ -96,18 +96,16 @@ static FuriHalPowerState furi_hal_power = {
  * is now spread across 3.74..3.90 V so % moves sensibly, and 100% is reached at 4.10 V
  * so both a 4.2 V ADC read (Cardputer) and the M5PM1's ~4.095 V 12-bit cap hit full. */
 static const FuriHalPowerCurvePoint furi_hal_power_curve[] = {
-    {3.30f, 0},
-    {3.55f, 5},
-    {3.65f, 10},
-    {3.70f, 20},
-    {3.74f, 30},
-    {3.78f, 40},
-    {3.82f, 50},
-    {3.86f, 60},
-    {3.90f, 70},
-    {3.95f, 80},
-    {4.02f, 90},
-    {4.10f, 100},
+    /* Single-cell LiPo resting-voltage state-of-charge, monotonic + evenly spread
+     * (propagated from the momentum-port battery-reader fix). Old tables crammed
+     * the mid-range into a narrow window so ADC noise swung the % tens of points;
+     * here 30-70% spans 3.73-3.92V. Per-board BOARD_LCD/DIVIDER_RATIO handles the
+     * ADC->real-voltage calibration, so one real-voltage curve fits all boards. */
+    {3.27f, 0},   {3.50f, 5},   {3.63f, 10},  {3.67f, 15},  {3.69f, 20},
+    {3.71f, 25},  {3.73f, 30},  {3.75f, 35},  {3.77f, 40},  {3.79f, 45},
+    {3.82f, 50},  {3.85f, 55},  {3.87f, 60},  {3.90f, 65},  {3.92f, 70},
+    {3.96f, 75},  {4.00f, 80},  {4.04f, 85},  {4.09f, 90},  {4.15f, 95},
+    {4.20f, 100},
 };
 
 static bool furi_hal_power_adc_calibration_init(
@@ -245,10 +243,24 @@ static void furi_hal_power_refresh_sample(void) {
         return;
     }
 
+    /* Burst-average 16 ADC reads to reject per-sample noise (propagated fix). */
     int raw_value = 0;
-    if(adc_oneshot_read(furi_hal_power.adc_handle, furi_hal_power.adc_channel, &raw_value) != ESP_OK) {
-        furi_hal_power.last_sample_ok = false;
-        return;
+    {
+        int32_t acc = 0;
+        int got = 0;
+        for(int s = 0; s < 16; s++) {
+            int r = 0;
+            if(adc_oneshot_read(
+                   furi_hal_power.adc_handle, furi_hal_power.adc_channel, &r) == ESP_OK) {
+                acc += r;
+                got++;
+            }
+        }
+        if(got == 0) {
+            furi_hal_power.last_sample_ok = false;
+            return;
+        }
+        raw_value = (int)(acc / got);
     }
 
     int pin_mv = 0;
@@ -270,14 +282,20 @@ static void furi_hal_power_refresh_sample(void) {
 
     furi_hal_power.last_supply_voltage = supply_voltage;
     if(!furi_hal_power_is_usb_present()) {
-        furi_hal_power.has_battery_reading = true;
-        if(supply_voltage < FURI_HAL_POWER_EMPTY_BATTERY_VOLTAGE_V) {
-            furi_hal_power.last_battery_voltage = FURI_HAL_POWER_EMPTY_BATTERY_VOLTAGE_V;
-        } else if(supply_voltage > furi_hal_power.charge_voltage_limit) {
-            furi_hal_power.last_battery_voltage = furi_hal_power.charge_voltage_limit;
-        } else {
-            furi_hal_power.last_battery_voltage = supply_voltage;
+        float v = supply_voltage;
+        if(v < FURI_HAL_POWER_EMPTY_BATTERY_VOLTAGE_V) {
+            v = FURI_HAL_POWER_EMPTY_BATTERY_VOLTAGE_V;
+        } else if(v > furi_hal_power.charge_voltage_limit) {
+            v = furi_hal_power.charge_voltage_limit;
         }
+        if(!furi_hal_power.has_battery_reading) {
+            furi_hal_power.last_battery_voltage = v; /* seed on first reading */
+        } else {
+            /* light EMA: stable % across load transients (radio TX sag) */
+            furi_hal_power.last_battery_voltage =
+                furi_hal_power.last_battery_voltage * 0.75f + v * 0.25f;
+        }
+        furi_hal_power.has_battery_reading = true;
     }
 
     furi_hal_power.last_sample_us = now;

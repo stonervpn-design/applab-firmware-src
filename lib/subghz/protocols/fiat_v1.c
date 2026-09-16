@@ -521,6 +521,18 @@ static uint32_t fiat_v1_bcm_generate_authenticator(
     }
     return authenticator;
 }
+
+// Public wrapper over the byte-array Fiat V1 Hitag2-BCM authenticator, used by
+// the ported Hitag2Hell key-recovery module (helpers/subghz_hitag2_core.c
+// cross-checks its u64-packed cipher against this reference in its self-test).
+uint32_t subghz_protocol_fiat_v1_compute_auth(
+    uint32_t uid,
+    uint8_t button,
+    uint16_t control,
+    const uint8_t key[6],
+    uint32_t epoch) {
+    return fiat_v1_bcm_generate_authenticator(uid, button, control, key, epoch);
+}
 #endif
 
 static const uint8_t fiat_v1_known_keys[FIAT_V1_KNOWN_KEY_COUNT][6] = {
@@ -544,6 +556,10 @@ static bool fiat_v1_key_matches(
     return fiat_v1_bcm_generate_authenticator(uid, button, control, key, epoch) == hop;
 }
 
+#ifndef FIAT_V1_EPOCH_SEARCH_MAX
+#define FIAT_V1_EPOCH_SEARCH_MAX 256U
+#endif
+
 static void fiat_v1_verify_hitag2_key(SubGhzProtocolDecoderFiatV1* instance) {
     instance->hitag2_key_valid = false;
     instance->hitag2_epoch = 0U;
@@ -554,12 +570,21 @@ static void fiat_v1_verify_hitag2_key(SubGhzProtocolDecoderFiatV1* instance) {
     const uint16_t control = (uint16_t)(instance->generic.cnt & 0x03FFU);
     const uint32_t hop = instance->hop;
 
-    for(uint8_t i = 0U; i < FIAT_V1_KNOWN_KEY_COUNT; i++) {
-        if(fiat_v1_key_matches(
-               uid, button, control, hop, fiat_v1_known_keys[i], instance->hitag2_epoch)) {
-            memcpy(instance->hitag2_key, fiat_v1_known_keys[i], sizeof(instance->hitag2_key));
-            instance->hitag2_key_valid = true;
-            return;
+    // The authenticator IV embeds an 18-bit epoch = full_counter >> 10; the
+    // captured `control` is only its low 10 bits. A factory-key fob past its
+    // first ~1024 presses sits at epoch>0, so search epochs 0..255 (<=2048
+    // authenticator runs, a few ms on-device) instead of only epoch 0. A
+    // deployed per-car key matches at no epoch -> still offline-only (2^38).
+    for(uint32_t epoch = 0U; epoch < FIAT_V1_EPOCH_SEARCH_MAX; epoch++) {
+        for(uint8_t i = 0U; i < FIAT_V1_KNOWN_KEY_COUNT; i++) {
+            if(fiat_v1_key_matches(
+                   uid, button, control, hop, fiat_v1_known_keys[i], epoch)) {
+                memcpy(
+                    instance->hitag2_key, fiat_v1_known_keys[i], sizeof(instance->hitag2_key));
+                instance->hitag2_epoch = epoch;
+                instance->hitag2_key_valid = true;
+                return;
+            }
         }
     }
 }
@@ -654,10 +679,18 @@ SubGhzProtocolStatus
         return SubGhzProtocolStatusErrorParserOthers;
     }
 
+    // Hitag2 manufacturer key is OPTIONAL: serialize only writes it when the
+    // captured authenticator matched a known key (hitag2_key_valid). A genuine
+    // Fiat fob uses an unknown key (get_string shows "KEY:??"), so the field is
+    // absent. Fall back to replaying the captured authenticator (Hop field,
+    // always written by serialize) instead of hard-failing the whole load.
+    bool have_key = false;
     flipper_format_rewind(flipper_format);
-    if(!flipper_format_read_hex(
+    if(flipper_format_read_hex(
            flipper_format, FIAT_V1_HITAG2_KEY_FIELD, instance->hitag2_key, 6U)) {
-        return SubGhzProtocolStatusErrorParserOthers;
+        have_key = true;
+    } else {
+        memset(instance->hitag2_key, 0, sizeof(instance->hitag2_key));
     }
 
     uint32_t epoch = 0U;
@@ -668,13 +701,27 @@ SubGhzProtocolStatus
         instance->epoch = 0U;
     }
 
+    // Captured authenticator for replay when the manufacturer key is unknown.
+    uint32_t captured_hop = 0U;
+    bool have_hop = false;
+    flipper_format_rewind(flipper_format);
+    if(flipper_format_read_uint32(flipper_format, FIAT_V1_HOP_FIELD, &captured_hop, 1U)) {
+        have_hop = true;
+    }
+
     control &= 0x03FFU;
     button &= 0x0FU;
     instance->generic.serial = serial;
     instance->generic.btn = (uint8_t)button;
     instance->generic.cnt = control;
-    instance->hop = fiat_v1_bcm_generate_authenticator(
-        serial, (uint8_t)button, (uint16_t)control, instance->hitag2_key, instance->epoch);
+    if(have_key) {
+        instance->hop = fiat_v1_bcm_generate_authenticator(
+            serial, (uint8_t)button, (uint16_t)control, instance->hitag2_key, instance->epoch);
+    } else if(have_hop) {
+        instance->hop = captured_hop; // replay captured authenticator (KEY:?? fobs)
+    } else {
+        return SubGhzProtocolStatusErrorParserOthers;
+    }
     instance->generic.data = ((uint64_t)serial << 32U) | instance->hop;
     instance->generic.data_count_bit = FIAT_V1_LOGICAL_BITS;
 

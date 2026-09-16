@@ -3,6 +3,7 @@
 #include "protocols_common.h"
 
 #define HONDA_STATIC_BIT_COUNT       64
+#define HONDA_STATIC_PREDICT_COUNT   3
 #define HONDA_STATIC_MIN_SYMBOLS     36
 #define HONDA_STATIC_SHORT_BASE_US   28
 #define HONDA_STATIC_SHORT_SPAN_US   70
@@ -210,6 +211,18 @@ static uint64_t honda_static_pack_compact(const HondaStaticFields* fields) {
     compact[7] = (uint8_t)fields->counter;
 
     return pp_bytes_to_u64_be(compact);
+}
+
+/* Next-code predictor: the rolling counter is cleartext (packet bits 32-55) and
+ * the frame authenticator is a plain XOR checksum with no secret key, so the
+ * exact frame for any future counter is reproducible. Re-pack the decoded
+ * button/serial with counter+step (24-bit wrap) through the same
+ * honda_static_pack_compact() encoder used for the on-screen Key line. */
+static uint64_t
+    honda_static_predict_key(const HondaStaticFields* decoded, uint32_t step) {
+    HondaStaticFields next = *decoded;
+    next.counter = (decoded->counter + step) & 0x00FFFFFFU;
+    return honda_static_pack_compact(&next);
 }
 
 #ifdef ENABLE_EMULATE_FEATURE
@@ -642,6 +655,15 @@ void subghz_protocol_decoder_honda_static_get_string(void* context, FuriString* 
         honda_static_button_name(decoded.button),
         (unsigned long)decoded.serial,
         (unsigned long)decoded.counter);
+
+    /* Predicted future codes (cleartext counter + reversible XOR checksum). */
+    if(honda_static_is_valid_serial(decoded.serial)) {
+        for(uint32_t i = 1U; i <= HONDA_STATIC_PREDICT_COUNT; i++) {
+            uint64_t next_key = honda_static_predict_key(&decoded, i);
+            furi_string_cat_printf(
+                output, "\r\nNext+%lu:%016llX", (unsigned long)i, (unsigned long long)next_key);
+        }
+    }
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_honda_static_serialize(

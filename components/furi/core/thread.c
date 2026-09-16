@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <freertos/task.h>
 #include <esp_rom_sys.h>
+#include "sdkconfig.h" // CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY gates the PSRAM stack fallback
 
 #define TAG "FuriThread"
 
@@ -207,6 +208,7 @@ void furi_thread_scrub(void) {
 FuriThread* furi_thread_alloc(void) {
     /* FuriThread contains StaticTask_t (TCB) which FreeRTOS requires in internal RAM */
     FuriThread* thread = heap_caps_calloc(1, sizeof(FuriThread), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    furi_check(thread); // OOM on internal RAM -> clean named panic, not a NULL deref in init_common
 
     furi_thread_init_common(thread);
 
@@ -218,12 +220,19 @@ FuriThread* furi_thread_alloc_service(
     uint32_t stack_size,
     FuriThreadCallback callback,
     void* context) {
-    FuriThread* thread = memmgr_alloc_from_pool(sizeof(FuriThread));
-    memset(thread, 0, sizeof(FuriThread));
+    /* FuriThread embeds StaticTask_t (the TCB), and a service stack runs flash/NVS
+       writing code with the cache off — both MUST be in internal RAM, never PSRAM
+       (memmgr_alloc_from_pool is plain malloc here and lets >=16 KB allocations land
+       in PSRAM). Force internal, mirroring furi_thread_alloc(); calloc zeroes so the
+       memset is unnecessary, and furi_check turns OOM into a clean named panic. */
+    FuriThread* thread =
+        heap_caps_calloc(1, sizeof(FuriThread), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    furi_check(thread);
 
     furi_thread_init_common(thread);
 
-    thread->stack_buffer = memmgr_alloc_from_pool(stack_size);
+    thread->stack_buffer = heap_caps_malloc(stack_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    furi_check(thread->stack_buffer);
     thread->stack_size = stack_size;
     thread->is_service = true;
 
@@ -307,14 +316,23 @@ void furi_thread_set_stack_size(FuriThread* thread, size_t stack_size) {
        the SD card on a separate SPI bus) we fall back to PSRAM when the
        internal heap cannot satisfy the request. */
     thread->stack_buffer = heap_caps_malloc(stack_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#if defined(CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY) && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+    /* Only fall back to PSRAM when the kernel actually permits task stacks there
+       (sdkconfig =y, e.g. the M5Stick build). On a =n board (the LilyGO T-Embed)
+       xPortcheckValidStackMem() rejects a PSRAM stack at task creation and the
+       device reboots with a cryptic assert — far worse than a clean OOM. So on
+       =n we deliberately skip this and fall through to the panic below. */
     if(!thread->stack_buffer) {
         thread->stack_buffer = heap_caps_malloc(stack_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
+#endif
     /* Out of memory for the stack: fail with a clear, logged panic instead of
      * leaving stack_buffer NULL. furi_thread_start would otherwise hand
      * xTaskCreateStatic a NULL stack and fault cryptically inside the loader's
      * app-start path — the "crashes the loader" symptom when a heavy app (e.g.
-     * BLE Spam, 8 KB stack) is launched on a tight heap. */
+     * BLE Spam, 8 KB stack) is launched on a tight heap. On a =n board this is
+     * also where a would-be PSRAM stack lands: a clean, diagnosable OOM panic
+     * instead of the xPortcheckValidStackMem reboot. */
     furi_check(thread->stack_buffer, "Out of memory: thread stack allocation failed");
     thread->stack_size = stack_size;
 }

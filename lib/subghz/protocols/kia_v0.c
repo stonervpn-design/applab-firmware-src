@@ -979,6 +979,24 @@ void subghz_protocol_decoder_kia_feed(void* context, bool level, uint32_t durati
     }
 }
 
+#define KIA_V0_PREDICT_COUNT 3
+
+// Re-encode a byte-correct 64-bit frame for an absolute counter, reusing the
+// exact family builders/checksums the encoder path uses (see deserialize). The
+// counter is cleartext for all three families, so cnt+i frames are exact.
+static uint64_t
+    kia_v0_predict_key(uint8_t type, uint32_t serial, uint8_t button, uint16_t counter) {
+    if(type == KIA_V0_TYPE_HONDA) {
+        return kia_v0_build_honda_key(serial, button & 0x07U, counter);
+    } else if(type == KIA_V0_TYPE_SUZUKI) {
+        const uint8_t crc = kia_v0_suzuki_crc8_from_fields(serial, button & 0x0FU, counter);
+        return kia_v0_suzuki_shifted_key_from_fields(serial, button & 0x0FU, counter, crc);
+    }
+    const uint64_t partial = kia_v0_build_kia_raw(serial, button & 0x0FU, counter, 0);
+    const uint8_t crc = kia_v0_calculate_crc_poly(partial);
+    return kia_v0_build_kia_raw(serial, button & 0x0FU, counter, crc);
+}
+
 void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
     furi_check(context);
 
@@ -1003,6 +1021,19 @@ void subghz_protocol_decoder_kia_get_string(void* context, FuriString* output) {
         fields.crc,
         fields.crc_valid ? "OK" : "ERR",
         kia_v0_protocol_name(instance->type));
+
+    // Next-code prediction: cleartext counter + reversible checksum makes cnt+i
+    // frames exact. Only emit when the captured frame checksums cleanly so the
+    // predicted (serial/btn/counter) base is trustworthy.
+    if(fields.crc_valid) {
+        for(uint8_t i = 1U; i <= KIA_V0_PREDICT_COUNT; i++) {
+            const uint16_t next_cnt = (uint16_t)(fields.counter + i);
+            const uint64_t next_key =
+                kia_v0_predict_key(instance->type, fields.serial, fields.button, next_cnt);
+            furi_string_cat_printf(
+                output, "Next+%u:%016llX\r\n", i, (unsigned long long)next_key);
+        }
+    }
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_kia_serialize(

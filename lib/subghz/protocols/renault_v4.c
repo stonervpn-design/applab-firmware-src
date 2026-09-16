@@ -40,6 +40,11 @@ typedef struct SubGhzProtocolDecoderRenaultV4 {
     uint8_t  all_bits[128];
     uint16_t all_bit_count;
     bool     synced;
+
+    /* Repeat-dedup: a held button emits hundreds of identical bursts; fire the
+     * callback once per unique frame instead of once per burst. */
+    uint8_t  last_frame[11];
+    bool     last_frame_valid;
 } SubGhzProtocolDecoderRenaultV4;
 
 typedef struct SubGhzProtocolEncoderRenaultV4 {
@@ -125,7 +130,13 @@ static void _rv4_process_frame(SubGhzProtocolDecoderRenaultV4* inst) {
         FURI_LOG_I(TAG, "  data_start=%d data_len=%d (MIN=%u FRAME=%u)",
                    data_start, data_len,
                    (unsigned)RENAULT_V4_MIN_BITS, (unsigned)RENAULT_V4_FRAME_BITS);
-        if(data_len < (int)RENAULT_V4_MIN_BITS) continue;
+        /* Strict length gate: a genuine frame is exactly RENAULT_V4_FRAME_BITS
+         * (88) data bits. Requiring the burst to land in [88, 88+4] rejects a
+         * foreign signal (e.g. a Fiat V1 burst read through this Manchester SM)
+         * that assembles a different bit count instead of silently truncating it
+         * to 88 and letting the XOR coincidence through. */
+        if(data_len < (int)RENAULT_V4_FRAME_BITS ||
+           data_len > (int)RENAULT_V4_FRAME_BITS + 4) continue;
 
         /* Pack data bits into byte array — no inversion needed,
          * the preamble polarity just indicates Manchester convention */
@@ -157,6 +168,21 @@ static void _rv4_process_frame(SubGhzProtocolDecoderRenaultV4* inst) {
         if(_btn_check != 0xEu && _btn_check != 0xDu &&
            _btn_check != 0xBu && _btn_check != 0x7u) {
             FURI_LOG_I(TAG, "  rejected: invalid btn_nibble=0x%X (not E/D/B/7)", _btn_check);
+            continue;
+        }
+
+        /* Structural invariant: frame bits 36-37 (the 2-bit "pad" field, i.e.
+         * bits 2-3 of frame[4]) are constant 0b01 on genuine xHorse fobs —
+         * verified constant across 300 Nissan Almera samples (see the field map
+         * below and tools/xhorse_rv4/bit_correlation.py). A foreign burst that
+         * merely satisfied the 8-bit XOR and the 4-value button whitelist will
+         * almost never also carry pad==01, so this closes the residual
+         * false-positive gap (a Fiat V1 burst decodes here with pad==0b10).
+         * Relax this if a genuine non-xHorse Renault V4 fob shows pad!=01. */
+        uint8_t _pad_check = (frame[4] >> 2) & 0x03u;
+        if(_pad_check != 0x01u) {
+            FURI_LOG_I(TAG, "  rejected: pad=0b%u%u (not 0b01)",
+                       (_pad_check >> 1) & 1u, _pad_check & 1u);
             continue;
         }
 
@@ -209,6 +235,14 @@ static void _rv4_process_frame(SubGhzProtocolDecoderRenaultV4* inst) {
         FURI_LOG_I(TAG, "DECODED ser=%08lX btn=%02X roll=%02X%02X%02X%02X%02X%02X xor=%02X",
             (unsigned long)serial, btn,
             frame[5], frame[6], frame[7], frame[8], frame[9], frame[10], xor_check);
+
+        /* Repeat-dedup: the burst train repeats the same frame hundreds of
+         * times; fire once per unique frame so one press yields one row. */
+        if(inst->last_frame_valid && memcmp(inst->last_frame, frame, 11) == 0) {
+            return;
+        }
+        memcpy(inst->last_frame, frame, 11);
+        inst->last_frame_valid = true;
 
         if(inst->base.callback)
             inst->base.callback(&inst->base, inst->base.context);
@@ -503,9 +537,11 @@ static void _rv4_build_upload(SubGhzProtocolEncoderRenaultV4* inst) {
 
     /* Data bits — all 88 bits from frame, MSB-first per byte.
      * Manchester: 1 = LOW→HIGH, 0 = HIGH→LOW */
-    int nbits = inst->generic.data_count_bit > 0
-                ? inst->generic.data_count_bit
-                : (int)RENAULT_V4_FRAME_BITS;
+    /* Clamp to the fixed frame size: a malicious/corrupt .sub can carry Bit>88
+     * (generic deserialize does not bound it), which would read past frame[11]
+     * and overrun the upload buffer (then furi_check-abort the device). */
+    int nbits = inst->generic.data_count_bit;
+    if(nbits <= 0 || nbits > (int)RENAULT_V4_FRAME_BITS) nbits = (int)RENAULT_V4_FRAME_BITS;
     for(int b = 0; b < nbits; b++) {
         uint8_t bit = (frame[b >> 3] >> (7 - (b & 7))) & 1u;
         if(bit) {

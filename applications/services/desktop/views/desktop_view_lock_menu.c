@@ -9,12 +9,12 @@
 #define LOCK_MENU_MAX_ITEMS 8
 
 // Menu items and events are built dynamically from the current toggle states:
-//   qFlipper       Enable/Disable (background RPC bridge)   [USB-OTG only]
 //   USB-Storage    open the full-screen mass-storage scene  [USB-OTG only]
 //   Bluetooth      Enable/Disable
 //   Switch to Bruce  reboot into the Bruce firmware         [multi-boot only]
 //   Mesh: Off/Master/Client    cycle the mesh role
 //   Mesh Clients   open the discovery/pairing scene          [Master only]
+// (qFlipper Enable/Disable lives in Settings > System, not here.)
 
 typedef struct {
     const char* label;
@@ -39,30 +39,19 @@ static void lock_menu_scroll_to(uint8_t idx) {
 
 static void lock_menu_build_items(
     bool usb_available,
-    bool qflipper_on,
     bool bt_on,
     bool bruce_available,
     bool big_fap_on) {
     s_item_count = 0;
 
-    /* Big FAP Mode active: the radios are blocked so heavy apps get max heap.
-     * qFlipper stays available though — it's a USB bridge, not a radio (low RAM),
-     * so files can be moved / the FAP driven over qFlipper during the session. */
+    /* Big FAP Mode active: the radios are blocked so heavy apps get max heap. */
     if(big_fap_on) {
-        if(usb_available) {
-            s_items[s_item_count++] = (LockMenuItem){
-                qflipper_on ? "Disable qFlipper" : "Enable qFlipper",
-                DesktopLockMenuEventQflipperToggle};
-        }
         s_items[s_item_count++] =
             (LockMenuItem){"Disable Big FAP Mode", DesktopLockMenuEventBigFapToggle};
         return;
     }
 
     if(usb_available) {
-        s_items[s_item_count++] = (LockMenuItem){
-            qflipper_on ? "Disable qFlipper" : "Enable qFlipper",
-            DesktopLockMenuEventQflipperToggle};
         s_items[s_item_count++] = (LockMenuItem){"USB-Storage", DesktopLockMenuEventUsbStorage};
     }
 
@@ -104,11 +93,10 @@ void desktop_lock_menu_set_idx(DesktopLockMenuView* lock_menu, uint8_t idx) {
 void desktop_lock_menu_set_states(
     DesktopLockMenuView* lock_menu,
     bool usb_available,
-    bool qflipper_on,
     bool bt_on,
     bool bruce_available,
     bool big_fap_on) {
-    lock_menu_build_items(usb_available, qflipper_on, bt_on, bruce_available, big_fap_on);
+    lock_menu_build_items(usb_available, bt_on, bruce_available, big_fap_on);
     /* Index nicht resetten — Caller (refresh nach Toggle) erwartet, dass die
      * Selektion stehen bleibt; bei out-of-range clampen wir, damit der Wechsel
      * vom Master- in den Off-Modus (verliert "Mesh Clients") nicht ins Leere
@@ -210,7 +198,7 @@ DesktopLockMenuView* desktop_lock_menu_alloc(void) {
     view_set_input_callback(lock_menu->view, desktop_lock_menu_input_callback);
 
     // Default until the scene fills in real states on enter.
-    lock_menu_build_items(false, false, false, false, false);
+    lock_menu_build_items(false, false, false, false);
 
     return lock_menu;
 }

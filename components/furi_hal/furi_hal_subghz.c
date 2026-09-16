@@ -697,18 +697,11 @@ uint32_t furi_hal_subghz_set_frequency_and_path(uint32_t value) {
 }
 
 bool furi_hal_subghz_is_tx_allowed(uint32_t value) {
-    if(!furi_hal_subghz.dangerous_frequency_i &&
-       !(value >= 299999755 && value <= 350000335) &&
-       !(value >= 386999938 && value <= 467750000) &&
-       !(value >= 778999847 && value <= 928000000)) {
-        return false;
-    }
-
-    if(furi_hal_subghz.dangerous_frequency_i && !furi_hal_subghz_is_frequency_valid(value)) {
-        return false;
-    }
-
-    return true;
+    /* Region lock bypassed (owner's own hardware): allow TX anywhere the CC1101 can
+     * actually tune — the full hardware range in is_frequency_valid — instead of
+     * only the regional SRD sub-bands. Lawful use per local (Ofcom/ETSI) rules is
+     * the operator's responsibility. */
+    return furi_hal_subghz_is_frequency_valid(value);
 }
 
 uint32_t furi_hal_subghz_set_frequency(uint32_t value) {

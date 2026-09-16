@@ -118,6 +118,16 @@ void subghz_protocol_decoder_keeloq_get_string(void* context, FuriString* output
 uint64_t subghz_protocol_keeloq_encoder_last_kdev(void* context);
 
 /**
+ * Arm a one-shot force-resync ("Sync" button) for the next clone transmission. The next
+ * clone get_upload emits the KeeLoq double-window (N, N+1) pair jumped ahead by `margin`,
+ * re-locking a receiver whose counter drifted forward from use of the original fob. Call
+ * this immediately before subghz_tx_start. margin must be in (16, 0x8000); pass 0 to use
+ * the built-in default. Consumed exactly once (a subsequent ordinary press is +1 again).
+ * @param margin Forward resync leap in counts (0 = default)
+ */
+void subghz_protocol_keeloq_encoder_request_resync(uint16_t margin);
+
+/**
  * Look up the raw manufacturer key + learning type by name from the keystore, so a
  * clone can persist a usable kdev for SIMPLE-type mfrs (key used directly as kdev).
  * @param context Pointer to a SubGhzProtocolEncoderKeeloq instance

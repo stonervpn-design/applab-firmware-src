@@ -2,6 +2,35 @@
 
 #include <string.h>
 
+bool pp_value_is_degenerate(uint64_t v, uint8_t nbytes) {
+    if(nbytes == 0 || nbytes > 8) nbytes = 8;
+    uint8_t b[8];
+    for(uint8_t i = 0; i < nbytes; i++) b[i] = (uint8_t)((v >> (8U * i)) & 0xFFU);
+
+    // all-same-byte (covers all-zero and all-0xFF too).
+    bool all_same = true;
+    for(uint8_t i = 1; i < nbytes; i++) {
+        if(b[i] != b[0]) {
+            all_same = false;
+            break;
+        }
+    }
+    if(all_same) return true;
+
+    // short repeating byte tile of period 2..4 spanning the whole value.
+    for(uint8_t p = 2; p <= 4 && p < nbytes; p++) {
+        bool periodic = true;
+        for(uint8_t i = p; i < nbytes; i++) {
+            if(b[i] != b[i - p]) {
+                periodic = false;
+                break;
+            }
+        }
+        if(periodic) return true;
+    }
+    return false;
+}
+
 const char FF_BIT[] = "Bit";
 const char FF_KEY[] = "Key";
 const char FF_SERIAL[] = "Serial";

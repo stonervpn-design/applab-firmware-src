@@ -20,6 +20,7 @@ typedef struct {
     uint8_t type;
     SubGhzRadioPreset* preset;
     DateTime datetime;
+    bool fired; // (private) auto-fired 0-PSI at this captured sensor -> tick in the list
 } SubGhzHistoryItem;
 
 ARRAY_DEF(SubGhzHistoryItemArray, SubGhzHistoryItem, M_POD_OPLIST) //-V658
@@ -34,6 +35,7 @@ struct SubGhzHistory {
     uint32_t last_update_timestamp;
     uint16_t last_index_write;
     uint8_t code_last_hash_data;
+    FuriString* code_last_payload;
     FuriString* tmp_string;
     SubGhzHistoryStruct* history;
 };
@@ -41,6 +43,7 @@ struct SubGhzHistory {
 SubGhzHistory* subghz_history_alloc(void) {
     SubGhzHistory* instance = malloc(sizeof(SubGhzHistory));
     instance->tmp_string = furi_string_alloc();
+    instance->code_last_payload = furi_string_alloc();
     instance->history = malloc(sizeof(SubGhzHistoryStruct));
     SubGhzHistoryItemArray_init(instance->history->data);
     return instance;
@@ -49,6 +52,7 @@ SubGhzHistory* subghz_history_alloc(void) {
 void subghz_history_free(SubGhzHistory* instance) {
     furi_assert(instance);
     furi_string_free(instance->tmp_string);
+    furi_string_free(instance->code_last_payload);
     for
         M_EACH(item, instance->history->data, SubGhzHistoryItemArray_t) {
             furi_string_free(item->item_str);
@@ -83,6 +87,7 @@ const char* subghz_history_get_preset(SubGhzHistory* instance, uint16_t idx) {
 void subghz_history_reset(SubGhzHistory* instance) {
     furi_assert(instance);
     furi_string_reset(instance->tmp_string);
+    furi_string_reset(instance->code_last_payload);
     for
         M_EACH(item, instance->history->data, SubGhzHistoryItemArray_t) {
             furi_string_free(item->item_str);
@@ -172,6 +177,21 @@ bool subghz_history_get_text_space_left(SubGhzHistory* instance, FuriString* out
     return false;
 }
 
+void subghz_history_set_fired(SubGhzHistory* instance, uint16_t idx, bool fired) {
+    furi_assert(instance);
+    if(idx < SubGhzHistoryItemArray_size(instance->history->data)) {
+        SubGhzHistoryItemArray_get(instance->history->data, idx)->fired = fired;
+    }
+}
+
+bool subghz_history_get_fired(SubGhzHistory* instance, uint16_t idx) {
+    furi_assert(instance);
+    if(idx < SubGhzHistoryItemArray_size(instance->history->data)) {
+        return SubGhzHistoryItemArray_get(instance->history->data, idx)->fired;
+    }
+    return false;
+}
+
 uint16_t subghz_history_get_last_index(SubGhzHistory* instance) {
     return instance->last_index_write;
 }
@@ -204,21 +224,22 @@ bool subghz_history_add_to_history(
         decoder_base->protocol ? decoder_base->protocol->type : -1,
         subghz_protocol_decoder_base_get_hash_data(decoder_base));
 
-    if((instance->code_last_hash_data ==
-        subghz_protocol_decoder_base_get_hash_data(decoder_base)) &&
-       ((furi_get_tick() - instance->last_update_timestamp) < 500)) {
-        instance->last_update_timestamp = furi_get_tick();
-        FURI_LOG_D(TAG, "Duplicate, skipping");
-        return false;
-    }
+    // Finding #28: dedup on the full serialized payload (built below), not the
+    // collision-prone 8-bit hash. Snapshot the PREVIOUS hash/timestamp here (before
+    // overwriting them) so the RAW/name-only fallback at the end can still gate on the
+    // old 8-bit-hash-within-500ms behavior for unparsed captures with no Key/Id.
+    uint8_t new_hash = subghz_protocol_decoder_base_get_hash_data(decoder_base);
+    bool raw_recent_dup = (instance->code_last_hash_data == new_hash) &&
+                          ((furi_get_tick() - instance->last_update_timestamp) < 500);
 
-    instance->code_last_hash_data = subghz_protocol_decoder_base_get_hash_data(decoder_base);
+    instance->code_last_hash_data = new_hash;
     instance->last_update_timestamp = furi_get_tick();
 
     FuriString* text = furi_string_alloc();
     SubGhzHistoryItem* item = SubGhzHistoryItemArray_push_raw(instance->history->data);
     item->preset = malloc(sizeof(SubGhzRadioPreset));
     item->type = decoder_base->protocol->type;
+    item->fired = false;
     item->preset->frequency = preset->frequency;
     item->preset->name = furi_string_alloc();
     furi_string_set(item->preset->name, preset->name);
@@ -256,6 +277,9 @@ bool subghz_history_add_to_history(
         return false;
     }
 
+    // Set true once a distinguishing Key/Id is folded into item_str; a name-only
+    // (pure RAW / unparsed >64-bit) item_str keeps the old hash+window dedup instead.
+    bool has_key_payload = false;
     do {
         if(!flipper_format_rewind(item->flipper_string)) {
             FURI_LOG_E(TAG, "Rewind error");
@@ -275,6 +299,7 @@ bool subghz_history_add_to_history(
                     "%s %08lX",
                     furi_string_get_cstr(instance->tmp_string),
                     (unsigned long)id);
+                has_key_payload = true;
             } else {
                 furi_string_set(item->item_str, instance->tmp_string);
             }
@@ -312,6 +337,7 @@ bool subghz_history_add_to_history(
             data = (data << 8) | key_data[i];
         }
         if(data != 0) {
+            has_key_payload = true;
             if(!(uint32_t)(data >> 32)) {
                 furi_string_printf(
                     item->item_str,
@@ -333,6 +359,39 @@ bool subghz_history_add_to_history(
     } while(false);
 
     furi_string_free(text);
+
+    // Finding #28 dedup: suppress only a byte-identical CONSECUTIVE frame.
+    bool is_duplicate;
+    if(has_key_payload) {
+        // Keyed car/KeeLoq/TPMS frame: compare the full serialized label. A genuine
+        // rolling-code re-press yields a different Key/Id -> different item_str -> kept.
+        is_duplicate = furi_string_equal(item->item_str, instance->code_last_payload);
+    } else {
+        // Name-only (pure RAW / unparsed >64-bit): keep the legacy 8-bit-hash +
+        // <500ms window so distinct RAW captures are not over-suppressed.
+        is_duplicate = raw_recent_dup;
+    }
+
+    if(is_duplicate) {
+        FURI_LOG_D(TAG, "Duplicate payload, skipping");
+        // Roll the just-pushed item back (same sequence as the serialize-fail path,
+        // minus `text` which is already freed above).
+        furi_string_free(item->item_str);
+        furi_string_free(item->preset->name);
+        free(item->preset);
+        flipper_format_free(item->flipper_string);
+        item->type = 0;
+        SubGhzHistoryItemArray_remove_v(
+            instance->history->data,
+            SubGhzHistoryItemArray_size(instance->history->data) - 1,
+            SubGhzHistoryItemArray_size(instance->history->data));
+        return false;
+    }
+
+    if(has_key_payload) {
+        furi_string_set(instance->code_last_payload, item->item_str);
+    }
+
     instance->last_index_write++;
     return true;
 }

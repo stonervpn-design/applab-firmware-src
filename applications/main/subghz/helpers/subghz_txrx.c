@@ -25,7 +25,7 @@
  * the keystore only when it is MISSING or the embedded version is NEWER than the
  * marker — so bumping SUBGHZ_KEELOQ_PROVISION_VERSION syncs every device once, while
  * a user's later edits (marker already current) are preserved across reboots. */
-#define SUBGHZ_KEELOQ_PROVISION_VERSION '3' /* bump when keeloq_mfcodes_user_default changes */
+#define SUBGHZ_KEELOQ_PROVISION_VERSION '4' /* bump when keeloq_mfcodes_user_default changes */
 #define SUBGHZ_KEELOQ_VERSION_FILE      EXT_PATH("subghz/assets/.keeloq_ver")
 static void subghz_txrx_provision_default_keeloq_keys(void) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
@@ -153,6 +153,9 @@ static void subghz_txrx_radio_device_power_off(SubGhzTxRx* instance) {
     if(furi_hal_power_is_otg_enabled()) furi_hal_power_disable_otg();
 }
 
+// Swap `receiver` between the full decoder set and a single named decoder (defined below).
+static void subghz_txrx_receiver_switch(SubGhzTxRx* instance, const char* name);
+
 SubGhzTxRx* subghz_txrx_alloc(void) {
     SubGhzTxRx* instance = malloc(sizeof(SubGhzTxRx));
     bool system_keystore_loaded = false;
@@ -170,7 +173,11 @@ SubGhzTxRx* subghz_txrx_alloc(void) {
     subghz_txrx_hopper_set_state(instance, SubGhzHopperStateOFF);
     subghz_txrx_set_debug_pin_state(instance, false);
 
-    instance->worker = subghz_worker_alloc();
+    // RX worker is LAZY — created on demand in subghz_txrx_rx (rx_start) and freed in
+    // subghz_txrx_stop. It is NOT allocated here so the receiver's ~170 decoders (below)
+    // get the full internal RAM; holding the ~8K worker across receiver creation starved
+    // the decoder allocs, which receiver.c then skips -> saved subs fail to "parse".
+    instance->worker = NULL;
     instance->fff_data = flipper_format_string_alloc();
 
     instance->environment = subghz_environment_alloc();
@@ -189,21 +196,28 @@ SubGhzTxRx* subghz_txrx_alloc(void) {
         instance->environment, SUBGHZ_ALUTECH_AT_4N_DIR_NAME);
     subghz_environment_set_nice_flor_s_rainbow_table_file_name(
         instance->environment, SUBGHZ_NICE_FLOR_S_DIR_NAME);
+    // NOTE: CAME Atomo rainbow-table decryption is NOT implemented in this port —
+    // subghz_environment_set/get_came_atomo_rainbow_table_file_name are stubs (no struct
+    // field) and came_atomo.c never consumes a table, so a setter call here would be a
+    // no-op. It is intentionally omitted. Implementing Atomo rolling-code decrypt (env
+    // field + getter + the cipher in came_atomo.c, mirroring alutech_at_4n) is a separate
+    // task; the /ext/subghz/assets/came_atomo keystore is staged for when it is done.
     subghz_environment_set_protocol_registry(
         instance->environment, (void*)subghz_protocol_registry_active());
     instance->receiver = subghz_receiver_alloc_init(instance->environment);
+    instance->receiver_single_mode = false; // full decoder set until a saved file narrows it
 
-    subghz_worker_set_overrun_callback(
-        instance->worker, (SubGhzWorkerOverrunCallback)subghz_receiver_reset);
-    subghz_worker_set_pair_callback(
-        instance->worker, (SubGhzWorkerPairCallback)subghz_receiver_decode);
-    subghz_worker_set_context(instance->worker, instance->receiver);
+    // Worker callbacks/context are wired in subghz_txrx_reacquire_rx_buffer (lazy, at rx_start).
 
     //set default device External
     subghz_devices_init();
     instance->radio_device_type = SubGhzRadioDeviceTypeInternal;
     instance->radio_device_type =
         subghz_txrx_radio_device_set(instance, SubGhzRadioDeviceTypeExternalCC1101);
+
+    // Lazy RX worker: instance->worker stays NULL here (set above) so SubGhz starts with the
+    // ~8K internal available for the first non-RX scene the user opens (Saved/Spectrum/TX).
+    // subghz_txrx_rx() calls subghz_txrx_reacquire_rx_buffer() to create+wire it on demand.
 
     return instance;
 }
@@ -218,7 +232,11 @@ void subghz_txrx_set_car_mode(SubGhzTxRx* instance, uint8_t mode) {
         instance->environment, (void*)subghz_protocol_registry_active());
     subghz_receiver_free(instance->receiver);
     instance->receiver = subghz_receiver_alloc_init(instance->environment);
-    subghz_worker_set_context(instance->worker, instance->receiver);
+    instance->receiver_single_mode = false; // full set rebuilt for the new registry
+    instance->decoder_result = NULL; // old slot pointers are gone
+    // Worker is lazy; repoint it at the new receiver only if it currently exists (else it
+    // is wired at the next rx reacquire).
+    if(instance->worker) subghz_worker_set_context(instance->worker, instance->receiver);
 }
 
 uint8_t subghz_txrx_get_car_mode(SubGhzTxRx* instance) {
@@ -236,7 +254,7 @@ void subghz_txrx_free(SubGhzTxRx* instance) {
 
     subghz_devices_deinit();
 
-    subghz_worker_free(instance->worker);
+    if(instance->worker) subghz_worker_free(instance->worker); // lazy: may already be freed
     subghz_receiver_free(instance->receiver);
     subghz_environment_free(instance->environment);
     flipper_format_free(instance->fff_data);
@@ -395,6 +413,17 @@ static uint32_t subghz_txrx_rx(SubGhzTxRx* instance, uint32_t frequency) {
     furi_assert(
         instance->txrx_state != SubGhzTxRxStateRx && instance->txrx_state != SubGhzTxRxStateSleep);
 
+    // Live RX needs EVERY decoder. If a prior saved-file view left the receiver in
+    // single-decoder mode, rebuild the full set now (worker is still NULL here — it is
+    // (re)created just below — so the swap is safe). No-op if already full.
+    subghz_txrx_receiver_switch(instance, NULL);
+
+    // Lazy RX worker: (re)create it for this RX session. Idempotent — a no-op if it already
+    // exists (e.g. during hopper cycling, which calls this per hop), so no 8K churn; it only
+    // allocates when RX resumes after the worker was freed (in subghz_txrx_stop / at alloc)
+    // to return internal RAM to other scenes (Saved browser, Spectrum, TX).
+    subghz_txrx_reacquire_rx_buffer(instance);
+
     subghz_devices_idle(instance->radio_device);
 
     uint32_t value = subghz_devices_set_frequency(
@@ -420,7 +449,7 @@ static void subghz_txrx_rx_end(SubGhzTxRx* instance) {
     furi_assert(instance);
     furi_assert(instance->txrx_state == SubGhzTxRxStateRx);
 
-    if(subghz_worker_is_running(instance->worker)) {
+    if(instance->worker && subghz_worker_is_running(instance->worker)) {
         subghz_worker_stop(instance->worker);
         subghz_devices_stop_async_rx(instance->radio_device);
     }
@@ -474,6 +503,12 @@ SubGhzTxRxStartTxState subghz_txrx_tx_start(SubGhzTxRx* instance, FlipperFormat*
             subghz_transmitter_alloc_init(instance->environment, furi_string_get_cstr(temp_str));
 
         if(instance->transmitter) {
+            // Reading "Protocol" above advanced the FlipperFormat cursor. Some protocol
+            // encoder deserializers (e.g. Ford V0) verify the protocol name from the
+            // current position WITHOUT rewinding first, so rewind here — every protocol's
+            // deserialize gets a fresh cursor (rewinding ones are unaffected). Without
+            // this, non-rewinding encoders fail with "Error in protocol parameters".
+            flipper_format_rewind(flipper_format);
             if(subghz_transmitter_deserialize(instance->transmitter, flipper_format) ==
                SubGhzProtocolStatusOk) {
                 if(strcmp(furi_string_get_cstr(preset->name), "") != 0) {
@@ -583,6 +618,35 @@ void subghz_txrx_stop(SubGhzTxRx* instance) {
     default:
         break;
     }
+
+    // Lazy RX worker: RX has fully stopped (scene exit, and the top of rx_start). Free the
+    // worker (~8K internal) so other scenes have room; rx_start's internal rx re-creates it.
+    // The hopper cycles RX via internal rx_end/rx and does NOT come through here (no churn).
+    subghz_txrx_release_rx_buffer(instance);
+}
+
+void subghz_txrx_release_rx_buffer(SubGhzTxRx* instance) {
+    furi_assert(instance);
+    // Free the ENTIRE RX worker (its ~4K thread stack + ~4K capture buffer = ~8K internal)
+    // while it is not needed — e.g. the Saved file browser is open and internal DRAM is
+    // exhausted. Only safe while RX is stopped (which it is in the Saved scene). The 8K is
+    // enough for both the browser's view/struct allocs AND its worker's 4096 stack.
+    if(instance->worker && !subghz_worker_is_running(instance->worker)) {
+        subghz_worker_free(instance->worker);
+        instance->worker = NULL;
+    }
+}
+
+void subghz_txrx_reacquire_rx_buffer(SubGhzTxRx* instance) {
+    furi_assert(instance);
+    if(!instance->worker) {
+        instance->worker = subghz_worker_alloc();
+        subghz_worker_set_overrun_callback(
+            instance->worker, (SubGhzWorkerOverrunCallback)subghz_receiver_reset);
+        subghz_worker_set_pair_callback(
+            instance->worker, (SubGhzWorkerPairCallback)subghz_receiver_decode);
+        subghz_worker_set_context(instance->worker, instance->receiver);
+    }
 }
 
 void subghz_txrx_hopper_update(SubGhzTxRx* instance, float stay_threshold) {
@@ -659,12 +723,65 @@ void subghz_txrx_hopper_pause(SubGhzTxRx* instance) {
     }
 }
 
+// Cross-firmware protocol-name aliases. Other Flipper firmwares label some protocols
+// differently than this fork (combined/renamed decoders). When a .sub's Protocol
+// name isn't registered here, map a known alternate to this fork's name and retry,
+// so external captures LOAD instead of failing "Protocol not found". Extend this
+// table for any new naming mismatch. NOTE: this only bridges NAME differences -- a
+// genuinely different on-air FORMAT still needs its own decoder (e.g. the ProtoPirate
+// 112-bit "Fiat V2" is a real registered decoder, not an alias to "Fiat Multi").
+static const char* subghz_txrx_alias_protocol(const char* name) {
+    static const struct {
+        const char* from;
+        const char* to;
+    } aliases[] = {
+        {"iDo", "iDo 117/111"},
+        {"iDo 117", "iDo 117/111"},
+        {"iDo 111", "iDo 117/111"},
+        {"Telcoma", "Telcoma/Cardin EDGE"},
+        {"Cardin", "Telcoma/Cardin EDGE"},
+        {"Telcoma EDGE", "Telcoma/Cardin EDGE"},
+        {"Cardin EDGE", "Telcoma/Cardin EDGE"},
+    };
+    for(size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
+        if(strcmp(name, aliases[i].from) == 0) return aliases[i].to;
+    }
+    return NULL;
+}
+
+// Swap `receiver` to hold ONLY `name` (RAM-lean, for a known-protocol saved file), or
+// back to the full decoder set (name == NULL). Only safe while no RX worker is live
+// (the worker task reads the receiver); a no-op otherwise. Clears decoder_result because
+// its slot pointers belong to the receiver being freed.
+static void subghz_txrx_receiver_switch(SubGhzTxRx* instance, const char* name) {
+    if(instance->worker) return; // never swap the receiver out from under the RX worker
+    bool want_single = (name != NULL);
+    if(want_single == instance->receiver_single_mode && !want_single) return; // already full
+    if(instance->receiver) subghz_receiver_free(instance->receiver);
+    instance->decoder_result = NULL;
+    instance->receiver = want_single ?
+                             subghz_receiver_alloc_init_single(instance->environment, name) :
+                             subghz_receiver_alloc_init(instance->environment);
+    instance->receiver_single_mode = want_single;
+}
+
 bool subghz_txrx_load_decoder_by_name_protocol(SubGhzTxRx* instance, const char* name_protocol) {
     furi_assert(instance);
     furi_assert(name_protocol);
     bool res = false;
+    // Re-parsing a known-protocol saved file needs exactly this one decoder; drop the
+    // full ~113-decoder set to a single decoder to save internal RAM (no-op during RX).
+    subghz_txrx_receiver_switch(instance, name_protocol);
     instance->decoder_result =
         subghz_receiver_search_decoder_base_by_name(instance->receiver, name_protocol);
+    if(!instance->decoder_result) {
+        // Not found by its stored name -> try a cross-firmware alias before giving up.
+        const char* alias = subghz_txrx_alias_protocol(name_protocol);
+        if(alias) {
+            instance->decoder_result =
+                subghz_receiver_search_decoder_base_by_name(instance->receiver, alias);
+        }
+    }
     if(instance->decoder_result) {
         res = true;
     }

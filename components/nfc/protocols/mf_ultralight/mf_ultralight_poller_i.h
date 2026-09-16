@@ -59,6 +59,7 @@ typedef enum {
     MfUltralightPollerStateReadTearingFlags,
     MfUltralightPollerStateAuth,
     MfUltralightPollerStateAuthMfulC,
+    MfUltralightPollerStateAuthAes,
     MfUltralightPollerStateReadPages,
     MfUltralightPollerStateTryDefaultPass,
     MfUltralightPollerStateCheckMfulCAuthStatus,
@@ -71,6 +72,15 @@ typedef enum {
 
     MfUltralightPollerStateNum,
 } MfUltralightPollerState;
+
+// UL-AES secure-messaging (CMAC) session, established on auth. `active` is set only when the card
+// is found to require CMAC (a plain read/write NAKs right after a successful auth), so a normal
+// (plain) card is never affected. Phase 1 leaves it dormant; used by later secure-messaging code.
+typedef struct {
+    uint8_t session_key[MF_ULTRALIGHT_AES_KEY_SIZE];
+    uint16_t counter; // CmdCtr, reset to 0 on each auth
+    bool active;
+} MfUltralightPollerAesCmac;
 
 struct MfUltralightPoller {
     Iso14443_3aPoller* iso14443_3a_poller;
@@ -92,6 +102,7 @@ struct MfUltralightPoller {
     const MfUltralightData* write_data; // Saved pointer to source data for write phase
     MfUltralightError error;
     mbedtls_des3_context des_context;
+    MfUltralightPollerAesCmac aes_cmac; // UL-AES secure-messaging session (dormant unless active)
 
     NfcGenericEvent general_event;
     MfUltralightPollerEvent mfu_event;
@@ -116,6 +127,14 @@ bool mf_ultralight_poller_ntag_i2c_addr_lin_to_tag(
     uint8_t* pages_left);
 
 MfUltralightError mf_ultralight_poller_authentication_test(MfUltralightPoller* instance);
+
+// UL-AES 3-pass mutual authentication (MF0AES20 §8.6.1). On success the PICC is authenticated and
+// protected pages become readable; the secure-messaging session key + counter are also derived
+// (dormant until aes_cmac.active). Internal to the poller.
+MfUltralightError mf_ultralight_poller_authenticate_aes(
+    MfUltralightPoller* instance,
+    const uint8_t* key,
+    MfUltralightAesKeyType key_type);
 
 #ifdef __cplusplus
 }

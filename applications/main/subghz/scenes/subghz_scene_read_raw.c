@@ -1,4 +1,10 @@
 #include "../subghz_i.h"
+#ifdef BOARD_INCLUDE
+#include BOARD_INCLUDE
+#endif
+#ifdef BOARD_HAS_TILT_NAV
+#include "target_input.h"
+#endif
 #include "../views/subghz_read_raw.h"
 #include "../helpers/subghz_usb_export.h"
 #include <dolphin/dolphin.h>
@@ -382,6 +388,9 @@ bool subghz_scene_read_raw_on_event(void* context, SceneManagerEvent event) {
 
 void subghz_scene_read_raw_on_exit(void* context) {
     SubGhz* subghz = context;
+#ifdef BOARD_HAS_TILT_NAV
+    target_input_set_tilt_nav_suppressed(false);
+#endif
 
     //Stop CC1101
     subghz_txrx_stop(subghz->txrx);

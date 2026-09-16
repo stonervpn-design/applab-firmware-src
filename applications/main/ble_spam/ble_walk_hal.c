@@ -318,6 +318,30 @@ static int ble_gap_event(struct ble_gap_event* event, void* arg) {
             /* Publish: all field writes above must be visible before the reader
              * observes the incremented count. */
             __atomic_store_n(&s_device_count, (uint16_t)(s_device_count + 1), __ATOMIC_RELEASE);
+        } else {
+            /* Table full: evict the weakest-RSSI entry so a later-appearing target
+             * (an Airoha / Fast Pair advertiser) isn't permanently starved by 32
+             * first-seen MACs. Only replace when the newcomer is actually stronger. */
+            int weakest = 0;
+            for(int i = 1; i < s_device_count; i++) {
+                if(s_devices[i].rssi < s_devices[weakest].rssi) weakest = i;
+            }
+            if(d->rssi > s_devices[weakest].rssi) {
+                BleWalkDevice* dev = &s_devices[weakest];
+                memset(dev, 0, sizeof(*dev));
+                memcpy(dev->addr, addr, 6);
+                dev->addr_type = (esp_ble_addr_type_t)d->addr.type;
+                dev->rssi = d->rssi;
+                strncpy(dev->name, parsed_name, 31);
+                dev->name[31] = '\0';
+                if(is_scan_rsp) {
+                    dev->scan_rsp_len = d->length_data > 31 ? 31 : d->length_data;
+                    memcpy(dev->scan_rsp_data, d->data, dev->scan_rsp_len);
+                } else {
+                    dev->adv_data_len = d->length_data > 31 ? 31 : d->length_data;
+                    memcpy(dev->adv_data, d->data, dev->adv_data_len);
+                }
+            }
         }
         break;
     }
@@ -589,8 +613,15 @@ void ble_walk_hal_stop(void) {
 bool ble_walk_hal_start_scan(void) {
     // Preserve the existing device list — the scan keeps populating it. Callers
     // that want a fresh list clear it before calling.
+    // Host may still be syncing on a cold first entry — wait up to ~3s (was 1s),
+    // else ble_gap_disc() returns BLE_HS_ENOTSYNCED, the scan silently never starts,
+    // and the device list stays empty forever (the "sees nothing" symptom).
     if(!s_sync_done) {
-        for(int i = 0; i < 20 && !s_sync_done; i++) furi_delay_ms(50);
+        for(int i = 0; i < 60 && !s_sync_done; i++) furi_delay_ms(50);
+    }
+    if(!s_sync_done) {
+        ESP_LOGE(TAG, "start_scan: BLE host not synced");
+        return false;
     }
 
     struct ble_gap_disc_params disc_params = {0};
@@ -598,11 +629,24 @@ bool ble_walk_hal_start_scan(void) {
     disc_params.window = 0x30; // 30ms
     disc_params.filter_policy = 0; // BLE_HCI_SCAN_FILT_NO_WL (allow all)
     disc_params.limited = 0;
-    disc_params.passive = 0; // active scan (was BLE_SCAN_TYPE_ACTIVE)
+    disc_params.passive = 0; // ACTIVE scan on purpose: collects SCAN_RSP, which the
+                             // WhisperPair FE2C service-data parse needs — do NOT passive-ify
     disc_params.filter_duplicates = 0;
 
     // Scan indefinitely; results and completion arrive via ble_gap_event().
     int rc = ble_gap_disc(s_own_addr_type, BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL);
+    if(rc == BLE_HS_EALREADY) {
+        s_scanning = true; // already discovering (stale scan from a prior scene) — OK
+        return true;
+    }
+    if(rc == BLE_HS_EBUSY) {
+        // Controller still tearing down a just-closed connection (right after a probe).
+        // Cancel any stale discovery and retry once after a short settle so a detector
+        // scene re-entered post-probe doesn't come up with a dead scan.
+        ble_gap_disc_cancel();
+        furi_delay_ms(60);
+        rc = ble_gap_disc(s_own_addr_type, BLE_HS_FOREVER, &disc_params, ble_gap_event, NULL);
+    }
     if(rc != 0) {
         ESP_LOGE(TAG, "ble_gap_disc rc=%d", rc);
         return false;
@@ -622,6 +666,13 @@ void ble_walk_hal_stop_scan(void) {
 
 bool ble_walk_hal_is_scanning(void) {
     return s_scanning;
+}
+
+void ble_walk_hal_clear_devices(void) {
+    // Reset the shared device table so a detector scene starts from a clean slate.
+    // Without this a full/stale table from a prior scene (e.g. Walk's 32 devices)
+    // blocks a fresh Airoha/Fast-Pair advertiser from ever being inserted.
+    __atomic_store_n(&s_device_count, 0, __ATOMIC_RELEASE);
 }
 
 BleWalkDevice* ble_walk_hal_get_devices(uint16_t* count) {

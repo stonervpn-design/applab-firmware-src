@@ -19,12 +19,6 @@
 
 #define TAG "HondaV7"
 
-static inline uint8_t popcount8(uint8_t x) {
-    x = x - ((x >> 1) & 0x55);
-    x = (x & 0x33) + ((x >> 2) & 0x33);
-    return (x + (x >> 4)) & 0x0F;
-}
-
 static inline uint8_t hv7_bit_rev8(uint8_t v) {
     v = (uint8_t)(((v & 0xF0u) >> 4) | ((v & 0x0Fu) << 4));
     v = (uint8_t)(((v & 0xCCu) >> 2) | ((v & 0x33u) << 2));
@@ -205,7 +199,9 @@ static void ook_decoder_reset_state(SubGhzProtocolDecoderHondaV7* inst) {
 }
 
 static bool ook_validate_frame(SubGhzProtocolDecoderHondaV7* inst) {
-    if(inst->bit_count < HV7_MIN_BITS) return false;
+    /* Strict: require the full frame, not merely HV7_MIN_BITS. The burst train
+     * repeats so a clean full-length frame always arrives. */
+    if(inst->bit_count < HV7_FRAME_BITS) return false;
 
     uint8_t natural[HV7_FRAME_BYTES] = {0};
     uint8_t num_bytes = (inst->bit_count + 7u) / 8u;
@@ -230,10 +226,10 @@ static bool ook_validate_frame(SubGhzProtocolDecoderHondaV7* inst) {
     if(f.button == 0 || f.button > HV7_BTN_UNLOCK2)    return false;
     if(f.serial == 0 || f.serial == 0x0FFFFFFFu)        return false;
 
+    /* Strict: require an exact checksum match. The previous 1-bit tolerance let
+     * a foreign frame whose checksum landed within Hamming-distance 1 through. */
     uint8_t xchk = ook_checksum(natural);
-    if(xchk != natural[8]) {
-        if(popcount8(xchk ^ natural[8]) > 1) return false;
-    }
+    if(xchk != natural[8]) return false;
 
     inst->frame       = f;
     inst->frame_valid = true;

@@ -55,6 +55,11 @@ void subghz_view_receiver_add_item_to_menu(
     const char* time,
     uint8_t type);
 
+void subghz_view_receiver_mark_item_fired(
+    SubGhzViewReceiver* subghz_receiver,
+    uint16_t idx,
+    bool fired);
+
 uint16_t subghz_view_receiver_get_idx_menu(SubGhzViewReceiver* subghz_receiver);
 
 void subghz_view_receiver_set_idx_menu(SubGhzViewReceiver* subghz_receiver, uint16_t idx);

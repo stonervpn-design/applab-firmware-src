@@ -360,12 +360,28 @@ void wlan_app_portal_views_restore(WlanApp* app) {
 /* Flush + unmount the SD so no captured data (pcaps, creds, passwords) or
  * settings write is lost, THEN soft-reset. The reset hands the BLE controller
  * RAM (released for WiFi) back for the next boot so Bluetooth works again. */
+// esp_restart() internally stops WiFi (esp_wifi_stop), which reads pthread
+// thread-local storage. furi threads store their FuriThread* in TLS slot 0 --
+// the same slot ESP-IDF pthread/lwIP use -- so calling esp_restart() from this
+// furi thread while WiFi is up crashes (LoadProhibited in find_value /
+// pthread_getspecific). Run it on the wlan worker (a raw task with clean TLS)
+// so the intended reboot is a clean restart rather than a panic.
+static void wlan_app_do_restart(void* arg) {
+    UNUSED(arg);
+    esp_restart();
+}
+
 static void wlan_app_flush_and_reset(void) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
     storage_sd_unmount(storage);
     furi_record_close(RECORD_STORAGE);
     furi_delay_ms(100); // let the unmount + any logs settle
-    esp_restart();
+    // WiFi is up here, so restart via the worker to avoid the TLS crash. If the
+    // worker never started (WiFi not inited), esp_wifi_stop is a no-op and a
+    // direct restart is safe.
+    if(!wlan_hal_run_in_worker(wlan_app_do_restart, NULL)) {
+        esp_restart();
+    }
 }
 
 int32_t wlan_app(void* args) {

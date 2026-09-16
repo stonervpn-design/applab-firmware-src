@@ -8,12 +8,17 @@
 #include <gui/modules/widget.h>
 #include <dialogs/dialogs.h>
 #include <storage/storage.h>
+#include <gui/modules/variable_item_list.h>
+#include <esp_wifi.h>
 
 #include "views/nrf24_spectrum_view.h"
 #include "views/nrf24_jam_view.h"
+#include "views/nrf24_scan_view.h"
 #include "views/nrf24_mj_scan_view.h"
 #include "views/nrf24_mj_attack_view.h"
 #include "helpers/nrf24_mj_core.h"
+#include "helpers/nrf24_channel_source.h"
+#include "helpers/nrf24_jam_config.h"
 #include "scenes/scenes.h"
 
 typedef enum {
@@ -21,9 +26,13 @@ typedef enum {
     Nrf24ViewWidget,
     Nrf24ViewSpectrum,
     Nrf24ViewJam,
+    Nrf24ViewScan,
+    Nrf24ViewJamConfig,
     Nrf24ViewMjScan,
     Nrf24ViewMjAttack,
 } Nrf24View;
+
+#define NRF24_WIFI_SCAN_MAX 24
 
 typedef struct Nrf24App {
     Gui* gui;
@@ -31,13 +40,23 @@ typedef struct Nrf24App {
     ViewDispatcher* view_dispatcher;
     Submenu* submenu;
     Widget* widget;
+    VariableItemList* var_item_list;
     DialogsApp* dialogs;
     Storage* storage;
 
     View* spectrum_view;
-    View* jam_view; /* mode-select jammer */
+    View* jam_view; /* unified jam engine (Sor3nt) */
+    View* scan_view; /* activity-scan progress */
     View* mj_scan_view;
     View* mj_attack_view;
+
+    /* Unified jammer selection / scan-cache state (Sor3nt jammer) */
+    Nrf24JamState jam;
+    wifi_ap_record_t* wifi_aps;
+    uint16_t wifi_ap_count;
+    char selected_wifi_ssid[33];
+    uint8_t selected_wifi_channel;
+    bool wifi_was_paused;
 
     /* MouseJacker shared state (owned by the mj scenes) */
     MjTarget mj_targets[MJ_MAX_TARGETS];

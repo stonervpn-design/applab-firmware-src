@@ -134,3 +134,11 @@ void pp_encoder_buffer_ensure(void* context, size_t capacity);
 LevelDuration* pp_shared_upload_buffer(void);
 size_t pp_shared_upload_capacity(void);
 void pp_shared_upload_release(void);
+
+/* Anti-phantom guard: true if the low `nbytes` (1..8) bytes of `v` are a
+ * degenerate/low-entropy pattern -- all-zero, all-0xFF, all-same-byte, or a
+ * short repeating byte tile of period 2..4. A regular PWM/PPM or preamble/clock
+ * lock demodulates to exactly such a pattern (e.g. 0xAAAA..., 0x2492492...,
+ * 0xB6DB6D...), so a decoder that has no CRC to check should reject a payload
+ * that trips this. Real rolling/RKE payloads are high-entropy and never do. */
+bool pp_value_is_degenerate(uint64_t v, uint8_t nbytes);

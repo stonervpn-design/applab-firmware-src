@@ -17,7 +17,10 @@ extern "C" {
 #define TPMS_NO_BATT 0xFF
 
 #define TPMS_KEY_FILE_VERSION 1
-#define TPMS_KEY_FILE_TYPE    "Flipper Tire Pressure Monitoring System Key File"
+// MUST match SUBGHZ_KEY_FILE_TYPE in lib/subghz/types.h so saved TPMS .sub files
+// load through the standard SubGhz key loader (subghz_key_load) for replay. The
+// old TPMS-specific string was rejected by the loader ("Type or version mismatch").
+#define TPMS_KEY_FILE_TYPE    "Flipper SubGhz Key File"
 
 typedef struct TPMSBlockGeneric TPMSBlockGeneric;
 

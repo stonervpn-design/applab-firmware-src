@@ -409,21 +409,34 @@ static void toyota_v0_build_upload(SubGhzProtocolEncoderToyotaV0* instance) {
         instance->encoder.upload[index++] = level_duration_make(false, te_s);
     }
 
-    // Manchester-encode 192 bits: 96 data bits + 96 complement bits
-    uint8_t manchester_state = ManchesterStateMid1;
+    // Manchester-encode 192 bits: 96 data bits + 96 complement bits.
+    // The decoder records the trigger LONG's level as bit0 and reads back (1-b) per
+    // slot, so feed the COMPLEMENT of each data bit to recover the TRUE key (feeding
+    // the key directly emitted the bitwise-complement frame -> wrong clone). Also
+    // force bit0 to a clean trigger LONG so an MSB==1 key's first bit cannot merge
+    // with the preamble's trailing short pair (which killed sync -> FAIL-redecode).
+    bool first_bit = toyota_v0_get_data_bit(instance, 0);
+    uint8_t manchester_state;
+    if(first_bit) {
+        manchester_state = ManchesterStateMid1; // !bit0==0 -> (true,long) HIGH trigger, no merge
+    } else {
+        instance->encoder.upload[index++] = level_duration_make(true, te_s); // pad preamble to end HIGH
+        manchester_state = ManchesterStateMid0; // !bit0==1 -> (false,long) LOW trigger, no merge
+    }
 
     for(int i = 0; i < TOYOTA_V0_FRAME_BITS; i++) {
         bool b;
         if(i < TOYOTA_V0_DATA_BITS) {
-            b = toyota_v0_get_data_bit(instance, i);
+            b = !toyota_v0_get_data_bit(instance, i);
         } else if(i < 96) {
             // 8-bit zero gap between data and complement. The decoder checks
             // all_bits[i] ^ all_bits[i+96] over data bits 0..87, so the complement
             // must start at frame offset 96 (88 data + 8 gap), not contiguously at 88.
             b = 0;
         } else {
-            // Complement of data bit (i-96) so decoder's data[i]^comp[i+96] == 1.
-            b = !toyota_v0_get_data_bit(instance, i - 96);
+            // Data bits are now fed inverted, so feed the key bit directly here to
+            // keep the decoder's data[i]^comp[i+96] == 1 complement check satisfied.
+            b = toyota_v0_get_data_bit(instance, i - 96);
         }
 
         switch(manchester_state) {

@@ -662,6 +662,28 @@ SubGhzProtocolStatus subghz_protocol_decoder_land_rover_v0_deserialize(
     return ret;
 }
 
+#define LAND_ROVER_V0_PREDICT_COUNT 3
+
+// Rebuild the byte-correct 64-bit frame key for an arbitrary cleartext counter.
+// Mirrors land_rover_v0_build_key() (which lives under ENABLE_EMULATE_FEATURE) so
+// the predictor stays available unconditionally, reusing the unguarded parity check.
+static uint64_t land_rover_v0_predict_key(uint32_t signature, uint32_t serial, uint32_t count) {
+    uint8_t key_bytes[8] = {0};
+    key_bytes[0] = (uint8_t)((signature >> 16) & 0xFFU);
+    key_bytes[1] = (uint8_t)((signature >> 8) & 0xFFU);
+    key_bytes[2] = (uint8_t)(signature & 0xFFU);
+    key_bytes[3] = (uint8_t)((serial >> 16) & 0xFFU);
+    key_bytes[4] = (uint8_t)((serial >> 8) & 0xFFU);
+    key_bytes[5] = (uint8_t)(serial & 0xFFU);
+    key_bytes[6] = (uint8_t)((count >> 1) & 0xFFU);
+
+    const bool counter_lsb = (count & 1U) != 0;
+    const uint8_t check = land_rover_v0_calculate_check(count);
+    key_bytes[7] = (counter_lsb ? 0x80U : 0x00U) | check;
+
+    return pp_bytes_to_u64_be(key_bytes);
+}
+
 void subghz_protocol_decoder_land_rover_v0_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderLandRoverV0* instance = context;
@@ -685,6 +707,19 @@ void subghz_protocol_decoder_land_rover_v0_get_string(void* context, FuriString*
         instance->check_ok ? "OK" : "BAD",
         (unsigned long)(((instance->tail >> 15) & 1U) ? 0x1FFFFUL : 0x0FFFFUL),
         instance->tail_ok ? "OK" : "BAD");
+
+    // Next-code predictor: the counter is cleartext and both integrity fields
+    // (3-bit check, 16-bit tail) are pure linear-parity functions of the counter
+    // recomputed here, so cnt+i frames are exact. Only meaningful when a valid
+    // frame with a known button signature is present (serial/cnt populated).
+    if(instance->command_signature != 0U) {
+        for(uint32_t i = 1; i <= LAND_ROVER_V0_PREDICT_COUNT; i++) {
+            const uint32_t next_count = (instance->count + i) & 0x1FFU;
+            const uint64_t next_key = land_rover_v0_predict_key(
+                instance->command_signature, instance->serial, next_count);
+            furi_string_cat_printf(output, "\r\nNext+%lu:%016llX", (unsigned long)i, (unsigned long long)next_key);
+        }
+    }
 }
 
 #ifdef ENABLE_EMULATE_FEATURE

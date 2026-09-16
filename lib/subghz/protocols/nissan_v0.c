@@ -103,7 +103,10 @@ const SubGhzProtocolEncoder subghz_protocol_nissan_v0_encoder = {
 const SubGhzProtocol subghz_protocol_nissan_v0 = {
     .name = SUBGHZ_PROTOCOL_NISSAN_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
-    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM | SubGhzProtocolFlag_Decodable |
+    // [FP-FIX 2026-09-14] Decodable dropped: payload is fully encrypted (serial/btn/cnt
+    // all 0 -> no useful live decode) and the 12-bit sync searched at every offset
+    // false-positives on noise and Nice-One remotes. Load/Save/Send keep replay working.
+    .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM |
             SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_nissan_v0_decoder,
     .encoder = &subghz_protocol_nissan_v0_encoder,

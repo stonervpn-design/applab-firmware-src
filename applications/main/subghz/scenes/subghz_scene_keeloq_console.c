@@ -146,7 +146,7 @@ static void subghz_scene_keeloq_console_generate_callback(void* context, uint32_
         KeeloqFamily fam = subghz_keeloq_console_sections[s].family;
         for
             M_EACH(key, *data, SubGhzKeyArray_t) {
-                const char* name = furi_string_get_cstr(key->name);
+                const char* name = key->name;
                 KeeloqTypeInfo info = subghz_keeloq_registry_type_info(key->type, name);
                 if(!info.encodable || info.family != fam) {
                     continue;
@@ -209,7 +209,7 @@ static void subghz_scene_keeloq_console_decode_callback(void* context, uint32_t 
     const char* found_name = NULL;
     for
         M_EACH(key, *data, SubGhzKeyArray_t) {
-            const char* name = furi_string_get_cstr(key->name);
+            const char* name = key->name;
             KeeloqTypeInfo info = subghz_keeloq_registry_type_info(key->type, name);
             if(info.encodable) {
                 continue;
@@ -279,7 +279,7 @@ void subghz_scene_keeloq_console_on_enter(void* context) {
         bool header_added = false;
         for
             M_EACH(key, *data, SubGhzKeyArray_t) {
-                const char* name = furi_string_get_cstr(key->name);
+                const char* name = key->name;
                 KeeloqTypeInfo info = subghz_keeloq_registry_type_info(key->type, name);
                 if(!info.encodable || info.family != fam) {
                     continue;
@@ -308,7 +308,7 @@ void subghz_scene_keeloq_console_on_enter(void* context) {
     bool decode_header_added = false;
     for
         M_EACH(key, *data, SubGhzKeyArray_t) {
-            const char* name = furi_string_get_cstr(key->name);
+            const char* name = key->name;
             KeeloqTypeInfo info = subghz_keeloq_registry_type_info(key->type, name);
             if(info.encodable) {
                 continue;

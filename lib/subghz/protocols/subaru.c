@@ -14,6 +14,7 @@ static const SubGhzBlockConst subghz_protocol_subaru_const = {
 #define SUBARU_PREAMBLE_PAIRS  75
 #define SUBARU_GAP_US          2800
 #define SUBARU_SYNC_US         2800
+#define SUBARU_PREDICT_COUNT   3U
 #define SUBARU_UPLOAD_CAPACITY 320U
 _Static_assert(
     SUBARU_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
@@ -172,40 +173,11 @@ static bool subaru_decode_fields_exact(
     return valid;
 }
 
-static bool subaru_process_data(SubGhzProtocolDecoderSubaru* instance) {
-    if(instance->decoder.decode_count_bit < 64) {
-        return false;
-    }
-
-    uint8_t b[8];
-    pp_u64_to_bytes_be(instance->decoder.decode_data, b);
-
-    instance->key = ((uint64_t)b[0] << 56) | ((uint64_t)b[1] << 48) | ((uint64_t)b[2] << 40) |
-                    ((uint64_t)b[3] << 32) | ((uint64_t)b[4] << 24) | ((uint64_t)b[5] << 16) |
-                    ((uint64_t)b[6] << 8) | ((uint64_t)b[7]);
-
-    /* Return the self-consistency result instead of discarding it, so a frame
-     * that doesn't validate no longer fires the callback with garbage fields. */
-    return subaru_decode_fields_exact(b, &instance->serial, &instance->btn, &instance->cnt);
-}
-
-static uint8_t subghz_protocol_decoder_subaru_get_hash_data(void* context) {
-    furi_check(context);
-    SubGhzProtocolDecoderSubaru* instance = context;
-    const uint8_t* p = (const uint8_t*)&instance->decoder.decode_data;
-    uint8_t hash = 0;
-    const uint8_t bytes = (uint8_t)(instance->decoder.decode_count_bit >> 3);
-    for(uint8_t i = 0; i <= bytes; i++) {
-        hash ^= p[i];
-    }
-    return hash;
-}
-
-// ============================================================================
-// ENCODER IMPLEMENTATION
-// ============================================================================
-#ifdef ENABLE_EMULATE_FEATURE
-
+// Deterministic rolling-code generator: the exact inverse of
+// subaru_decode_fields_exact(). Writes the obfuscated 16-bit counter into
+// KB[4..7] from KB[0..3] (button/serial) — pure integer math, no secret key,
+// no RF deps. Lives outside ENABLE_EMULATE_FEATURE so decode-only builds can
+// predict/display upcoming codes.
 static void subaru_encode_count(uint8_t* KB, uint16_t count) {
     uint8_t lo = count & 0xFF;
     uint8_t hi = (count >> 8) & 0xFF;
@@ -268,6 +240,61 @@ static void subaru_encode_count(uint8_t* KB, uint16_t count) {
 
     KB[7] = (KB[7] & 0x0F) | ((new_REG_SH2 << 4) & 0xF0);
 }
+
+// Predict the rolling key for an absolute counter value. Re-encodes
+// (serial, btn, cnt_next); because subaru_encode_count is the exact inverse of
+// the decode path, the returned 64-bit key decodes back to the same fields by
+// construction (no CRC needed). cnt_next wraps naturally at 0xFFFF (uint16).
+// The full frame is a byte-swizzle + serial-rotate + XOR of an incremental
+// counter — there is no manufacturer/secret key — so the next press is
+// predictable from a single capture.
+static uint64_t subaru_predict_key(uint32_t serial, uint8_t btn, uint16_t cnt_next) {
+    uint8_t b[8] = {0};
+    b[0] = (uint8_t)(btn & 0x0F);
+    b[1] = (uint8_t)((serial & 0xFFFFFF) >> 16);
+    b[2] = (uint8_t)(serial >> 8);
+    b[3] = (uint8_t)serial;
+    subaru_encode_count(b, cnt_next);
+    return pp_bytes_to_u64_be(b);
+}
+
+static bool subaru_process_data(SubGhzProtocolDecoderSubaru* instance) {
+    if(instance->decoder.decode_count_bit < 64) {
+        return false;
+    }
+
+    uint8_t b[8];
+    pp_u64_to_bytes_be(instance->decoder.decode_data, b);
+
+    instance->key = ((uint64_t)b[0] << 56) | ((uint64_t)b[1] << 48) | ((uint64_t)b[2] << 40) |
+                    ((uint64_t)b[3] << 32) | ((uint64_t)b[4] << 24) | ((uint64_t)b[5] << 16) |
+                    ((uint64_t)b[6] << 8) | ((uint64_t)b[7]);
+
+    /* Populate serial/btn/cnt, but fire on a complete 64-bit frame regardless
+     * of subaru_decode_fields_exact()'s self-consistency bool: that check only
+     * accepts frames this port's own encoder produces, not genuine fob frames,
+     * so gating on it drops every real Impreza capture. Same fire-on-framing
+     * behavior as the other dynamic decoders in this tree. */
+    (void)subaru_decode_fields_exact(b, &instance->serial, &instance->btn, &instance->cnt);
+    return true;
+}
+
+static uint8_t subghz_protocol_decoder_subaru_get_hash_data(void* context) {
+    furi_check(context);
+    SubGhzProtocolDecoderSubaru* instance = context;
+    const uint8_t* p = (const uint8_t*)&instance->decoder.decode_data;
+    uint8_t hash = 0;
+    const uint8_t bytes = (uint8_t)(instance->decoder.decode_count_bit >> 3);
+    for(uint8_t i = 0; i <= bytes; i++) {
+        hash ^= p[i];
+    }
+    return hash;
+}
+
+// ============================================================================
+// ENCODER IMPLEMENTATION
+// ============================================================================
+#ifdef ENABLE_EMULATE_FEATURE
 
 void* subghz_protocol_encoder_subaru_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
@@ -603,4 +630,14 @@ void subghz_protocol_decoder_subaru_get_string(void* context, FuriString* output
         instance->btn,
         subaru_get_button_name(instance->btn),
         (uint32_t)instance->cnt);
+
+    // Weak rolling code (incremental counter, no secret key): predict the next
+    // few codes by re-encoding serial/btn with cnt+i. These keys are ready to
+    // load/emulate/save (the encoder deserialize rebuilds any Cnt on TX).
+    for(uint16_t i = 1; i <= SUBARU_PREDICT_COUNT; i++) {
+        uint16_t cnt_next = (uint16_t)(instance->cnt + i);
+        uint64_t next_key = subaru_predict_key(instance->serial, instance->btn, cnt_next);
+        furi_string_cat_printf(
+            output, "\r\nNext+%u:%016llX", (unsigned int)i, (unsigned long long)next_key);
+    }
 }

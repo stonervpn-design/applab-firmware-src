@@ -761,7 +761,7 @@ SubGhzProtocolStatus
         pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, NULL);
         instance->generic.serial = serial;
         instance->generic.btn = (uint8_t)btn;
-        instance->generic.cnt = (uint16_t)cnt;
+        instance->generic.cnt = cnt; // full 32-bit sync counter (was truncated to uint16_t)
         if(flipper_format_read_uint32(flipper_format, "Fx", &temp, 1)) {
             instance->fx_field = (uint8_t)temp;
         }

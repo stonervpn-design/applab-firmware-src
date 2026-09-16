@@ -67,7 +67,11 @@ struct SubGhzProtocolDecoderLdvV0 {
     uint16_t preamble_count;
     ManchesterState manchester_saved_state;
     bool last_bit_value;
-    uint64_t data_2; // second 64 bits of 128-bit frame
+    uint64_t data_2; // RESULT: second 64 bits of the last COMPLETED frame (read by
+                     // serialize/get_string/extract_fields). Mirrors generic.data.
+    uint64_t decode_data_2; // WORKING accumulator for bits 64-127 (mirrors decode_data);
+                            // committed into data_2 only when a frame completes, so a
+                            // trailing/partial frame can't wipe the last decoded value.
 };
 
 struct SubGhzProtocolEncoderLdvV0 {
@@ -129,7 +133,7 @@ const SubGhzProtocol subghz_protocol_ldv_v0 = {
     .name = SUBGHZ_PROTOCOL_LDV_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
+            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
 
     .decoder = &subghz_protocol_ldv_v0_decoder,
     .encoder = &subghz_protocol_ldv_v0_encoder,
@@ -394,6 +398,7 @@ void subghz_protocol_decoder_ldv_v0_reset(void* context) {
     instance->decoder.decode_data = 0;
     instance->decoder.decode_count_bit = 0;
     instance->data_2 = 0;
+    instance->decode_data_2 = 0;
 }
 
 // ============================================================================
@@ -453,7 +458,7 @@ void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t dur
             instance->preamble_count = 0;
             instance->decoder.decode_data = 0;
             instance->decoder.decode_count_bit = 0;
-            instance->data_2 = 0;
+            instance->decode_data_2 = 0; // working var only; data_2 (result) preserved
             instance->decoder.parser_step = LdvV0StepPreamble;
             manchester_advance(
                 instance->manchester_saved_state,
@@ -497,7 +502,7 @@ void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t dur
                         // Enough preamble, transition to data collection
                         instance->decoder.decode_data = 0;
                         instance->decoder.decode_count_bit = 0;
-                        instance->data_2 = 0;
+                        instance->decode_data_2 = 0; // working var only; data_2 (result) preserved
                         instance->decoder.parser_step = LdvV0StepData;
                         FURI_LOG_D(TAG, "Sync after %d preamble bits", instance->preamble_count);
                     } else {
@@ -517,6 +522,7 @@ void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t dur
                subghz_protocol_ldv_v0_const.min_count_bit_for_found) {
                 instance->generic.data = instance->decoder.decode_data;
                 instance->generic.data_count_bit = instance->decoder.decode_count_bit;
+                instance->data_2 = instance->decode_data_2; // commit high 64 bits to the result
                 subghz_protocol_ldv_v0_extract_fields(instance);
 
                 if(subghz_protocol_ldv_v0_frame_valid(instance) && instance->base.callback)
@@ -544,14 +550,16 @@ void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t dur
                     instance->decoder.decode_data =
                         (instance->decoder.decode_data << 1) | data;
                 } else {
-                    instance->data_2 = (instance->data_2 << 1) | data;
+                    instance->decode_data_2 = (instance->decode_data_2 << 1) | data;
                 }
                 instance->decoder.decode_count_bit++;
 
                 if(instance->decoder.decode_count_bit == 128) {
-                    // Full frame received
+                    // Full frame received — commit both halves to the RESULT fields (mirrors
+                    // generic.data). data_2 now survives any trailing/partial frame that follows.
                     instance->generic.data = instance->decoder.decode_data;
                     instance->generic.data_count_bit = 128;
+                    instance->data_2 = instance->decode_data_2;
 
                     // Extract fields
                     subghz_protocol_ldv_v0_extract_fields(instance);
@@ -561,7 +569,12 @@ void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t dur
 
                     instance->decoder.decode_data = 0;
                     instance->decoder.decode_count_bit = 0;
-                    instance->data_2 = 0;
+                    // Do NOT reset data_2 here: unlike generic.data (which has a separate
+                    // decode_data working var), data_2 IS the field that serialize()/get_string()
+                    // read AFTER this callback returns. Zeroing it now loses the frame's second
+                    // 64 bits (Key_2) -> a saved/cloned LDV frame decodes as Key2:0 [ERR] and
+                    // never round-trips. The next frame's Reset-step trigger re-zeros data_2
+                    // before it accumulates, so keeping the decoded value here is safe.
                     instance->decoder.parser_step = LdvV0StepReset;
                 }
             }

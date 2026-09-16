@@ -9,6 +9,7 @@
 #include <flipper_format/flipper_format.h>
 #include <flipper_format/flipper_format_i.h>
 #include <string.h>
+#include <stdio.h> // TEMP DIAGNOSTIC: snprintf for parse-reason dialog
 
 #define TAG "SubGhz"
 
@@ -128,6 +129,10 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
     FuriString* temp_str = furi_string_alloc();
     uint32_t temp_data32;
 
+    // TEMP DIAGNOSTIC (remove after RCA): which ParseErr break fired + decoder load counts.
+    const char* parse_why = "open";
+    extern uint16_t g_subghz_dbg_loaded, g_subghz_dbg_decodable;
+
     do {
         stream_clean(fff_data_stream);
         if(!flipper_format_file_open_existing(fff_data_file, file_path)) {
@@ -137,6 +142,7 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
 
         if(!flipper_format_read_header(fff_data_file, temp_str, &temp_data32)) {
             FURI_LOG_E(TAG, "Missing or incorrect header");
+            parse_why = "hdr";
             break;
         }
 
@@ -145,12 +151,14 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
            temp_data32 == SUBGHZ_KEY_FILE_VERSION) {
         } else {
             FURI_LOG_E(TAG, "Type or version mismatch");
+            parse_why = "ver";
             break;
         }
 
         //Load frequency
         if(!flipper_format_read_uint32(fff_data_file, "Frequency", &temp_data32, 1)) {
             FURI_LOG_E(TAG, "Missing Frequency");
+            parse_why = "freqfld";
             break;
         }
 
@@ -171,12 +179,14 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
         //Load preset
         if(!flipper_format_read_string(fff_data_file, "Preset", temp_str)) {
             FURI_LOG_E(TAG, "Missing Preset");
+            parse_why = "presetfld";
             break;
         }
 
         furi_string_set_str(
             temp_str, subghz_txrx_get_preset_name(subghz->txrx, furi_string_get_cstr(temp_str)));
         if(!strcmp(furi_string_get_cstr(temp_str), "")) {
+            parse_why = "preset0";
             break;
         }
         SubGhzSetting* setting = subghz_txrx_get_setting(subghz->txrx);
@@ -189,6 +199,7 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
             if(!subghz_setting_load_custom_preset(
                    setting, furi_string_get_cstr(temp_str), fff_data_file)) {
                 FURI_LOG_E(TAG, "Missing Custom preset");
+            parse_why = "custom";
                 break;
             }
         }
@@ -211,6 +222,7 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
         //Load protocol
         if(!flipper_format_read_string(fff_data_file, "Protocol", temp_str)) {
             FURI_LOG_E(TAG, "Missing Protocol");
+            parse_why = "protofld";
             break;
         }
 
@@ -237,6 +249,7 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
             }
         } else {
             FURI_LOG_E(TAG, "Protocol not found");
+            parse_why = "notfound";
             break;
         }
 
@@ -250,7 +263,16 @@ bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog) {
     switch(load_key_state) {
     case SubGhzLoadKeyStateParseErr:
         if(show_dialog) {
-            dialog_message_show_storage_error(subghz->dialogs, "Cannot parse\nfile");
+            // TEMP DIAGNOSTIC (remove after RCA): show exact break + decoder load counts.
+            static char pbuf[64];
+            snprintf(
+                pbuf,
+                sizeof(pbuf),
+                "Cannot parse\n%s  d=%u/%u",
+                parse_why,
+                (unsigned)g_subghz_dbg_loaded,
+                (unsigned)g_subghz_dbg_decodable);
+            dialog_message_show_storage_error(subghz->dialogs, pbuf);
         }
         return false;
     case SubGhzLoadKeyStateProtocolDescriptionErr:

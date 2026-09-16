@@ -673,6 +673,16 @@ static bool sd_prepare_card(void) {
 
     fatfs_init();
     sd_register_fatfs_diskio();
+
+    /* Pre-reserve the DMA bounce buffer NOW, at boot, while internal DRAM is still
+     * plentiful. Deferring it to the first PSRAM-destination read makes it compete
+     * with the SubGHz app (40 presets + keystore) for the last few KB of internal
+     * RAM and fail -> ESP_ERR_NO_MEM -> FatFS retry spin -> task_wdt hang. It is
+     * persistent (never freed), so grabbing it here is free and cannot fail at boot. */
+    if(!sd_ensure_bounce_buf()) {
+        ESP_LOGW(TAG, "SD bounce buffer not reserved at init; will retry lazily");
+    }
+
     sd_initialized = true;
 
     sdmmc_card_print_info(stdout, sd_card);

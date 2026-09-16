@@ -8,11 +8,16 @@
 
 typedef enum {
     SubGhzSceneCarKeysNewCapture,
+    SubGhzSceneCarKeysCarPicker,
     SubGhzSceneCarKeysGarage,
     SubGhzSceneCarKeysVulns,
     SubGhzSceneCarKeysRollBack,
     SubGhzSceneCarKeysToolkit,
     SubGhzSceneCarKeysKeeloqConsole,
+    SubGhzSceneCarKeysHitag2Crack,
+    SubGhzSceneCarKeysGenieRecord,
+    SubGhzSceneCarKeysVulnScan,
+    SubGhzSceneCarKeysVulnReport,
 } SubGhzSceneCarKeysIndex;
 
 static void subghz_scene_car_keys_submenu_callback(void* context, uint32_t index) {
@@ -36,6 +41,12 @@ void subghz_scene_car_keys_on_enter(void* context) {
         subghz);
     submenu_add_item(
         subghz->submenu,
+        "Car Picker (freq/mod)",
+        SubGhzSceneCarKeysCarPicker,
+        subghz_scene_car_keys_submenu_callback,
+        subghz);
+    submenu_add_item(
+        subghz->submenu,
         "My Garage",
         SubGhzSceneCarKeysGarage,
         subghz_scene_car_keys_submenu_callback,
@@ -44,6 +55,18 @@ void subghz_scene_car_keys_on_enter(void* context) {
         subghz->submenu,
         "Vehicle Vulns",
         SubGhzSceneCarKeysVulns,
+        subghz_scene_car_keys_submenu_callback,
+        subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "Vuln Scan (assess)",
+        SubGhzSceneCarKeysVulnScan,
+        subghz_scene_car_keys_submenu_callback,
+        subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "Vuln Report",
+        SubGhzSceneCarKeysVulnReport,
         subghz_scene_car_keys_submenu_callback,
         subghz);
     submenu_add_item(
@@ -64,6 +87,18 @@ void subghz_scene_car_keys_on_enter(void* context) {
         SubGhzSceneCarKeysKeeloqConsole,
         subghz_scene_car_keys_submenu_callback,
         subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "HITAG2 Crack (dict)",
+        SubGhzSceneCarKeysHitag2Crack,
+        subghz_scene_car_keys_submenu_callback,
+        subghz);
+    submenu_add_item(
+        subghz->submenu,
+        "Genie Recorder",
+        SubGhzSceneCarKeysGenieRecord,
+        subghz_scene_car_keys_submenu_callback,
+        subghz);
 
     submenu_set_selected_item(
         subghz->submenu,
@@ -82,11 +117,26 @@ bool subghz_scene_car_keys_on_event(void* context, SceneManagerEvent event) {
             subghz_txrx_set_car_mode(subghz->txrx, 1);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiver);
             return true;
+        case SubGhzSceneCarKeysCarPicker:
+            // Pick make/model -> set the correct capture frequency + modulation.
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneCarPicker);
+            return true;
         case SubGhzSceneCarKeysGarage:
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneGarage);
             return true;
         case SubGhzSceneCarKeysVulns:
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneVulnMakes);
+            return true;
+        case SubGhzSceneCarKeysVulnScan:
+            // Capture-then-assess: car decoders on + vuln_scan_mode so opening a
+            // captured signal routes to Vuln Assess instead of the info view.
+            subghz_rx_key_state_set(subghz, SubGhzRxKeyStateIDLE);
+            subghz_txrx_set_car_mode(subghz->txrx, 1);
+            subghz->vuln_scan_mode = true;
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneReceiver);
+            return true;
+        case SubGhzSceneCarKeysVulnReport:
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneVulnReport);
             return true;
         case SubGhzSceneCarKeysRollBack:
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneRollbackCapture);
@@ -96,6 +146,12 @@ bool subghz_scene_car_keys_on_event(void* context, SceneManagerEvent event) {
             return true;
         case SubGhzSceneCarKeysKeeloqConsole:
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneKeeloqConsole);
+            return true;
+        case SubGhzSceneCarKeysHitag2Crack:
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneHitag2Crack);
+            return true;
+        case SubGhzSceneCarKeysGenieRecord:
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneGenieRecord);
             return true;
         default:
             break;

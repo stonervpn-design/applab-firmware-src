@@ -1,3 +1,4 @@
+# reconfigure marker: 2026-08-25 genie recorder (genie_seq + genie scenes) + suzuki/fiat_marelli
 file(GLOB_RECURSE SUBGHZ_SOURCES
     "../../lib/subghz/*.c"
     "../../lib/drivers/cc1101.c"
@@ -20,7 +21,7 @@ if(DEFINED FLIPPER_VARIANT)
 endif()
 if(_flipper_variant STREQUAL "public")
     list(FILTER SUBGHZ_SOURCES EXCLUDE REGEX
-        "/protocols/(audi_v1|audi_v2|audi_v3|aut64|bmw_cas4|bmw_v2|bmw_v3|chevrolet_v0|chrysler_v0|ducato_v0|fiat_spa|fiat_v0|fiat_v1|fiat_v2_v3_v5|ford_v0|ford_v1|ford_v2|ford_v3|hitag2|hitag2_cipher|honda_static|honda_v10|honda_v2_v3|honda_v4|honda_v5|honda_v6|honda_v7|honda_v8|honda_v9|hyundai_kia_rio|hyundai_tl|jeep_v0|kia_v0|kia_v1|kia_v2|kia_v3_v4|kia_v5|kia_v6|kia_v7|land_rover_v0|ldv_v0|lexus_v0|mazda_siemens|mazda_v0|mazda_v1|mazda_v2|mitsubishi_v0|mitsubishi_v1|nissan_v0|opel_v0|peugot_v0|porsche_touareg|psa|psa_bf_core|psa_crypto|psa_crypto_bf|renault_v1|renault_v2|renault_v3|renault_v4|scher_khan|sheriff_cfm|star_line|subaru|toyota_v0|vag)\\.c$")
+        "/protocols/(audi_v1|audi_v2|audi_v3|aut64|bmw_cas4|bmw_v2|bmw_v3|bmw_ook|chevrolet_v0|chrysler_v0|ducato_v0|fiat_spa|fiat_v0|fiat_v1|fiat_v2|fiat_v2_v3_v5|ford_v0|ford_v1|ford_v2|ford_v3|hitag2|hitag2_cipher|honda_static|honda_v10|honda_v2_v3|honda_v4|honda_v5|honda_v6|honda_v7|honda_v8|honda_v9|hyundai_kia_rio|hyundai_tl|jeep_v0|kia_v0|kia_v1|kia_v2|kia_v3_v4|kia_v5|kia_v6|kia_v7|land_rover_v0|land_rover_rke|volvo_rke|ldv_v0|lexus_v0|mazda_siemens|mazda_v0|mazda_v1|mazda_v2|mitsubishi_v0|mitsubishi_v1|nissan_v0|opel_v0|peugot_v0|porsche_cayenne|porsche_touareg|psa|psa_bf_core|psa_crypto|psa_crypto_bf|renault_v0|renault_v1|renault_v2|renault_v3|renault_v4|santa_fe|scher_khan|sheriff_cfm|star_line|subaru|suzuki|fiat_marelli|toyota_v0|vag|code_alarm|six_sc_two)\\.c$")
     message(STATUS "subghz: PUBLIC build -> car RKE protocol/cipher sources excluded")
 endif()
 

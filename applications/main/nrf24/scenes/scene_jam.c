@@ -1,227 +1,322 @@
-/* nRF24 jammer scene — the single consolidated jammer, now living in the nRF24
- * app menu alongside Spectrum + MouseJacker. Bruce v1.14 mode-select base +
- * this session's improvements: concentrated channel maps, research-correct
- * strategy per protocol (OFDM WiFi / DSSS Zigbee -> Turbo noise-flood; GFSK ->
- * zero-dwell swept CW tone), BT Classic + Zigbee, full PA MAX (unclamped — the
- * Hydra/RF-Pack boards have the caps). Scrolling-list nav (Down/OK) via
- * nrf24_jam_view. */
-
 #include "../nrf24_app.h"
 #include "../nrf24_hw.h"
-#include "../helpers/nrf24_export.h"
+#include "../helpers/nrf24_channel_source.h"
+#include "../helpers/nrf24_jam_config.h"
 
 #include <furi.h>
-#include <stdlib.h>
 #include <esp_rom_sys.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <stdlib.h>
+#include <string.h>
 
-#define TAG      "Nrf24Jam"
-#define PA_MAX   3 /* Nrf24Pa_Max */
-#define RATE_2M  1 /* Nrf24Rate_2M */
-#define BATCH_MS 30
-
-/* ---- Concentrated channel maps (channel = MHz - 2400), indexed by mode ---- */
-static const uint8_t CH_WIFI[] = {1,  4,  7,  10, 13, 16, 19, 22, 26, 29, 32, 35,
-                                  38, 41, 44, 47, 51, 54, 57, 60, 63, 66, 69, 72};
-static const uint8_t CH_BT[] =
-    {32, 34, 46, 48, 50, 52, 0, 1, 2, 4, 6, 8, 22, 24, 26, 28, 30, 74, 76, 78, 80};
-static const uint8_t CH_BLE_ADV[] = {2, 26, 80};
-static const uint8_t CH_ZIGBEE[] = {5,  10, 15, 20, 25, 30, 35, 40,
-                                    45, 50, 55, 60, 65, 70, 75, 80};
-static const uint8_t CH_RC[] = {1, 3, 5, 7};
-static const uint8_t CH_USB[] = {40, 50, 60};
-static const uint8_t CH_VIDEO[] = {70, 75, 80};
-static uint8_t buf_bledata[40]; /* 2,4,...,80 (built at worker start) */
-
-typedef struct {
-    const uint8_t* list; /* NULL => full-band 0..83 sweep */
-    size_t count;
-} ModeCh;
+#define TAG "Nrf24Jam"
 
 typedef struct {
     Nrf24App* app;
     FuriThread* worker;
     volatile bool stop;
     volatile bool desired_running;
-    volatile int mode;
-    volatile uint8_t pa_level; /* nRF24 RF_PWR 0..3 (Min/Low/High/Max), live-adjustable */
-    uint16_t saved_dwell; /* dwell as loaded from shared settings; passed back unchanged on save */
+    volatile bool dirty; /* source/selection changed → rebuild channel set + HW */
+    /* worker-private */
+    bool active;
+    uint8_t active_strategy;
 } JamCtx;
 
 static JamCtx* g_ctx = NULL;
 
-/* One reactive pass over the 3 BLE advertising channels: listen on RPD, and the
- * instant a carrier appears fire a short CW pulse, then retune to the next adv
- * channel. Runs inside the acquired bus. */
-#ifndef PUBLIC_BUILD
-static void jam_reactive_pass(JamCtx* ctx) {
-    static const uint8_t BLE_ADV[3] = {2, 26, 80};
-    for(int k = 0; k < 3 && !ctx->stop && ctx->desired_running &&
-                   nrf24_jam_mode_is_reactive(ctx->mode);
-        k++) {
-        uint8_t ch = BLE_ADV[k];
-        nrf24_hw_reactive_setup(ch);
-        nrf24_hw_ce(true);
-        esp_rom_delay_us(130); /* Tstby2a -> RX */
-        for(int t = 0; t < 40 && !ctx->stop && ctx->desired_running; t++) { /* ~2ms window */
-            if(nrf24_hw_read_rpd_raw()) {
-                nrf24_hw_ce(false);
-                nrf24_hw_react_to_tx();
-                nrf24_hw_ce(true);
-                esp_rom_delay_us(430); /* 130 settle + ~300 CW pulse */
-                nrf24_hw_ce(false);
-                nrf24_hw_react_to_rx(ch);
-                break;
-            }
-            esp_rom_delay_us(50);
-        }
-        nrf24_hw_ce(false);
+static void jam_shuffle(uint8_t* arr, size_t count) {
+    for(size_t i = count - 1; i > 0; i--) {
+        size_t j = (size_t)rand() % (i + 1);
+        uint8_t t = arr[i];
+        arr[i] = arr[j];
+        arr[j] = t;
     }
 }
-#endif
+
+/* Flood and Turbo use the TX-flooding HW path; CW and AFH use the carrier. */
+static bool strategy_is_flood(uint8_t strategy) {
+    return strategy == Nrf24StrategyFlood || strategy == Nrf24StrategyTurbo;
+}
+
+/* The current source still needs a scan before it can jam (WiFi/Activity not
+ * scanned yet, or WiFi scanned but found no APs → offer a rescan). */
+static bool jam_should_scan(Nrf24App* app) {
+    if(nrf24_source_needs_scan(app)) return true;
+    if(app->jam.source == Nrf24SourceWifi && app->wifi_ap_count == 0) return true;
+    return false;
+}
+
+static void jam_teardown(JamCtx* ctx) {
+    if(!ctx->active) return;
+    nrf24_hw_acquire();
+    if(strategy_is_flood(ctx->active_strategy)) {
+        nrf24_hw_flood_stop();
+    } else {
+        nrf24_hw_jammer_stop();
+    }
+    nrf24_hw_release();
+    ctx->active = false;
+}
+
+/* Push the static (non-runtime) fields into the view model. */
+static void jam_view_static(
+    Nrf24App* app,
+    const Nrf24JamConfig* cfg,
+    const uint8_t* chbuf,
+    size_t chcount) {
+    char sel[20];
+    nrf24_source_selection_label(app, sel, sizeof(sel));
+    const char* type = nrf24_source_type_label(app->jam.source);
+    bool scan = jam_should_scan(app);
+
+    with_view_model(
+        app->jam_view,
+        Nrf24JamModel * model,
+        {
+            strncpy(model->source_label, type, sizeof(model->source_label) - 1);
+            model->source_label[sizeof(model->source_label) - 1] = '\0';
+            strncpy(model->selection_label, sel, sizeof(model->selection_label) - 1);
+            model->selection_label[sizeof(model->selection_label) - 1] = '\0';
+            model->strategy = cfg->strategy;
+            model->pa_level = cfg->pa_level;
+            model->dwell_us = cfg->dwell_us;
+            model->random_hop = cfg->random_hop;
+            model->can_jam = (chcount > 0);
+            model->show_scan = scan;
+            uint8_t n = (chcount > sizeof(model->channels)) ? sizeof(model->channels) : chcount;
+            memcpy(model->channels, chbuf, n);
+            model->band_count = n;
+        },
+        true);
+}
 
 static int32_t jam_worker(void* context) {
     JamCtx* ctx = context;
     Nrf24App* app = ctx->app;
 
-    for(size_t k = 0; k < sizeof(buf_bledata); k++) buf_bledata[k] = (uint8_t)(2 + 2 * k);
-
-    const ModeCh chans[NRF24_JAM_MODE_COUNT] = {
-        {CH_WIFI, sizeof(CH_WIFI)},       /* 0 WiFi (flood) */
-        {CH_BT, sizeof(CH_BT)},           /* 1 BT Classic  */
-        {CH_BLE_ADV, sizeof(CH_BLE_ADV)}, /* 2 BLE Adv     */
-        {buf_bledata, sizeof(buf_bledata)}, /* 3 BLE Data  */
-        {CH_ZIGBEE, sizeof(CH_ZIGBEE)},   /* 4 Zigbee (flood) */
-        {CH_RC, sizeof(CH_RC)},           /* 5 RC          */
-        {CH_USB, sizeof(CH_USB)},         /* 6 USB         */
-        {CH_VIDEO, sizeof(CH_VIDEO)},     /* 7 Video       */
-        {NULL, 0},                        /* 8 Full Band   */
-#ifndef PUBLIC_BUILD
-        {CH_BLE_ADV, sizeof(CH_BLE_ADV)}, /* 9 BLE Reactive (jam_reactive_pass drives its own hop) */
-#endif
-    };
-
     nrf24_hw_init();
+
     nrf24_hw_acquire();
     bool ok = nrf24_hw_probe();
     nrf24_hw_release();
-    with_view_model(app->jam_view, Nrf24JamModel * m, { m->hardware_ok = ok; }, true);
+
+    with_view_model(app->jam_view, Nrf24JamModel * model, { model->hardware_ok = ok; }, true);
+
     if(!ok) {
-        FURI_LOG_W(TAG, "nRF24 probe failed");
+        FURI_LOG_W(TAG, "NRF24 probe failed");
         nrf24_hw_deinit();
         return 0;
     }
 
-    nrf24_hw_pa_unclamped(true); /* full PA MAX on USB (boards have the caps) */
+    const uint32_t tick_hz = furi_kernel_get_tick_frequency();
 
-    uint32_t hz = furi_kernel_get_tick_frequency();
-    bool active = false, cur_flood = false, cur_reactive = false;
-    int cur = -1;
-    uint8_t cur_pa = 0xFF; /* forces a (re)start when pa_level is first applied or changed live */
-    size_t i = 0;
+    uint8_t chbuf[128];
+    size_t chcount = 0;
+    uint32_t hop_index = 0;
+    uint32_t hops = 0;
+    uint32_t sweeps = 0;
+    uint8_t cur_ch = 0;
+    bool built = false;
+    uint32_t start_tick = 0;
+    uint32_t last_view_tick = 0;
+    uint32_t last_cps_hops = 0; /* Hops beim letzten View-Update (Momentanraten-Basis) */
+    uint32_t last_cps = 0; /* geglättete c/s (EWMA) */
 
     while(!ctx->stop) {
         bool want = ctx->desired_running;
-        int mi = ctx->mode;
-        const ModeCh* m = &chans[mi];
-        bool flood = nrf24_jam_mode_is_flood(mi);
-        bool reactive = nrf24_jam_mode_is_reactive(mi);
+        Nrf24JamConfig* cfg = nrf24_jam_config_get(app->jam.source, app->jam.protocol);
 
-        if(want && (!active || mi != cur || ctx->pa_level != cur_pa)) {
+        if(ctx->dirty || !built) {
+            /* (Re)build channel set for the current source + selection. */
+            if(ctx->active) jam_teardown(ctx);
+            chcount = nrf24_source_fill_channels(app, chbuf, sizeof(chbuf));
+            /* AFH walks the band sequentially on purpose — never shuffle it. */
+            if(cfg->random_hop && chcount > 1 && cfg->strategy != Nrf24StrategyAfh)
+                jam_shuffle(chbuf, chcount);
+            hop_index = 0;
+            hops = 0;
+            sweeps = 0;
+            cur_ch = chcount > 0 ? chbuf[0] : 0;
+            built = true;
+            ctx->dirty = false;
+            jam_view_static(app, cfg, chbuf, chcount);
+        }
+
+        if(want && !ctx->active && chcount > 0) {
             nrf24_hw_acquire();
-            if(active) {
-                if(cur_reactive) {
-                    nrf24_hw_ce(false);
-                    nrf24_hw_power_down();
-                } else if(cur_flood) {
-                    nrf24_hw_flood_stop();
+            if(strategy_is_flood(cfg->strategy)) {
+                nrf24_hw_flood_start_ex(cur_ch, cfg->data_rate, cfg->pa_level);
+            } else {
+                /* CW and AFH both bring up the continuous carrier. */
+                nrf24_hw_jammer_start_ex(cur_ch, cfg->pa_level);
+            }
+            nrf24_hw_release();
+            ctx->active = true;
+            ctx->active_strategy = cfg->strategy;
+            start_tick = furi_get_tick();
+            last_view_tick = start_tick;
+            last_cps_hops = hops;
+            last_cps = 0;
+        } else if(!want && ctx->active) {
+            jam_teardown(ctx);
+        }
+
+        /* BT Classic 2 = exact replica of the nRF24_jammer FAP jam_bluetooth
+         * (LIST mode): continuous carrier (brought up above) + tight loop that
+         * only retunes RF_CH across the curated 21-channel list, ZERO dwell and
+         * a per-write bus acquire/release (no 30 ms batch hold → no long
+         * un-jammed gaps). Fewer channels + zero dwell give a per-channel
+         * revisit near the ~625 us BT hop slot, unlike our wide 79-ch smear. */
+        bool fap_bt = app->jam.source == Nrf24SourceProtocol &&
+                      app->jam.protocol == Nrf24JamPresetBluetooth2 &&
+                      cfg->strategy == Nrf24StrategyCw;
+
+        if(ctx->active && fap_bt) {
+            /* Exact replica of the FAP jam_bluetooth() loop AND its UI behaviour:
+             * retune RF_CH across the curated list forever with ZERO dwell — and,
+             * like the FAP (which never calls view_port_update while is_running),
+             * DO NOT redraw the screen while jamming. On the T-Embed the nRF24 SCK
+             * (GPIO11) is physically shared with the LCD clock, so every redraw
+             * would lock the SPI bus and park the carrier on one channel for a
+             * whole LCD frame. Keeping the screen static hands the entire bus to
+             * the hop, matching the FAP's band coverage. The screen keeps whatever
+             * it showed when "Run" was pressed until the loop exits (stop / pause /
+             * config change), where the shared view-update below refreshes once. */
+            while(!ctx->stop && ctx->desired_running && !ctx->dirty) {
+                cur_ch = chbuf[hop_index % chcount];
+                nrf24_hw_acquire();
+                nrf24_hw_jammer_set_channel(cur_ch);
+                nrf24_hw_release();
+                hop_index++;
+                hops++;
+                if(hop_index >= chcount) {
+                    hop_index = 0;
+                    sweeps++;
+                }
+            }
+        } else if(ctx->active && cfg->strategy == Nrf24StrategyAfh) {
+            /* AFH exhaustion: park a strong CW carrier on one channel long
+             * enough (dwell read as MILLISECONDS) for the victim's adaptive
+             * hopping to classify it bad, then step to the next — sequentially,
+             * to systematically push channels onto the bad-channel map. The
+             * carrier keeps transmitting via REUSE_TX_PL, so the SPI bus is
+             * dropped during the dwell (LCD/SD stay responsive) and only
+             * re-acquired briefly to retune. */
+            cur_ch = chbuf[hop_index % chcount];
+            nrf24_hw_acquire();
+            nrf24_hw_jammer_set_channel(cur_ch);
+            nrf24_hw_release();
+            hop_index++;
+            hops++;
+            if(hop_index >= chcount) {
+                hop_index = 0;
+                sweeps++;
+            }
+            /* Real-packet carrier: the old AFH park relied on a self-sustaining
+             * CONT_WAVE/REUSE tone and could release the bus for the whole dwell.
+             * A plain-packet carrier drains in ~430us, so instead hold a strong
+             * carrier by pumping the FIFO in short bus-held chunks, yielding the
+             * bus (LCD/SD/input) for ~1ms between chunks. */
+            uint32_t hold_ms = cfg->dwell_us;
+            int64_t afh_end = esp_timer_get_time() + (int64_t)hold_ms * 1000;
+            while(esp_timer_get_time() < afh_end && !ctx->stop &&
+                  ctx->desired_running && !ctx->dirty) {
+                nrf24_hw_acquire();
+                int64_t chunk_end = esp_timer_get_time() + 5000; /* 5ms keyed */
+                do {
+                    nrf24_hw_flood_pump();
+                } while(esp_timer_get_time() < chunk_end && !ctx->stop &&
+                        ctx->desired_running && !ctx->dirty);
+                nrf24_hw_release();
+                furi_delay_ms(1); /* yield SD/LCD/input */
+            }
+        } else if(ctx->active) {
+            uint16_t dwell = cfg->dwell_us;
+            uint8_t burst = cfg->burst_count;
+            uint8_t strategy = cfg->strategy;
+
+            nrf24_hw_acquire();
+            uint32_t batch_end = furi_get_tick() + pdMS_TO_TICKS(30);
+            while(!ctx->stop && ctx->desired_running && !ctx->dirty &&
+                  furi_get_tick() < batch_end) {
+                cur_ch = chbuf[hop_index % chcount];
+                if(strategy == Nrf24StrategyCw) {
+                    /* Real-packet carrier: keep the FIFO topped for the whole
+                     * dwell so the +PA/LNA stays keyed continuously (a plain
+                     * payload FIFO drains in ~430us, unlike the old self-
+                     * sustaining CONT_WAVE tone). */
+                    nrf24_hw_jammer_set_channel(cur_ch);
+                    int64_t cw_hop_end = esp_timer_get_time() + (int64_t)dwell;
+                    do {
+                        nrf24_hw_flood_pump();
+                    } while(esp_timer_get_time() < cw_hop_end && !ctx->stop &&
+                            ctx->desired_running && !ctx->dirty);
                 } else {
-                    nrf24_hw_jammer_stop();
+                    /* Flood / Turbo: keep bursting on this channel until the
+                     * dwell window (µs) elapses — at least one burst. Use the
+                     * microsecond timer so sub-millisecond dwells are honored. */
+                    bool turbo = (strategy == Nrf24StrategyTurbo);
+                    int64_t hop_end = esp_timer_get_time() + (int64_t)dwell;
+                    do {
+                        nrf24_hw_flood_burst(cur_ch, burst, turbo);
+                    } while(esp_timer_get_time() < hop_end && !ctx->stop &&
+                            ctx->desired_running && !ctx->dirty);
                 }
-            }
-            if(reactive) {
-                /* jam_reactive_pass() fully configures the chip (reactive_setup)
-                 * on its first pass -- skip the jammer/flood start here so we
-                 * don't key a stray carrier before the reactive loop takes over. */
-            } else {
-                uint8_t ch0 = m->count ? m->list[0] : 0;
-                uint8_t pa = ctx->pa_level; /* live-selected PA level */
-                if(flood) nrf24_hw_flood_start_ex(ch0, RATE_2M, pa);
-                else nrf24_hw_jammer_start_ex(ch0, pa);
-                /* --- TEMP DIAGNOSTIC (weak-RF debug) — remove after root cause.
-                 * Dumps what the TX path actually programmed. Expected for a
-                 * genuine nRF24L01+ CW jammer: Pvar=1 RF_SETUP=0x9F (CONT_WAVE|
-                 * PLL|2M|PA_MAX|LNA) CONFIG has PWR_UP(0x02). A wrong Pvar or an
-                 * RF_SETUP missing CONT_WAVE(0x80)/PA_MAX(0x06) => the bug. */
-                FURI_LOG_I(
-                    TAG,
-                    "JAMDIAG mode=%d flood=%d Pvar=%d rate=%u RF_SETUP=0x%02X CONFIG=0x%02X ch0=%u",
-                    mi,
-                    (int)flood,
-                    (int)nrf24_hw_is_p_variant(),
-                    nrf24_hw_last_data_rate(),
-                    nrf24_hw_read_rf_setup(),
-                    nrf24_hw_read_config(),
-                    (unsigned)ch0);
-            }
-            nrf24_hw_release();
-            active = true;
-            cur = mi;
-            cur_flood = flood;
-            cur_reactive = reactive;
-            cur_pa = ctx->pa_level;
-            i = 0;
-        } else if(!want && active) {
-            nrf24_hw_acquire();
-            if(cur_reactive) {
-                nrf24_hw_ce(false);
-                nrf24_hw_power_down();
-            } else if(cur_flood) {
-                nrf24_hw_flood_stop();
-            } else {
-                nrf24_hw_jammer_stop();
-            }
-            nrf24_hw_release();
-            active = false;
-            cur = -1;
-        }
-
-        if(active) {
-            nrf24_hw_acquire();
-#ifndef PUBLIC_BUILD
-            if(reactive) {
-                jam_reactive_pass(ctx);
-            } else
-#endif
-            {
-                uint32_t end = furi_get_tick() + (BATCH_MS * hz) / 1000;
-                while(!ctx->stop && ctx->desired_running && ctx->mode == mi &&
-                      furi_get_tick() < end) {
-                    uint8_t ch = m->count ? m->list[i % m->count] : (uint8_t)(i % 84);
-                    if(flood) nrf24_hw_flood_burst(ch, 12, true);
-                    else nrf24_hw_jammer_set_channel(ch);
-                    i++;
+                hop_index++;
+                hops++;
+                if(hop_index >= chcount) {
+                    hop_index = 0;
+                    sweeps++;
+                    if(cfg->random_hop && chcount > 1) jam_shuffle(chbuf, chcount);
                 }
             }
             nrf24_hw_release();
-            furi_delay_ms(1); /* yield to GUI/input (worker below UI priority) */
-        } else {
-            furi_delay_ms(20);
         }
+
+        uint32_t now = furi_get_tick();
+        if(now - last_view_tick >= pdMS_TO_TICKS(150)) {
+            uint32_t d_tick = now - last_view_tick;
+            last_view_tick = now;
+            uint32_t elapsed_ms = 0;
+            uint32_t cps = 0;
+            if(ctx->active) {
+                uint32_t et = now - start_tick;
+                elapsed_ms = (tick_hz == 1000) ? et : (uint32_t)((uint64_t)et * 1000 / tick_hz);
+                /* Momentanrate: Hops seit dem letzten Update / Intervalldauer. Ein
+                 * kumulativer Schnitt (hops/elapsed) würde vom überhöhten ersten
+                 * Sample nach unten konvergieren statt konstant zu bleiben; leichte
+                 * EWMA glättet Jitter durch Batch-Grenzen und LCD-Refresh. */
+                uint32_t d_ms =
+                    (tick_hz == 1000) ? d_tick : (uint32_t)((uint64_t)d_tick * 1000 / tick_hz);
+                uint32_t d_hops = hops - last_cps_hops;
+                uint32_t inst = d_ms > 0 ? (uint32_t)((uint64_t)d_hops * 1000 / d_ms) : 0;
+                cps = last_cps ? (last_cps * 3 + inst) / 4 : inst;
+                last_cps = cps;
+                last_cps_hops = hops;
+            }
+            uint8_t ch = cur_ch;
+            uint32_t s = sweeps;
+            bool run = ctx->active;
+            with_view_model(
+                app->jam_view,
+                Nrf24JamModel * model,
+                {
+                    model->channel = ch;
+                    model->hop_count = hops;
+                    model->sweeps = s;
+                    model->elapsed_ms = elapsed_ms;
+                    model->ch_per_sec = cps;
+                    model->running = run;
+                },
+                true);
+        }
+
+
+        furi_delay_ms(ctx->active ? 1 : 10);
     }
 
-    if(active) {
-        nrf24_hw_acquire();
-        if(cur_reactive) {
-            nrf24_hw_ce(false);
-            nrf24_hw_power_down();
-        } else if(cur_flood) {
-            nrf24_hw_flood_stop();
-        } else {
-            nrf24_hw_jammer_stop();
-        }
-        nrf24_hw_release();
-    }
-    nrf24_hw_pa_unclamped(false);
+    jam_teardown(ctx);
     nrf24_hw_deinit();
     return 0;
 }
@@ -229,40 +324,52 @@ static int32_t jam_worker(void* context) {
 void nrf24_app_scene_jam_on_enter(void* context) {
     Nrf24App* app = context;
 
+    bool resume = app->jam.resume_running;
+    app->jam.resume_running = false;
+
     JamCtx* ctx = malloc(sizeof(JamCtx));
     if(!ctx) return;
     ctx->app = app;
     ctx->stop = false;
-    ctx->desired_running = false;
-    uint8_t saved_mode = 0, saved_pa = PA_MAX;
-    uint16_t saved_dwell = 250;
-    nrf24_settings_load(&saved_mode, &saved_dwell, &saved_pa);
-    /* Clamp the persisted mode to the count compiled into THIS build: the
-     * validator (nrf24_export.c) can't know the per-build ceiling, and a config
-     * carried from a PRIVATE build (or a hand-edited rflab.conf) can hold a mode
-     * that indexes past the smaller PUBLIC chans[] array in the jam worker. */
-    if(saved_mode >= NRF24_JAM_MODE_COUNT) saved_mode = 0;
-    ctx->mode = saved_mode;
-    ctx->saved_dwell = saved_dwell;
-    ctx->pa_level = saved_pa;
+    ctx->desired_running = resume;
+    ctx->dirty = true; /* force initial channel-set build */
+    ctx->active = false;
+    ctx->active_strategy = Nrf24StrategyCw;
     g_ctx = ctx;
+
+    char sel[20];
+    nrf24_source_selection_label(app, sel, sizeof(sel));
+    const char* type = nrf24_source_type_label(app->jam.source);
+    const Nrf24JamConfig* cfg = nrf24_jam_config_get(app->jam.source, app->jam.protocol);
 
     with_view_model(
         app->jam_view,
         Nrf24JamModel * model,
         {
-            model->mode = saved_mode;
-            model->running = false;
+            strncpy(model->source_label, type, sizeof(model->source_label) - 1);
+            model->source_label[sizeof(model->source_label) - 1] = '\0';
+            strncpy(model->selection_label, sel, sizeof(model->selection_label) - 1);
+            model->selection_label[sizeof(model->selection_label) - 1] = '\0';
+            model->channel = 0;
+            model->hop_count = 0;
+            model->sweeps = 0;
+            model->elapsed_ms = 0;
+            model->ch_per_sec = 0;
+            model->dwell_us = cfg->dwell_us;
+            model->strategy = cfg->strategy;
+            model->pa_level = cfg->pa_level;
+            model->random_hop = cfg->random_hop;
+            model->running = resume;
             model->hardware_ok = true;
-            model->pa_level = saved_pa;
+            model->can_jam = true;
+            model->show_scan = jam_should_scan(app);
+            model->band_count = 0;
         },
         true);
 
     view_dispatcher_switch_to_view(app->view_dispatcher, Nrf24ViewJam);
 
     ctx->worker = furi_thread_alloc_ex("Nrf24Jam", 4096, jam_worker, ctx);
-    /* Below Normal so a keypress preempts the CPU-bound sweep loop (no UI freeze). */
-    furi_thread_set_priority(ctx->worker, FuriThreadPriorityLow);
     furi_thread_start(ctx->worker);
 }
 
@@ -272,35 +379,51 @@ bool nrf24_app_scene_jam_on_event(void* context, SceneManagerEvent event) {
 
     switch(event.event) {
     case Nrf24JamEventToggle: {
-        bool nr = !g_ctx->desired_running;
-        g_ctx->desired_running = nr;
-        with_view_model(app->jam_view, Nrf24JamModel * m, { m->running = nr; }, true);
+        if(jam_should_scan(app)) {
+            /* OK button is "Scan" for an unready WiFi/Activity source: run the
+             * scan now (don't auto-start jamming — button becomes "Run" after). */
+            app->jam.resume_running = false;
+            if(app->jam.source == Nrf24SourceWifi) {
+                scene_manager_next_scene(app->scene_manager, Nrf24AppSceneJamWifiScan);
+            } else {
+                scene_manager_next_scene(app->scene_manager, Nrf24AppSceneJamActivityScan);
+            }
+            return true;
+        }
+        bool new_run = !g_ctx->desired_running;
+        g_ctx->desired_running = new_run;
+        with_view_model(
+            app->jam_view, Nrf24JamModel * model, { model->running = new_run; }, true);
         return true;
     }
-    case Nrf24JamEventNext: {
-        int nm = (g_ctx->mode + 1) % NRF24_JAM_MODE_COUNT;
-        g_ctx->mode = nm;
-        with_view_model(app->jam_view, Nrf24JamModel * m, { m->mode = nm; }, true);
+    case Nrf24JamEventSelectNext:
+        nrf24_source_select(app, +1);
+        g_ctx->dirty = true;
         return true;
-    }
-    case Nrf24JamEventPrev: {
-        int nm = (g_ctx->mode + NRF24_JAM_MODE_COUNT - 1) % NRF24_JAM_MODE_COUNT;
-        g_ctx->mode = nm;
-        with_view_model(app->jam_view, Nrf24JamModel * m, { m->mode = nm; }, true);
+    case Nrf24JamEventCycleSource:
+        /* Rotate CW: next target in the flat preset+source list (wraps). Scanning
+         * happens on demand via the Scan button (jam_should_scan), not on step. */
+        nrf24_source_step(app, +1);
+        g_ctx->dirty = true;
         return true;
-    }
-    case Nrf24JamEventPaDown: {
-        uint8_t pa = g_ctx->pa_level ? (uint8_t)(g_ctx->pa_level - 1) : 0;
-        g_ctx->pa_level = pa; /* worker re-keys the carrier at the new level (live) */
-        with_view_model(app->jam_view, Nrf24JamModel * m, { m->pa_level = pa; }, true);
+    case Nrf24JamEventConfig:
+        app->jam.resume_running = g_ctx->desired_running;
+        scene_manager_next_scene(app->scene_manager, Nrf24AppSceneJamConfig);
         return true;
-    }
-    case Nrf24JamEventPaUp: {
-        uint8_t pa = (g_ctx->pa_level < 3) ? (uint8_t)(g_ctx->pa_level + 1) : 3;
-        g_ctx->pa_level = pa; /* worker re-keys the carrier at the new level (live) */
-        with_view_model(app->jam_view, Nrf24JamModel * m, { m->pa_level = pa; }, true);
+    case Nrf24JamEventRescan:
+        /* Long-press OK: re-run the scan for scan-sources (even if already
+         * cached), otherwise (Protocol) fall back to the config editor. */
+        if(app->jam.source == Nrf24SourceWifi) {
+            app->jam.resume_running = false;
+            scene_manager_next_scene(app->scene_manager, Nrf24AppSceneJamWifiScan);
+        } else if(app->jam.source == Nrf24SourceActivity) {
+            app->jam.resume_running = false;
+            scene_manager_next_scene(app->scene_manager, Nrf24AppSceneJamActivityScan);
+        } else {
+            app->jam.resume_running = g_ctx->desired_running;
+            scene_manager_next_scene(app->scene_manager, Nrf24AppSceneJamConfig);
+        }
         return true;
-    }
     default:
         return false;
     }
@@ -313,7 +436,6 @@ void nrf24_app_scene_jam_on_exit(void* context) {
     g_ctx->stop = true;
     furi_thread_join(g_ctx->worker);
     furi_thread_free(g_ctx->worker);
-    nrf24_settings_save((uint8_t)g_ctx->mode, g_ctx->saved_dwell, g_ctx->pa_level);
     free(g_ctx);
     g_ctx = NULL;
 }

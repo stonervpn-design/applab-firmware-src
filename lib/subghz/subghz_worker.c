@@ -10,11 +10,13 @@
 #define SUBGHZ_WORKER_BUF_MIN_ENTRIES 512u
 /* Internal-RAM headroom left free after sizing the capture buffer. Must cover
  * everything ELSE that subghz_alloc() allocates AFTER the worker (the SubBrute
- * device/worker/settings/views, the receiver view, scene manager, etc.) — on
- * this no-PSRAM board the old 4 KB left the big heap block fully consumed by the
- * RX buffer, so subbrute_worker_alloc() then OOM-crashed. 24 KB keeps the RX
- * buffer usable while leaving room for the rest of SubGhz startup. */
-#define SUBGHZ_WORKER_BUF_HEADROOM (24u * 1024u)
+ * device/worker/settings/views, the receiver view, scene manager, etc.) AND the
+ * later file-browser open (SubGhz->Saved), whose BrowserWorker needs a ~3 KB
+ * INTERNAL stack — on this maxed board 24 KB left <3 KB by then, so the browser
+ * worker's stack spilled to PSRAM (which FreeRTOS rejects) and rebooted. 30 KB
+ * shrinks the (largest) RX capture buffer a little to keep that headroom for the
+ * browser + the raised Desktop stack. The RX buffer stays >= 512-entry floor. */
+#define SUBGHZ_WORKER_BUF_HEADROOM (30u * 1024u)
 
 struct SubGhzWorker {
     FuriThread* thread;
@@ -91,18 +93,11 @@ static int32_t subghz_worker_thread_callback(void* context) {
     return 0;
 }
 
-SubGhzWorker* subghz_worker_alloc(void) {
-    SubGhzWorker* instance = calloc(1, sizeof(SubGhzWorker));
-
-    instance->thread =
-        furi_thread_alloc_ex("SubGhzWorker", 3072, subghz_worker_thread_callback, instance);
-
-    /* Adaptive capture-buffer sizing. A fixed 16 KB (4096 * LevelDuration)
-     * internal-RAM buffer OOM-reboots on this no-PSRAM/caps-alloc board once
-     * BLE + the full decoder set have eaten internal RAM (see the documented
-     * reboot path in furi_stream_buffer_alloc). Cap at 4096 entries but shrink
-     * to fit the largest free internal block minus headroom, with a 512-entry
-     * floor so Sub-GHz Read still works under memory pressure. */
+/* Adaptive capture-buffer sizing + alloc. Shared by subghz_worker_alloc() and
+ * subghz_worker_buffer_reacquire(). A fixed 16 KB buffer OOM-reboots on this board once
+ * BLE + the full decoder set have eaten internal RAM; cap at 4096 entries but shrink to
+ * the largest free internal block minus headroom, with a 512-entry floor. */
+static void subghz_worker_stream_alloc(SubGhzWorker* instance) {
     size_t entries = SUBGHZ_WORKER_BUF_MAX_ENTRIES;
     size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
     size_t budget = (largest > SUBGHZ_WORKER_BUF_HEADROOM) ?
@@ -117,9 +112,17 @@ SubGhzWorker* subghz_worker_alloc(void) {
         (unsigned)entries,
         (unsigned)(entries * sizeof(LevelDuration)),
         (unsigned)largest);
-
     instance->stream =
         furi_stream_buffer_alloc(sizeof(LevelDuration) * entries, sizeof(LevelDuration));
+}
+
+SubGhzWorker* subghz_worker_alloc(void) {
+    SubGhzWorker* instance = calloc(1, sizeof(SubGhzWorker));
+
+    instance->thread =
+        furi_thread_alloc_ex("SubGhzWorker", 3072, subghz_worker_thread_callback, instance);
+
+    subghz_worker_stream_alloc(instance);
 
     //setting default filter in us
     instance->filter_duration = 30;
@@ -127,10 +130,28 @@ SubGhzWorker* subghz_worker_alloc(void) {
     return instance;
 }
 
+/* Temporarily release the capture buffer (~4 KB internal) while it is not needed — e.g.
+ * the SubGhz->Saved file browser is open and internal DRAM is exhausted, so the browser's
+ * own worker thread cannot get an internal stack. Only safe while the worker is STOPPED
+ * (the decode thread reads instance->stream). subghz_worker_buffer_reacquire() restores it. */
+void subghz_worker_buffer_release(SubGhzWorker* instance) {
+    furi_check(instance);
+    if(instance->running) return; // never free a buffer the decode thread is reading
+    if(instance->stream) {
+        furi_stream_buffer_free(instance->stream);
+        instance->stream = NULL;
+    }
+}
+
+void subghz_worker_buffer_reacquire(SubGhzWorker* instance) {
+    furi_check(instance);
+    if(!instance->stream) subghz_worker_stream_alloc(instance);
+}
+
 void subghz_worker_free(SubGhzWorker* instance) {
     furi_check(instance);
 
-    furi_stream_buffer_free(instance->stream);
+    if(instance->stream) furi_stream_buffer_free(instance->stream);
     furi_thread_free(instance->thread);
 
     free(instance);

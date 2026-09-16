@@ -162,6 +162,15 @@ bool subghz_txrx_gen_keeloq_clone(
                     proto, manufacture_name, &raw, &learn_type);
             }
 
+            // Refuse to build a DEAD clone. With no manufacturer key in the keystore
+            // (Unknown / unsupported capture) kdev stays 0, so gen_data emits a zero hop and
+            // the receiver rejects every frame. Fail cleanly here so the caller surfaces the
+            // "requires databases" error instead of handing back a clone that never opens.
+            if(kdev == 0) {
+                subghz_transmitter_free(instance->transmitter);
+                return false;
+            }
+
             flipper_format_write_string_cstr(instance->fff_data, "Manufacture", manufacture_name);
             uint32_t one = 1, serial_v = serial, btn_v = btn, cnt_v = cnt, jump_v = jump,
                      lt_v = learn_type, synced_v = 0;

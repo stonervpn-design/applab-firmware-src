@@ -20,6 +20,7 @@ typedef enum {
     SubGhzViewTpmsInfoActionEdit, // OK-button short press on a numeric field
     SubGhzViewTpmsInfoActionToggleBattery, // OK-button short press on Battery field
     SubGhzViewTpmsInfoActionTrack, // Left-button short press: add sensor to watch list
+    SubGhzViewTpmsInfoActionZeroPsiToggle, // Left-button long press: toggle continuous 0-PSI spoof
 } SubGhzViewTpmsInfoAction;
 
 typedef void (
@@ -65,3 +66,6 @@ void subghz_view_tpms_info_set_values(
     float pressure,
     float temperature,
     uint8_t battery_low);
+
+/** Reflect the continuous 0-PSI spoof state in the view (shows "0PSI Firing..."). */
+void subghz_view_tpms_info_set_zero_psi_firing(SubGhzViewTpmsInfo* tpms_info, bool firing);

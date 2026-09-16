@@ -515,11 +515,22 @@ static SubGhzProtocolStatus subghz_protocol_encoder_mitsubishi_v1_deserialize(
     SubGhzProtocolEncoderMitsubishiV1* instance = context;
     SubGhzProtocolStatus res = SubGhzProtocolStatusError;
     do {
-        res = subghz_block_generic_deserialize_check_count_bit(
-            &instance->generic,
-            flipper_format,
-            subghz_protocol_mitsubishi_v1_const.min_count_bit_for_found);
+        // The decoder serializes a VARIABLE frame length: process_frame stores
+        // data_len = min(bits-after-sync, 96), gated only by data_len >= 88. A
+        // clean capture of the full [Sync:32][Fix:8][Btn:4][Cnt:10][Hop:42] frame
+        // saves Bit=96, not 88. An exact check against min_count_bit_for_found (88)
+        // therefore rejects genuine saved keys with "Error in protocol parameters".
+        // The emitted waveform is rebuilt from Key(64)+Hop and is always a full
+        // 96-bit frame regardless of the stored Bit, so accept any length in the
+        // decoder's valid range [88, 96] instead of demanding an exact 88.
+        res = subghz_block_generic_deserialize(&instance->generic, flipper_format);
         if(res != SubGhzProtocolStatusOk) break;
+        if(instance->generic.data_count_bit <
+               subghz_protocol_mitsubishi_v1_const.min_count_bit_for_found ||
+           instance->generic.data_count_bit > MITSUBISHI_V1_DATA_BITS) {
+            res = SubGhzProtocolStatusErrorValueBitCount;
+            break;
+        }
 
         uint32_t hop_hi = 0, hop_lo = 0;
         flipper_format_read_uint32(flipper_format, "Hop_Hi", &hop_hi, 1);

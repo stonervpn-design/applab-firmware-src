@@ -41,7 +41,7 @@ void subghz_scene_keeloq_mfr_submenu_callback(void* context, uint32_t index) {
                 continue;
             }
             if(i == index) {
-                name = furi_string_get_cstr(key->name);
+                name = key->name;
                 break;
             }
             i++;
@@ -108,7 +108,7 @@ void subghz_scene_keeloq_mfr_on_enter(void* context) {
             }
             submenu_add_item(
                 subghz->submenu,
-                furi_string_get_cstr(key->name),
+                key->name,
                 index,
                 subghz_scene_keeloq_mfr_submenu_callback,
                 subghz);

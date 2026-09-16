@@ -163,6 +163,12 @@ static NfcCommand
                 } else {
                     mf_ultralight_event->data->key_request_data.key_provided = false;
                 }
+            } else if(data->type == MfUltralightTypeUltralightAES) {
+                // UL-AES: supply the AES key + slot via auth_context. These offsets do not collide
+                // with the key_request_data union member the UL-C branch uses above.
+                mf_ultralight_event->data->auth_context.aes_key = instance->mf_ul_auth->aes_key;
+                mf_ultralight_event->data->auth_context.aes_key_type =
+                    instance->mf_ul_auth->aes_key_type;
             }
         }
     } else if(mf_ultralight_event->type == MfUltralightPollerEventTypeAuthSuccess) {
@@ -352,7 +358,8 @@ static bool nfc_scene_read_and_saved_menu_on_event_mf_ultralight(
             const MfUltralightData* data =
                 nfc_device_get_data(instance->nfc_device, NfcProtocolMfUltralight);
 
-            uint32_t next_scene = (data->type == MfUltralightTypeMfulC) ?
+            uint32_t next_scene = (data->type == MfUltralightTypeMfulC ||
+                                   data->type == MfUltralightTypeUltralightAES) ?
                                       NfcSceneDesAuthKeyInput :
                                       NfcSceneMfUltralightUnlockMenu;
             scene_manager_next_scene(instance->scene_manager, next_scene);

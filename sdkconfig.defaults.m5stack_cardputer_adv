@@ -123,8 +123,12 @@ CONFIG_BT_ACL_CONNECTIONS=2
 # =============================================================================
 # Newlib / C Runtime Configuration
 # =============================================================================
-# Nano printf saves ~8 KB IRAM; we don't use %f in hot paths.
-CONFIG_NEWLIB_NANO_FORMAT=y
+# NANO_FORMAT DISABLED (was =y): nano printf mishandles %ll (64-bit). subghz
+# get_string "Key: %016llX" misaligned the following %s and crashed the RX worker
+# (LoadProhibited) on real Mazda V0 / Kia frames -- confirmed via panic backtrace
+# in _printf_i. Full newlib formatting handles %ll correctly (+~20-40KB flash,
+# fits the 3.5MB app partition with ~400KB headroom).
+CONFIG_NEWLIB_NANO_FORMAT=n
 
 # =============================================================================
 # Compiler Optimization

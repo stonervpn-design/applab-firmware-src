@@ -17,6 +17,7 @@ static const SubGhzBlockConst subghz_protocol_star_line_const = {
 };
 
 #define STAR_LINE_MIN_COUNT_BIT   64U
+#define STAR_LINE_PREDICT_COUNT   3U
 #define STAR_LINE_UPLOAD_CAPACITY ((6U * 2U) + (STAR_LINE_MIN_COUNT_BIT * 2U))
 _Static_assert(
     STAR_LINE_UPLOAD_CAPACITY <= PP_SHARED_UPLOAD_CAPACITY,
@@ -174,7 +175,7 @@ static bool
                 *subghz_keystore_get_data(instance->keystore),
                 SubGhzKeyArray_t) {
                 res = strcmp(
-                    furi_string_get_cstr(manufacture_code->name), instance->manufacture_name);
+                    manufacture_code->name, instance->manufacture_name);
                 if(res == 0) {
                     switch(manufacture_code->type) {
                     case KEELOQ_LEARNING_SIMPLE:
@@ -559,12 +560,12 @@ static uint8_t subghz_protocol_star_line_check_remote_controller_selector(
     uint32_t decrypt = 0;
     uint64_t man_normal_learning;
     bool mf_not_set = false;
-    // TODO:
-    // if(mfname == 0x0) {
-    //     mfname = "";
-    // }
 
     const char* mfname = keystore->mfname;
+    // Guard against an uninitialized keystore mfname (NULL): reachable when a
+    // StarLine .sub without a Manufacture field is loaded/emulated on a fresh
+    // keystore. strcmp(NULL, ...) would segfault the SubGHz app. (author TODO)
+    if(mfname == NULL) mfname = "";
 
     if(strcmp(mfname, "Unknown") == 0) {
         return 1;
@@ -573,14 +574,14 @@ static uint8_t subghz_protocol_star_line_check_remote_controller_selector(
     }
     for
         M_EACH(manufacture_code, *subghz_keystore_get_data(keystore), SubGhzKeyArray_t) {
-            if(mf_not_set || (strcmp(furi_string_get_cstr(manufacture_code->name), mfname) == 0)) {
+            if(mf_not_set || (strcmp(manufacture_code->name, mfname) == 0)) {
                 switch(manufacture_code->type) {
                 case KEELOQ_LEARNING_SIMPLE:
                     // Simple Learning
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, manufacture_code->key);
                     if(subghz_protocol_star_line_check_decrypt(
                            instance, decrypt, btn, end_serial)) {
-                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        *manufacture_name = manufacture_code->name;
                         keystore->mfname = *manufacture_name;
                         return 1;
                     }
@@ -593,7 +594,7 @@ static uint8_t subghz_protocol_star_line_check_remote_controller_selector(
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, man_normal_learning);
                     if(subghz_protocol_star_line_check_decrypt(
                            instance, decrypt, btn, end_serial)) {
-                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        *manufacture_name = manufacture_code->name;
                         keystore->mfname = *manufacture_name;
                         return 1;
                     }
@@ -603,7 +604,7 @@ static uint8_t subghz_protocol_star_line_check_remote_controller_selector(
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, manufacture_code->key);
                     if(subghz_protocol_star_line_check_decrypt(
                            instance, decrypt, btn, end_serial)) {
-                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        *manufacture_name = manufacture_code->name;
                         keystore->mfname = *manufacture_name;
                         keystore->kl_type = 1;
                         return 1;
@@ -618,7 +619,7 @@ static uint8_t subghz_protocol_star_line_check_remote_controller_selector(
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, man_rev);
                     if(subghz_protocol_star_line_check_decrypt(
                            instance, decrypt, btn, end_serial)) {
-                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        *manufacture_name = manufacture_code->name;
                         keystore->mfname = *manufacture_name;
                         keystore->kl_type = 1;
                         return 1;
@@ -631,7 +632,7 @@ static uint8_t subghz_protocol_star_line_check_remote_controller_selector(
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, man_normal_learning);
                     if(subghz_protocol_star_line_check_decrypt(
                            instance, decrypt, btn, end_serial)) {
-                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        *manufacture_name = manufacture_code->name;
                         keystore->mfname = *manufacture_name;
                         keystore->kl_type = 2;
                         return 1;
@@ -642,7 +643,7 @@ static uint8_t subghz_protocol_star_line_check_remote_controller_selector(
                     decrypt = subghz_protocol_keeloq_common_decrypt(hop, man_normal_learning);
                     if(subghz_protocol_star_line_check_decrypt(
                            instance, decrypt, btn, end_serial)) {
-                        *manufacture_name = furi_string_get_cstr(manufacture_code->name);
+                        *manufacture_name = manufacture_code->name;
                         keystore->mfname = *manufacture_name;
                         keystore->kl_type = 2;
                         return 1;
@@ -678,6 +679,68 @@ static void subghz_protocol_star_line_check_remote_controller(
 
     instance->serial = key_fix & 0x00FFFFFF;
     instance->btn = key_fix >> 24;
+}
+
+/**
+ * Predict the StarLine rolling key for an absolute 16-bit counter value.
+ * StarLine is a KeeLoq rolling code whose 16-bit counter is CLEARTEXT after
+ * KeeLoq decryption with the keystore manufacturer key — a transform the
+ * decoder already inverts. This helper is the exact inverse of the decode path
+ * and mirrors subghz_protocol_star_line_gen_data(): it re-encodes
+ * (serial, btn, cnt_next) into a byte-correct 64-bit frame that decodes back to
+ * the same fields, so it is load/emulate/save-able. It reuses the real
+ * 528-round NLFSR KeeLoq encrypt + normal_learning (keeloq_common) with the
+ * key/learning-type the decoder matched — no reimplemented crypto. Returns 0
+ * when no keystore key matches (mf "Unknown"/unset), so the caller emits no
+ * Next lines. cnt_next wraps naturally at 0xFFFF (uint16_t).
+ * @return predicted 64-bit frame, or 0 when unpredictable
+ */
+static uint64_t subghz_protocol_star_line_predict_key(
+    SubGhzKeystore* keystore,
+    const char* manufacture_name,
+    uint32_t serial,
+    uint8_t btn,
+    uint16_t cnt_next) {
+    if(manufacture_name == NULL) return 0;
+    if(strcmp(manufacture_name, "Unknown") == 0) return 0;
+    if(strcmp(manufacture_name, "") == 0) return 0;
+
+    uint32_t fix = (uint32_t)btn << 24 | (serial & 0xFFFFFF);
+    uint32_t decrypt = (uint32_t)btn << 24 | (uint32_t)(serial & 0xFF) << 16 | cnt_next;
+    uint32_t hop = 0;
+    uint64_t man = 0;
+    uint8_t kl_type_en = keystore->kl_type;
+
+    for
+        M_EACH(manufacture_code, *subghz_keystore_get_data(keystore), SubGhzKeyArray_t) {
+            if(strcmp(manufacture_code->name, manufacture_name) != 0) continue;
+            switch(manufacture_code->type) {
+            case KEELOQ_LEARNING_SIMPLE:
+                // Simple Learning
+                hop = subghz_protocol_keeloq_common_encrypt(decrypt, manufacture_code->key);
+                break;
+            case KEELOQ_LEARNING_NORMAL:
+                // Normal Learning
+                man = subghz_protocol_keeloq_common_normal_learning(fix, manufacture_code->key);
+                hop = subghz_protocol_keeloq_common_encrypt(decrypt, man);
+                break;
+            case KEELOQ_LEARNING_UNKNOWN:
+                if(kl_type_en == 1) {
+                    hop = subghz_protocol_keeloq_common_encrypt(decrypt, manufacture_code->key);
+                }
+                if(kl_type_en == 2) {
+                    man =
+                        subghz_protocol_keeloq_common_normal_learning(fix, manufacture_code->key);
+                    hop = subghz_protocol_keeloq_common_encrypt(decrypt, man);
+                }
+                break;
+            }
+            break;
+        }
+
+    if(hop == 0) return 0;
+    uint64_t yek = (uint64_t)fix << 32 | hop;
+    return subghz_protocol_blocks_reverse_key(yek, STAR_LINE_MIN_COUNT_BIT);
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_star_line_serialize(
@@ -857,4 +920,22 @@ void subghz_protocol_decoder_star_line_get_string(void* context, FuriString* out
         code_found_reverse_lo,
         instance->generic.btn,
         instance->manufacture_name);
+
+    // KeeLoq rolling code with a CLEARTEXT 16-bit counter under an embedded
+    // keystore key: predict the next few codes by re-encoding serial/btn with
+    // cnt+i (byte-correct, reuses the real KeeLoq encrypt). Only emitted when a
+    // manufacturer key matched — subghz_protocol_star_line_predict_key returns 0
+    // for "Unknown"/unset mf, so no bogus Next line is shown.
+    for(uint16_t i = 1; i <= STAR_LINE_PREDICT_COUNT; i++) {
+        uint16_t cnt_next = (uint16_t)(instance->generic.cnt + i);
+        uint64_t next_key = subghz_protocol_star_line_predict_key(
+            instance->keystore,
+            instance->manufacture_name,
+            instance->generic.serial,
+            instance->generic.btn,
+            cnt_next);
+        if(next_key == 0) break;
+        furi_string_cat_printf(
+            output, "\r\nNext+%u:%016llX", (unsigned int)i, (unsigned long long)next_key);
+    }
 }

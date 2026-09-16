@@ -126,6 +126,52 @@ void furi_hal_grove_5v_set(bool on) {
 #endif
 }
 
+void furi_hal_m5pm1_set_speaker_amp(bool on) {
+#ifdef BOARD_HAS_M5PM1
+    /* The StickS3 AW8737 speaker amplifier is enabled by M5PM1 GPIO3, which powers
+     * up LOW (amp off). Configure GPIO3 as a plain output and drive it: mirrors the
+     * LCD-power GPIO2 setup in furi_hal_m5pm1_init() but on bit3 — 0x16/0x13 bit3
+     * clear (GPIO output mode), 0x10 bit3 set (output enable), 0x11 bit3 = level
+     * (1 = amp on). Reuses the PMIC I2C driver installed at boot. The amp must be
+     * OFF to use the IR receiver, so callers disable it when releasing the speaker. */
+    const uint8_t setup[][2] = {
+        {0x16, 0}, /* bit3 -> 0 */
+        {0x13, 0}, /* bit3 -> 0 */
+        {0x10, 1}, /* bit3 -> 1 (output enable) */
+    };
+    uint8_t v;
+    for(size_t i = 0; i < sizeof(setup) / sizeof(setup[0]); i++) {
+        uint8_t reg = setup[i][0];
+        if(i2c_master_write_read_device(
+               BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &v, 1, pdMS_TO_TICKS(50)) != ESP_OK)
+            return;
+        if(setup[i][1])
+            v |= (uint8_t)(1u << 3);
+        else
+            v &= (uint8_t)~(1u << 3);
+        uint8_t buf[2] = {reg, v};
+        if(i2c_master_write_to_device(
+               BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, buf, 2, pdMS_TO_TICKS(50)) != ESP_OK)
+            return;
+    }
+    uint8_t reg = 0x11;
+    if(i2c_master_write_read_device(
+           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &v, 1, pdMS_TO_TICKS(50)) != ESP_OK)
+        return;
+    if(on)
+        v |= (uint8_t)(1u << 3);
+    else
+        v &= (uint8_t)~(1u << 3);
+    uint8_t buf[2] = {0x11, v};
+    esp_err_t e =
+        i2c_master_write_to_device(BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, buf, 2, pdMS_TO_TICKS(50));
+    ESP_LOGI(TAG, "Speaker amp %s (M5PM1 GPIO3, 0x11=0x%02X, err=%s)", on ? "ON" : "OFF", v,
+             esp_err_to_name(e));
+#else
+    (void)on;
+#endif
+}
+
 bool furi_hal_m5pm1_get_vbat_mv(uint16_t* out_mv) {
 #ifdef BOARD_HAS_M5PM1
     /* M5PM1 reports the battery voltage directly in millivolts across two registers:

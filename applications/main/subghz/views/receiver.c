@@ -20,6 +20,7 @@ typedef struct {
     FuriString* item_str;
     FuriString* time;
     uint8_t type;
+    bool fired; // (private) auto-fired 0-PSI -> draw a tick on this row
 } SubGhzReceiverMenuItem;
 
 ARRAY_DEF(SubGhzReceiverMenuItemArray, SubGhzReceiverMenuItem, M_POD_OPLIST) //-V658
@@ -187,6 +188,7 @@ void subghz_view_receiver_add_item_to_menu(
             item_menu->time = furi_string_alloc_set(time);
             item_menu->item_str = furi_string_alloc_set(name);
             item_menu->type = type;
+            item_menu->fired = false;
             if(model->history_item == 0) {
                 view_set_input_mode(subghz_receiver->view, ViewInputModeUpDown);
             }
@@ -318,7 +320,9 @@ void subghz_view_receiver_draw(Canvas* canvas, SubGhzViewReceiverModel* model) {
             } else {
                 canvas_set_color(canvas, ColorBlack);
             }
-            elements_string_fit_width(canvas, str_buff, scrollbar ? MAX_LEN_PX - 7 : MAX_LEN_PX);
+            uint8_t fit_w = scrollbar ? MAX_LEN_PX - 7 : MAX_LEN_PX;
+            if(item_menu->fired) fit_w -= 9; // reserve space for the auto-fired tick
+            elements_string_fit_width(canvas, str_buff, fit_w);
             /* item_menu->type can exceed the sparse ReceiverItemIcons table (e.g.
              * TPMS = 7 is out of range; indices 3/4/5 are NULL gaps) — fall back
              * to the Unknown icon instead of an OOB / NULL Icon* deref. */
@@ -328,6 +332,16 @@ void subghz_view_receiver_draw(Canvas* canvas, SubGhzViewReceiverModel* model) {
             if(!item_icon) item_icon = &I_Quest_7x8;
             canvas_draw_icon(canvas, 4, 2 + i * FRAME_HEIGHT, item_icon);
             canvas_draw_str(canvas, 15, 9 + i * FRAME_HEIGHT, furi_string_get_cstr(str_buff));
+            if(item_menu->fired) {
+                // Auto-fired 0-PSI at this sensor: a small check ("tick") at the row's
+                // right edge marks it done. White on the highlighted (inverted) row.
+                uint8_t tx = scrollbar ? 111 : 117;
+                uint8_t ty = i * FRAME_HEIGHT;
+                canvas_set_color(canvas, (model->idx == idx) ? ColorWhite : ColorBlack);
+                canvas_draw_line(canvas, tx, ty + 6, tx + 2, ty + 8);
+                canvas_draw_line(canvas, tx + 2, ty + 8, tx + 6, ty + 3);
+                canvas_set_color(canvas, ColorBlack);
+            }
             furi_string_reset(str_buff);
         }
         if(scrollbar) {
@@ -713,6 +727,22 @@ void subghz_view_receiver_disable_draw_callback(SubGhzViewReceiver* subghz_recei
 
     with_view_model(
         subghz_receiver->view, SubGhzViewReceiverModel * model, { model->nodraw = true; }, true);
+}
+
+void subghz_view_receiver_mark_item_fired(
+    SubGhzViewReceiver* subghz_receiver,
+    uint16_t idx,
+    bool fired) {
+    furi_assert(subghz_receiver);
+    with_view_model(
+        subghz_receiver->view,
+        SubGhzViewReceiverModel * model,
+        {
+            if(idx < SubGhzReceiverMenuItemArray_size(model->history->data)) {
+                SubGhzReceiverMenuItemArray_get(model->history->data, idx)->fired = fired;
+            }
+        },
+        true);
 }
 
 void subghz_view_receiver_set_idx_menu(SubGhzViewReceiver* subghz_receiver, uint16_t idx) {

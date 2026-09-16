@@ -24,7 +24,12 @@
 #define BROWSER_ROOT        STORAGE_EXT_PATH_PREFIX
 #define FILE_NAME_LEN_MAX   256
 #define LONG_LOAD_THRESHOLD 100
-#define BROWSER_WORKER_STACK_SIZE 6144
+// 2048 (was 6144): this worker is entirely FuriString/heap-based and non-recursive, so 6K
+// was heavily oversized. On this internal-SRAM-maxed board even 3K could not be satisfied
+// from internal and spilled to PSRAM, which FreeRTOS rejects for a task stack
+// (xPortcheckValidStackMem assert -> reboot on SubGhz->Saved). 2048 = upstream Flipper's
+// value, proven sufficient for this worker, and needs the least internal.
+#define BROWSER_WORKER_STACK_SIZE 2048
 
 typedef enum {
     WorkerEvtStop = (1 << 0),

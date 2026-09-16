@@ -48,6 +48,7 @@ void ble_walk_hal_stop(void);
 bool ble_walk_hal_start_scan(void);
 void ble_walk_hal_stop_scan(void);
 bool ble_walk_hal_is_scanning(void);
+void ble_walk_hal_clear_devices(void); // reset the shared device table (call on detector entry)
 BleWalkDevice* ble_walk_hal_get_devices(uint16_t* count);
 
 // GATT Client

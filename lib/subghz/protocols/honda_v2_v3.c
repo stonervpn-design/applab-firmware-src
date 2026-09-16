@@ -527,24 +527,12 @@ static void honda_process_frame(SubGhzProtocolDecoderHondaV2V3* instance) {
 
         instance->extra.v2.has_sync = (sync_offset >= 0);
 
-        uint8_t* d = NULL;
-        if(sync_offset >= 0) {
-            d = &raw_bytes[sync_offset + HONDA_V2_SYNC_BYTES];
-        } else {
-            // Fallback: try to find data without full sync
-            if(byte_count >= HONDA_V2_DATA_BYTES) {
-                // Skip leading preamble-like bytes and look for plausible data
-                for(uint16_t offset = 0; offset <= byte_count - HONDA_V2_DATA_BYTES; offset++) {
-                    uint8_t b1 = raw_bytes[offset + 3];
-                    uint8_t b2 = raw_bytes[offset + 4];
-                    if(honda_v2_validate_buttons(b1, b2)) {
-                        d = &raw_bytes[offset];
-                        break;
-                    }
-                }
-            }
-            if(!d) return;
-        }
+        // Require the exact 6-byte sync pattern. The former fallback located
+        // data by button-pair match alone (no sync anchor, and V2 carries no
+        // CRC), so ~120-bit noise containing a valid button pair surfaced a
+        // bogus "Honda V2". Genuine fobs always transmit the sync pattern.
+        if(sync_offset < 0) return;
+        uint8_t* d = &raw_bytes[sync_offset + HONDA_V2_SYNC_BYTES];
 
         // Extract 13 data bytes
         uint32_t serial = ((uint32_t)d[0] << 16) | ((uint32_t)d[1] << 8) | d[2];

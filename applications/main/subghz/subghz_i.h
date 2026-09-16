@@ -112,7 +112,10 @@ struct SubGhz {
     // Serialized .sub body per slot, index-aligned. 512 (was 192) so structured rolling
     // frames (Protocol/Bit/Key + per-protocol fields) fit without the truncate-then-reject
     // that dropped valid captures; over-long bodies are still rejected in subghz_rollback.c.
-    char rollback_frame[ROLLBACK_MAX_SLOTS][512];
+    // Heap-allocated in PSRAM (was inline) so this 4K (ROLLBACK_MAX_SLOTS*512) does not sit
+    // in the struct's INTERNAL-SRAM calloc — freeing 4K at the earliest launch alloc so the
+    // Desktop stack can grow without a launch-time mutex-alloc OOM. Indexing is unchanged.
+    char (*rollback_frame)[512];
     volatile bool rollback_abort;
 
     // SubBrute Bruteforcer
@@ -173,9 +176,29 @@ struct SubGhz {
     // stalls. Set in the generic on-enter, used in the tick/advance path.
     char keeloq_fob_cnt_field[16];
     uint32_t keeloq_fob_cnt_seed;
-    // TRUE when the receiver was entered via "TPMS Spoofer": tune 433.92 FSK +
-    // only list TPMS-sensor decodes (private-only scanner). See subghz_scene_receiver.c.
+    // TRUE when the receiver was entered via "TPMS Spoofer": tune the chosen
+    // band/preset + only list TPMS-sensor decodes (private scanner). Band +
+    // modulation are picked in TPMS Scan Setup (tpms_scan_freq/tpms_scan_preset_idx);
+    // 0 freq => legacy default 433.92/FM238. See subghz_scene_receiver.c +
+    // subghz_scene_tpms_scan_setup.c.
     bool tpms_scan_mode;
+    bool vuln_scan_mode; // Car Keys "Vuln Scan": OK on a capture routes to Vuln Assess
+    uint32_t tpms_scan_freq; // Hz; 0 = default 433.92 MHz
+    uint8_t tpms_scan_preset_idx; // resolved CC1101 preset index for the scan
+    bool tpms_zero_psi_firing; // continuous 0-PSI (flat-tire) spoof TX active
+    bool tpms_auto_fire_enabled; // TPMS Scan Setup "Fire Mode": true=auto-fire on pickup, false=manual
+    bool tpms_auto_fire_pending; // scan picked up a TPMS sensor -> auto-route + fire (set in RX cb)
+    uint16_t tpms_auto_fire_idx; // history index to auto-fire
+    bool tpms_auto_fire_on_open; // receiver_info should auto-start the 0-PSI fire on enter
+    bool tpms_auto_cycle; // auto-fire is a BURST that returns to the scan (capture->fire->capture loop)
+    bool tpms_survey_mode; // TPMS Scan "Fire Mode" = Survey: log every sensor to CSV, never fire
+    void* tpms_survey_log; // TpmsSurveyLog* open while surveying (opaque here); NULL otherwise
+    // Auto-fired 0-PSI tracking (private): sensor IDs already hit this scan session. A
+    // re-detection of a fired sensor is dropped (no duplicate list row, no re-fire) and
+    // its list row is ticked. Cleared on a fresh scan and on leaving the scan.
+    uint32_t tpms_fired_ids[24];
+    uint8_t tpms_fired_count;
+    uint32_t tpms_auto_fire_sensor_id; // id of the sensor the pending auto-fire targets
 
     SubGhzFileEncoderWorker* decode_raw_file_worker_encoder;
 
@@ -209,11 +232,20 @@ struct SubGhz {
 #endif
 };
 
+// Auto-fired 0-PSI sensor set (private): tracks which TPMS sensors were auto-fired.
+bool subghz_tpms_fired_contains(SubGhz* subghz, uint32_t id);
+void subghz_tpms_fired_add(SubGhz* subghz, uint32_t id);
+void subghz_tpms_fired_clear(SubGhz* subghz);
+
 void subghz_blink_start(SubGhz* subghz);
 void subghz_blink_stop(SubGhz* subghz);
 
 bool subghz_tx_start(SubGhz* subghz, FlipperFormat* flipper_format);
 void subghz_dialog_message_freq_error(SubGhz* subghz, bool only_rx);
+
+// TRUE if a picked-up TPMS protocol can be re-transmitted as a 0-PSI flat-tire
+// spoof (has both an encoder and a packer). Used by the auto-fire arm gate.
+bool subghz_scene_receiver_info_tpms_is_packable(const char* pname);
 
 bool subghz_key_load(SubGhz* subghz, const char* file_path, bool show_dialog);
 

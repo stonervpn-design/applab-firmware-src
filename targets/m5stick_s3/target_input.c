@@ -1,23 +1,24 @@
 /**
  * target_input.c — M5Stack StickS3 two-button input driver
  *
- * Two physical buttons (KEY1=GPIO11 "M5"/front, KEY2=GPIO12 side). The control layout
- * matches Bruce (github pr3y/Bruce, boards/m5stack-sticks3) so it's familiar:
+ * Two physical buttons (KEY1=GPIO11 "M5"/front, KEY2=GPIO12 side). Control layout tuned
+ * for easy list navigation on a 2-button device (the side button is pure nav with
+ * hold-to-fast-scroll; Back lives on the front button so the side button's hold is free):
  *
- *   KEY1 (M5/front): press            -> InputKeyOk    (Select)
- *   KEY2 (side/DW):  single-click     -> InputKeyDown
- *                    double-click     -> InputKeyUp     (2nd click within 250ms)
- *                    long-press >=600ms -> InputKeyBack (SHORT — pops a scene)
- *                    keep holding >=1200ms -> InputKeyBack (LONG — game exit, e.g.
- *                                            Snake; an extension beyond Bruce)
+ *   KEY1 (M5/front): tap               -> InputKeyOk   (Select)
+ *                    hold >=600ms      -> InputKeyBack (SHORT — pops a scene)
+ *                    keep holding >=1200ms -> InputKeyBack (LONG — game exit, e.g. Snake)
+ *   KEY2 (side):     single-tap        -> InputKeyDown (one step)
+ *                    HOLD >=320ms      -> InputKeyDown auto-repeats ~9/s (fast scroll)
+ *                    double-tap        -> InputKeyUp   (2nd tap within 200ms)
  *   Screen wake:     any deliberate BMI270 movement wakes the screen once it has
  *                    gone dark from inactivity — and does NOTHING else, ever. Tilt is
- *                    wake-only: it never injects Left/Right or any navigation, whether
- *                    the screen is dark or lit. Honors the s_tilt_enabled toggle
- *                    (System settings) which enables/disables tilt-to-wake.
+ *                    wake-only: it never injects navigation. Honors the s_tilt_enabled
+ *                    toggle (System settings).
  *
- * A single-click is confirmed only after the 250ms double-click window closes, so Down
- * has a slight, deliberate lag (Bruce does the same) to distinguish it from Up.
+ * A single-tap Down is confirmed only after the 200ms double-tap window closes, so it has
+ * a small deliberate lag to distinguish it from a double-tap Up; a HOLD bypasses that and
+ * fast-scrolls immediately. Ok fires on release so a hold can become Back instead.
  *
  * Buttons are wired to GND and read with the internal pull-up: pressed == level 0.
  */
@@ -37,18 +38,20 @@
 #define BTN_KEY1_GPIO ((gpio_num_t)BOARD_PIN_BTN_KEY1)
 #define BTN_KEY2_GPIO ((gpio_num_t)BOARD_PIN_BTN_KEY2)
 
-/* Bruce control scheme (github pr3y/Bruce, boards/m5stack-sticks3):
- *   KEY1 (GPIO11, "M5"/front button) = Select/Ok.
- *   KEY2 (GPIO12, side button)       = nav: single-click Down, double-click Up,
- *                                      long-press (>=600ms) Back.
- * The BMI270 IMU wakes the screen from inactivity (our addition; Bruce has no tilt) and
- * does nothing more — it never injects navigation keys (tilt is wake-only, by request).
- * DW_LONG2 is an extension beyond Bruce: keep holding past it for a LONG Back, which
- * the bundled Flipper games (Snake, ...) require to exit — Bruce's Arduino apps don't
- * use that convention so upstream stops at one Back. */
-#define DW_DOUBLE_MS     250U  /* max gap first-release -> second-release for a double */
-#define DW_LONG_MS       600U  /* hold -> Back (Bruce Esc) */
-#define DW_LONG2_MS      1200U /* keep holding -> long Back (game exit) */
+/* Control scheme (tuned for 2-button list navigation):
+ *   KEY1 (GPIO11, "M5"/front button) = tap Select/Ok, hold Back (>=600ms short, >=1200ms
+ *                                      long for game-exit). Ok fires on release so the
+ *                                      same button's hold can become Back.
+ *   KEY2 (GPIO12, side button)       = tap Down, HOLD auto-scroll Down (fast list scroll),
+ *                                      double-tap Up. No Back here — its hold is the
+ *                                      fast-scroll gesture now.
+ * The BMI270 IMU wakes the screen from inactivity and does nothing more — it never injects
+ * navigation keys (tilt is wake-only, by request). */
+#define DW_DOUBLE_MS     200U  /* max gap first-release -> second-release for a double (snappier Down) */
+#define DW_LONG_MS       600U  /* hold KEY1 -> Back (short, pops a scene) */
+#define DW_LONG2_MS      1200U /* keep holding KEY1 -> long Back (game exit) */
+#define SCROLL_HOLD_MS   320U  /* hold KEY2 this long -> enter fast auto-scroll (Down) */
+#define SCROLL_REPEAT_MS 110U  /* auto-scroll step interval while KEY2 held */
 #define KEY_DEBOUNCE_MS  20U
 #define ACCEL_SAMPLE_MS  40U   /* throttle BMI270 reads: 25 Hz is ample for wake-detect
                                 * vs. reading every 4 ms poll (~250 Hz) on the shared I2C bus */
@@ -82,11 +85,15 @@ typedef struct {
     bool raw_last; /* last raw sample */
     uint32_t changed_at; /* tick of last raw change (debounce) */
     uint32_t press_started_at;
-    /* KEY2 (side/DW nav) single-vs-double-vs-long tracking */
+    /* KEY2 (side) single-vs-double click tracking */
     bool waiting; /* first click released, awaiting a possible second click */
     uint32_t first_release_at;
+    /* KEY1 (front) hold-to-Back tracking */
     bool long_fired; /* short Back already emitted this hold */
     bool long2_fired; /* long Back already emitted this hold */
+    /* KEY2 (side) hold-to-fast-scroll tracking */
+    bool scroll_active; /* currently auto-scrolling Down while held */
+    uint32_t last_scroll_at; /* tick of last auto-scroll step */
 } BtnState;
 
 static BtnState s_key1;
@@ -96,6 +103,9 @@ static bool s_ready = false;
 
 /* ---- BMI270 motion -> wake the screen (only; never navigation) ---- */
 static volatile bool s_tilt_enabled = true; /* default on; System settings persists it */
+/* Runtime tilt-nav suppression (SubGhz RX capture views): tilt does nothing while
+ * capturing, so an accidental roll can't open the freq menu. Wake path unaffected. */
+static volatile bool s_tilt_nav_suppressed = false;
 
 /* Deliberate-motion detector. We track a slow baseline of the resting accel vector;
  * a large deviation from it means the stick was picked up / tilted / shaken. The
@@ -110,10 +120,16 @@ static int32_t s_acc_base[3];
 static bool s_acc_base_have = false;
 static uint32_t s_acc_base_at = 0;
 static uint32_t s_wake_last_at = 0;
+/* Tilt -> Left/Right nav latch: set when a roll fires a tap (or when a wake gesture
+ * fires), cleared only when the roll returns inside the release band. That single
+ * latch IS the hysteresis: a held tilt yields ONE tap, and a wake roll can't also
+ * navigate until it recenters. */
+static bool s_tilt_latched = false;
 
 void target_input_set_tilt_enabled(bool enabled) {
     s_tilt_enabled = enabled;
     if(!enabled) s_acc_base_have = false; /* re-seed the baseline next time it's on */
+    s_tilt_latched = false; /* drop any pending tilt latch when the toggle changes */
     /* persist so it survives reboot (read back in target_input_init) */
     nvs_handle_t h;
     if(nvs_open("input", NVS_READWRITE, &h) == ESP_OK) {
@@ -125,6 +141,12 @@ void target_input_set_tilt_enabled(bool enabled) {
 
 bool target_input_get_tilt_enabled(void) {
     return s_tilt_enabled;
+}
+
+void target_input_set_tilt_nav_suppressed(bool suppressed) {
+    s_tilt_nav_suppressed = suppressed;
+    /* Drop any pending roll latch so a held tilt can't fire on un-suppress. */
+    s_tilt_latched = false;
 }
 
 /* Returns true once per deliberate movement. A table-resting stick keeps deviation
@@ -156,9 +178,50 @@ static bool motion_wake_edge(int16_t x, int16_t y, int16_t z, uint32_t now) {
     return false;
 }
 
-/* Tilt navigation removed by request: the BMI270 wakes the screen ONLY and never
- * injects Left/Right (or any) navigation. The firm-roll -> Left/Right detector that
- * used to live here has been deleted so a tilt can never move the UI. */
+/* ---- BMI270 tilt -> Left/Right navigation (re-added by request, L/R ONLY) ----
+ * The 2-button scheme owns Up/Down/Ok/Back; Left/Right are otherwise unreachable,
+ * which breaks any UI that needs a left/right tap (exit-save, emulate, char pickers).
+ * Rolling the stick left/right past TILT_FIRE_LSB emits ONE InputKeyLeft/Right tap;
+ * the roll must fall back under TILT_RELEASE_LSB (return-to-center) before it can fire
+ * again, so a HELD tilt is a single tap, not a stream. Runs only while the screen is
+ * LIT, and a wake gesture arms the same latch, so tilt-nav never fights tilt-to-wake
+ * (which fires only while dark). Gated by s_tilt_enabled at the call site.
+ *
+ * At +/-2g, 1g == 16384 LSB. Threshold the roll axis directly (integer, matching
+ * motion_wake_edge's style): ~35 deg roll ~= sin(35)*16384 ~= 9400 LSB (fire),
+ * ~25 deg ~= 6900 LSB (release; the gap is the hysteresis). Axis/sign are mount-
+ * dependent -> exposed as one-line tunables (design doc 2026-07-28-bmi270-tilt-nav). */
+#define TILT_FIRE_LSB           9400
+#define TILT_RELEASE_LSB        6900
+#define TILT_ROLL_AXIS(x, y, z) (x) /* raw axis that swings with left/right roll */
+#define TILT_INVERT             1    /* set 1 if Left/Right come out swapped on-device */
+
+/* Returns InputKeyLeft/InputKeyRight to emit THIS sample, or InputKeyMAX for none
+ * (InputKeyUp==0, so MAX is the 'none' sentinel). Pure per-sample edge detector over
+ * s_tilt_latched, mirroring motion_wake_edge(). */
+static InputKey tilt_nav_edge(int16_t x, int16_t y, int16_t z, uint32_t now) {
+    (void)now; /* wide FIRE/RELEASE band + 40ms sampling => no time refractory needed */
+    (void)x;
+    (void)y;
+    (void)z; /* only the TILT_ROLL_AXIS one is used; void all so the axis is a 1-line swap */
+    int32_t roll = TILT_ROLL_AXIS(x, y, z);
+    int32_t mag = roll < 0 ? -roll : roll;
+
+    if(s_tilt_latched) {
+        /* already fired (or woke) on this roll -> wait for return-to-center to re-arm */
+        if(mag < TILT_RELEASE_LSB) s_tilt_latched = false;
+        return InputKeyMAX;
+    }
+    if(mag >= TILT_FIRE_LSB) {
+        s_tilt_latched = true;
+        bool right = (roll >= 0);
+#if TILT_INVERT
+        right = !right;
+#endif
+        return right ? InputKeyRight : InputKeyLeft;
+    }
+    return InputKeyMAX;
+}
 
 void target_input_init(void) {
     gpio_config_t cfg = {
@@ -220,31 +283,56 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
     const uint32_t double_ticks = furi_ms_to_ticks(DW_DOUBLE_MS);
     const uint32_t long_ticks = furi_ms_to_ticks(DW_LONG_MS);
     const uint32_t long2_ticks = furi_ms_to_ticks(DW_LONG2_MS);
+    const uint32_t scroll_hold_ticks = furi_ms_to_ticks(SCROLL_HOLD_MS);
+    const uint32_t scroll_repeat_ticks = furi_ms_to_ticks(SCROLL_REPEAT_MS);
 
     /* Active-low: pressed == level 0 */
     bool raw1 = (gpio_get_level(BTN_KEY1_GPIO) == 0);
     bool raw2 = (gpio_get_level(BTN_KEY2_GPIO) == 0);
 
-    /* ---- KEY1 (M5/front) = Select/Ok on each press ---- */
+    /* ---- KEY1 (M5/front) = tap Select/Ok, hold Back ---- */
     bool changed1, state1 = false;
     changed1 = debounce(&s_key1, raw1, now, &state1);
-    if(changed1 && state1) {
-        publish_tap(pubsub, InputKeyOk, sequence_counter);
+    if(changed1) {
+        if(state1) {
+            /* press edge */
+            s_key1.press_started_at = now;
+            s_key1.long_fired = false;
+            s_key1.long2_fired = false;
+        } else if(!s_key1.long_fired) {
+            /* short release (never became a hold) -> Ok */
+            publish_tap(pubsub, InputKeyOk, sequence_counter);
+        }
+        /* release after a hold-Back -> nothing more */
+    } else if(s_key1.pressed) {
+        uint32_t held = now - s_key1.press_started_at;
+        if(!s_key1.long_fired && held >= long_ticks) {
+            /* held past the long threshold -> Back (short, pops a scene) */
+            s_key1.long_fired = true;
+            publish_tap(pubsub, InputKeyBack, sequence_counter);
+        } else if(s_key1.long_fired && !s_key1.long2_fired && held >= long2_ticks) {
+            /* keep holding -> long Back, for games that gate exit on InputTypeLong */
+            s_key1.long2_fired = true;
+            publish_long(pubsub, InputKeyBack, sequence_counter);
+        }
     }
 
-    /* ---- KEY2 (side/DW) = single-click Down / double-click Up / long-press Back ---- */
+    /* ---- KEY2 (side) = tap Down / hold fast-scroll Down / double-tap Up ---- */
     bool changed2, state2 = false;
     changed2 = debounce(&s_key2, raw2, now, &state2);
     if(changed2) {
         if(state2) {
             /* press edge */
             s_key2.press_started_at = now;
-            s_key2.long_fired = false;
-            s_key2.long2_fired = false;
-        } else if(!s_key2.long_fired) {
-            /* short click released (never became a long-press) */
-            if(s_key2.waiting && (now - s_key2.first_release_at) <= double_ticks) {
-                /* second click within the window -> double-click -> Up */
+            s_key2.scroll_active = false;
+        } else {
+            /* release */
+            if(s_key2.scroll_active) {
+                /* was fast-scrolling -> just stop (no trailing Down, no double window) */
+                s_key2.scroll_active = false;
+                s_key2.waiting = false;
+            } else if(s_key2.waiting && (now - s_key2.first_release_at) <= double_ticks) {
+                /* second quick click within the window -> double -> Up */
                 publish_tap(pubsub, InputKeyUp, sequence_counter);
                 s_key2.waiting = false;
             } else {
@@ -252,21 +340,18 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
                 s_key2.waiting = true;
                 s_key2.first_release_at = now;
             }
-        } else {
-            /* release after a long-press -> nothing more */
-            s_key2.waiting = false;
         }
     } else if(s_key2.pressed) {
+        /* held without release: after SCROLL_HOLD_MS, auto-scroll Down and keep repeating */
         uint32_t held = now - s_key2.press_started_at;
-        if(!s_key2.long_fired && held >= long_ticks) {
-            /* held past the long threshold -> Back (short, pops a scene) */
-            s_key2.long_fired = true;
-            s_key2.waiting = false; /* a long-press cancels a pending single-click */
-            publish_tap(pubsub, InputKeyBack, sequence_counter);
-        } else if(s_key2.long_fired && !s_key2.long2_fired && held >= long2_ticks) {
-            /* keep holding -> long Back, for games that gate exit on InputTypeLong */
-            s_key2.long2_fired = true;
-            publish_long(pubsub, InputKeyBack, sequence_counter);
+        if(!s_key2.scroll_active && held >= scroll_hold_ticks) {
+            s_key2.scroll_active = true;
+            s_key2.waiting = false; /* a hold is not a tap */
+            s_key2.last_scroll_at = now;
+            publish_tap(pubsub, InputKeyDown, sequence_counter);
+        } else if(s_key2.scroll_active && (now - s_key2.last_scroll_at) >= scroll_repeat_ticks) {
+            s_key2.last_scroll_at = now;
+            publish_tap(pubsub, InputKeyDown, sequence_counter);
         }
     }
 
@@ -291,16 +376,24 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
             /* Wake path (behavior unchanged): motion_wake_edge() runs on every sample so
              * the baseline keeps chasing the resting pose (the && only short-circuits
              * AFTER it executes); a wake is emitted only while the screen is dark. */
-            if(motion_wake_edge(ax, ay, az, now) && dark) {
+            /* motion_wake_edge() runs on every sample so its baseline keeps chasing the
+             * resting pose; a wake is only EMITTED while the screen is dark. */
+            bool woke = motion_wake_edge(ax, ay, az, now);
+            if(woke && dark) {
                 /* Screen is dark: emit one wake. A bare Press+Release (no Short/Long)
                  * turns the backlight back on via the notification service and resets
-                 * the desktop idle timer, but no view treats it as a keypress — so tilt
-                 * wakes the screen and does nothing else while dark. */
+                 * the desktop idle timer, but no view treats it as a keypress. */
                 publish(pubsub, WAKE_KEY, InputTypePress, sequence_counter);
                 publish(pubsub, WAKE_KEY, InputTypeRelease, sequence_counter);
+                s_tilt_latched = true; /* the wake roll must recenter before it can navigate */
             }
-            /* Tilt is wake-only: no navigation is injected whether the screen is lit or
-             * dark. (`dark` still gates the wake emission above.) */
+            /* Tilt -> Left/Right ONLY while the screen is lit, so it never fights the
+             * dark-only wake gesture and a wake roll never bleeds into a nav tap.
+             * Up/Down stay button-only, per request. */
+            if(!dark && !s_tilt_nav_suppressed) {
+                InputKey tk = tilt_nav_edge(ax, ay, az, now);
+                if(tk != InputKeyMAX) publish_tap(pubsub, tk, sequence_counter);
+            }
         }
     }
 }

@@ -42,7 +42,13 @@ static const SubGhzBlockConst subghz_protocol_honda_v6_const = {
 #define HONDA_V6_313_TE_SHORT 800U
 #define HONDA_V6_313_TE_MID   1200U
 #define HONDA_V6_313_TE_LONG  1600U
-#define HONDA_V6_313_TE_DELTA 250U
+/* Level spacing is 400us (800/1200/1600). Delta MUST stay below half of that
+ * (200us) or the three classification windows overlap into one continuous
+ * [550,1850] accept band, which mis-classifies arbitrary OOK remote timings as
+ * valid trits and mass-produces phantom "313 MHz" decodes. 150us keeps the
+ * windows disjoint ([650,950],[1050,1350],[1450,1750]) while still allowing
+ * realistic FSK timing jitter (>=9% at 1600us, ~19% at 800us). */
+#define HONDA_V6_313_TE_DELTA 150U
 #define HONDA_V6_313_MIN_PREAMBLE 15
 #define HONDA_V6_313_MIN_TRITS 30
 #define HONDA_V6_313_MAX_TRITS 60
@@ -608,10 +614,26 @@ void subghz_protocol_decoder_honda_v6_feed(void* context, bool level, uint32_t d
 
     case HondaV6DecoderStep313Data:
         if(trit_313 <= 2) {
-            honda_v6_313_add_trit(instance, trit_313);
+            if(instance->trit_count >= HONDA_V6_313_MAX_TRITS) {
+                /* The continuous 3-level run is longer than any valid 313 MHz
+                 * Honda frame (it would fill and overrun the trit buffer). A run
+                 * this long belongs to a different, longer 3-level remote (e.g.
+                 * Toyota Estima/4Runner, which its own decoder handles), so
+                 * discard it instead of reporting a length-truncated phantom. */
+                instance->decoder.parser_step = HondaV6DecoderStepReset;
+            } else {
+                honda_v6_313_add_trit(instance, trit_313);
+            }
         } else {
-            /* Gap or invalid timing — process frame */
-            honda_v6_313_process_frame(instance);
+            /* A valid 313 MHz frame is terminated by a genuine inter-frame GAP
+             * (a long LOW). Any other out-of-window timing mid-stream is
+             * corruption/noise, not a frame boundary, so the partial trit run is
+             * discarded rather than reported as a phantom decode. This, together
+             * with the disjoint classification windows (TE_DELTA), is what stops
+             * arbitrary OOK remotes from being mis-decoded as HondaV6 313 MHz. */
+            if(!level && duration >= HONDA_V6_313_GAP) {
+                honda_v6_313_process_frame(instance);
+            }
             instance->decoder.parser_step = HondaV6DecoderStepReset;
         }
         break;
