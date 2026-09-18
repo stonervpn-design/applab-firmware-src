@@ -1,0 +1,16 @@
+CAPTURED 10428 bytes
+LOG> I (28) boot: Partition Table:
+LOG> I (29) boot:  2 factory          factory app      00 00 00010000 00380000
+LOG> I (30) boot:  3 storage          Unknown data     01 81 00390000 00460000
+LOG> I (31) boot: End of partition table
+LOG> I (473) boot: Loaded app from partition at offset 0x10000
+LOG> I (1028) esp_core_dump_flash: Found partition 'coredump' @ 7f0000 65536 bytes
+LOG> I (1169) FuriHal: NRF24_CSN GPIO8 set HIGH (deselect)
+LOG> I (4918) Main: service[4]: appid=dialogs name=DialogsSrv stack=4096
+LOG> I (4919) Main: service[9]: appid=storage name=StorageSrv stack=4096
+LOG> I (4919) Main: service[10]: appid=desktop name=DesktopSrv stack=4096
+LOG> I (4919) Main: settings[1]: appid=storage_settings name=Storage stack=4096
+LOG> 3898 [0;33m[W][NotificationSrv] [0mLOAD failed — using defaults
+LOG> I (5023) FuriHalSd: virtual SD ready (FATFS/WL on 'storage' @ drive 0:)
+LOG> W (8133) HEAP: desktop free=6120316 largest=6029312 int=115723 dma=108223
+CAPTURE_DONE 

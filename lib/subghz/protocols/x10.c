@@ -79,135 +79,21 @@ const SubGhzProtocolDecoder subghz_protocol_x10_decoder = {
 };
 
 const SubGhzProtocolEncoder subghz_protocol_x10_encoder = {
-    .alloc = subghz_protocol_encoder_x10_alloc,
-    .free = subghz_protocol_encoder_x10_free,
-    .deserialize = subghz_protocol_encoder_x10_deserialize,
-    .stop = subghz_protocol_encoder_x10_stop,
-    .yield = subghz_protocol_encoder_x10_yield,
+    .alloc = NULL,
+    .free = NULL,
+    .deserialize = NULL,
+    .stop = NULL,
+    .yield = NULL,
 };
 
 const SubGhzProtocol subghz_protocol_x10 = {
     .name = SUBGHZ_PROTOCOL_X10_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_315 /* Technically it is 310MHz only */ | SubGhzProtocolFlag_AM |
-            SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save |
-            SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Decodable,
     .decoder = &subghz_protocol_x10_decoder,
     .encoder = &subghz_protocol_x10_encoder,
 };
-
-// -----------------------------------------------------------------------------
-// Encoder
-// -----------------------------------------------------------------------------
-//
-// OOK waveform reproduced exactly as accepted by the decoder above:
-//   preamble  HIGH 16*te_short (9600us), LOW 8*te_short (4800us)
-//   32 bits   HIGH te_short (600us), then LOW te_short (0) or te_long (1)
-//   stop      HIGH te_short (600us)
-//   gap       LOW 72*te_short (inter-frame silence)
-//
-// Worst-case upload entries: 2 (preamble) + 32*2 (bits) + 2 (stop + gap) = 68.
-#define X10_ENCODER_UPLOAD_SIZE 72
-
-void* subghz_protocol_encoder_x10_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    SubGhzProtocolEncoderX10* instance = malloc(sizeof(SubGhzProtocolEncoderX10));
-    instance->base.protocol = &subghz_protocol_x10;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 3;
-    instance->encoder.size_upload = X10_ENCODER_UPLOAD_SIZE;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    return instance;
-}
-
-void subghz_protocol_encoder_x10_free(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderX10* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-void subghz_protocol_encoder_x10_stop(void* context) {
-    SubGhzProtocolEncoderX10* instance = context;
-    instance->encoder.is_running = false;
-}
-
-static bool subghz_protocol_encoder_x10_get_upload(SubGhzProtocolEncoderX10* instance) {
-    furi_assert(instance);
-    const uint32_t te = subghz_protocol_x10_const.te_short;
-    const uint32_t te_long = subghz_protocol_x10_const.te_long;
-    size_t index = 0;
-    const size_t max = instance->encoder.size_upload;
-
-    // Preamble: long high burst then long low
-    instance->encoder.upload[index++] = level_duration_make(true, te * 16);
-    instance->encoder.upload[index++] = level_duration_make(false, te * 8);
-
-    // 32 data bits, MSB first
-    for(int i = instance->generic.data_count_bit - 1; i >= 0; i--) {
-        if(index + 2 > max) return false;
-        instance->encoder.upload[index++] = level_duration_make(true, te);
-        if((instance->generic.data >> i) & 0x1) {
-            instance->encoder.upload[index++] = level_duration_make(false, te_long);
-        } else {
-            instance->encoder.upload[index++] = level_duration_make(false, te);
-        }
-    }
-
-    // Stop bit high + inter-frame gap
-    if(index + 2 > max) return false;
-    instance->encoder.upload[index++] = level_duration_make(true, te);
-    instance->encoder.upload[index++] = level_duration_make(false, te * 72);
-
-    instance->encoder.size_upload = index;
-    return true;
-}
-
-SubGhzProtocolStatus
-    subghz_protocol_encoder_x10_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    SubGhzProtocolEncoderX10* instance = context;
-    SubGhzProtocolStatus ret = SubGhzProtocolStatusError;
-    do {
-        ret = subghz_block_generic_deserialize_check_count_bit(
-            &instance->generic,
-            flipper_format,
-            subghz_protocol_x10_const.min_count_bit_for_found);
-        if(ret != SubGhzProtocolStatusOk) {
-            break;
-        }
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        instance->encoder.size_upload = X10_ENCODER_UPLOAD_SIZE;
-        if(!subghz_protocol_encoder_x10_get_upload(instance)) {
-            ret = SubGhzProtocolStatusErrorEncoderGetUpload;
-            break;
-        }
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-    } while(false);
-    return ret;
-}
-
-LevelDuration subghz_protocol_encoder_x10_yield(void* context) {
-    SubGhzProtocolEncoderX10* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
-}
 
 void* subghz_protocol_decoder_x10_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);

@@ -143,10 +143,7 @@ void nfc_render_emv_transactions(const EmvApplication* apl, FuriString* str) {
             uint64_t amount = bit_lib_bytes_to_num_bcd(amount_bytes, 6, &junk);
             uint8_t amount_cents = amount % 100;
 
-            /* ESP32 newlib nano-printf has no 64-bit conversion: %llu emits garbage
-             * ("lu.03" instead of "4.20"). Transaction amounts fit in 32 bits, so
-             * cast and use %lu (long == 32-bit on xtensa). */
-            furi_string_cat_printf(str, "%lu.%02u", (uint32_t)(amount / 100), amount_cents);
+            furi_string_cat_printf(str, "%llu.%02u", amount / 100, amount_cents);
         }
 
         if(apl->trans[i].currency) {

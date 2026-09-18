@@ -1,9 +1,0 @@
-App(
-    appid="grove_i2c_scan",
-    name="Grove I2C Scan",
-    apptype=FlipperAppType.MENUEXTERNAL,
-    entry_point="grove_i2c_scan_app",
-    requires=["gui"],
-    stack_size=4 * 1024,
-    fap_category="Tools",
-)

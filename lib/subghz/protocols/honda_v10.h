@@ -72,28 +72,8 @@ typedef struct {
     HondaV10Frame frame;
 } SubGhzProtocolDecoderHondaV10;
 
-typedef struct {
-    SubGhzProtocolEncoderBase  base;
-    SubGhzProtocolBlockEncoder encoder;
-    SubGhzBlockGeneric         generic;
-    HondaV10Frame              frame;
-} SubGhzProtocolEncoderHondaV10;
-
 extern const SubGhzProtocolDecoder subghz_protocol_honda_v10_decoder;
-extern const SubGhzProtocolEncoder subghz_protocol_honda_v10_encoder;
 extern const SubGhzProtocol        subghz_protocol_honda_v10;
-
-/* Encoder (raw replay: re-emits the captured 96-bit frame — serial, button,
- * counter, status and 32-bit cipher tail — as the native 2FSK Manchester
- * waveform the decoder accepts. The cipher tail is replayed verbatim, so a
- * counter-incremented frame is NOT produced: this round-trips the decoder but
- * is not a live rolling-code attack.) */
-void*  subghz_protocol_encoder_honda_v10_alloc(SubGhzEnvironment* env);
-void   subghz_protocol_encoder_honda_v10_free(void* ctx);
-SubGhzProtocolStatus subghz_protocol_encoder_honda_v10_deserialize(
-    void* ctx, FlipperFormat* ff);
-void   subghz_protocol_encoder_honda_v10_stop(void* ctx);
-LevelDuration subghz_protocol_encoder_honda_v10_yield(void* ctx);
 
 void*  subghz_protocol_decoder_honda_v10_alloc(SubGhzEnvironment* env);
 void   subghz_protocol_decoder_honda_v10_free(void* ctx);

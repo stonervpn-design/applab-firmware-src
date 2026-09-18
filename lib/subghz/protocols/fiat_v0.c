@@ -43,6 +43,12 @@ typedef enum {
 } FiatV0DecoderStep;
 
 static void fiat_v0_finish_packet(struct SubGhzProtocolDecoderFiatV0* instance) {
+    /* Degenerate-serial reject: a genuine fob never carries an all-zero or
+     * all-ones fixed field. Drops noise frames that satisfied the length/
+     * preamble anchor by accident (this protocol has no checksum to lean on). */
+    if(instance->fix == 0u || instance->fix == 0xFFFFFFFFu) {
+        return;
+    }
     instance->generic.data = ((uint64_t)instance->hop << 32) | instance->fix;
     instance->generic.data_count_bit = 71;
     instance->generic.serial = instance->fix;

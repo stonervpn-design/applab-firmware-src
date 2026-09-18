@@ -7,7 +7,7 @@
 
 LIST_DEF(FuriLogHandlersList, FuriLogHandler, M_POD_OPLIST)
 
-#define FURI_LOG_LEVEL_DEFAULT FuriLogLevelInfo
+#define FURI_LOG_LEVEL_DEFAULT FuriLogLevelWarn
 
 typedef struct {
     FuriLogLevel log_level;

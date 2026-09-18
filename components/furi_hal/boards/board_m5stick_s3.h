@@ -59,9 +59,9 @@
 #define BOARD_LCD_BG_COLOR      0x0000
 
 /* Phase-0 diagnostic: fill the panel R/G/B/W at boot to verify the panel + pins
- * can display anything (independent of the GUI). Disabled — display confirmed
- * working; the Stick now boots straight to the GUI with no color-flash test. */
-/* #define BOARD_DISPLAY_SELFTEST  1 */
+ * can display anything (independent of the GUI). Remove once the display is
+ * confirmed working. */
+#define BOARD_DISPLAY_SELFTEST  1
 
 /* The StickS3's ST7789P3 needs the full power/VCOM/porch/gamma init (what M5GFX
  * sends); esp_lcd's minimal ST7789 init leaves it blank. See furi_hal_display.c. */
@@ -82,19 +82,6 @@
 #define BOARD_HAS_TCA8418       0
 #define BOARD_PIN_BTN_KEY1      11   /* front/top button */
 #define BOARD_PIN_BTN_KEY2      12   /* side button */
-
-/* Two physical buttons only. KEY1 (front): tap=Ok, hold 0.6s=Left, hold 1.2s=Right.
- * KEY2 (side): tap=Down, double=Up, long=Back. KEY1's holds produce real Left/Right,
- * so button rows and value sliders are reachable. BOARD_TWO_BUTTON_INPUT is kept as a
- * belt-and-braces convenience: Widget/DialogEx button rows (which fire only on
- * InputKeyLeft/Right) ALSO accept Down as the Left button and Ok as the Right button,
- * so a confirmation like "Exit to X Menu?" is never a dead end. Guarded so full-keypad
- * boards (e.g. T-Embed) keep stock behavior. */
-#define BOARD_TWO_BUTTON_INPUT  1
-
-/* BMI270 IMU on the internal I2C bus provides tilt -> Left/Right nav. Boards with this
- * set expose the tilt-nav toggle in System settings and the target_input tilt setter. */
-#define BOARD_HAS_TILT_NAV      1
 
 /* Internal I2C bus (BMI270 IMU + ES8311 codec + M5PM1 PMIC live here). Named with
  * the KB_* aliases furi_hal_i2c_bus.c expects for I2C_NUM_0, even though there is

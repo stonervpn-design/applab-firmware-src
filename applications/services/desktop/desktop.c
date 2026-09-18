@@ -30,7 +30,6 @@
 
 /* Idle manager (Task 3) */
 #define DESKTOP_IDLE_TICK_MS      1000 /* 1 s idle-check tick */
-#define DESKTOP_CPU_IDLE_DELAY_MS 3000 /* drop CPU to DFS min after 3 s of desktop idle */
 #define DESKTOP_BACKLIGHT_FULL    255
 #define DESKTOP_BACKLIGHT_DIM     38 /* ~15 % — dimmed idle state */
 
@@ -140,7 +139,7 @@ static void desktop_apply_settings(Desktop*);
  * !locked) plus a USB-disconnected check. */
 static void desktop_idle_restore_backlight(Desktop* desktop) {
     if(desktop->idle_dimmed) {
-        furi_hal_display_set_backlight(furi_hal_display_get_user_brightness());
+        furi_hal_display_set_backlight(DESKTOP_BACKLIGHT_FULL);
         desktop->idle_dimmed = false;
     }
 }
@@ -184,10 +183,6 @@ static bool desktop_idle_is_foreground(Desktop* desktop) {
 static void desktop_idle_process(Desktop* desktop) {
     /* Arming gate: desktop foreground AND USB disconnected. */
     if(!desktop_idle_is_foreground(desktop) || furi_hal_power_is_usb_connected()) {
-        /* Not idle-eligible (an app/RF is running, USB is in, BT is on, ...): make
-         * sure the CPU is pinned back at max. This is the ONLY place besides the
-         * idle drop below that touches the DFS idle hold, so it stays single-thread. */
-        furi_hal_power_perf_idle_set(false);
         desktop_idle_restore_backlight(desktop);
         return;
     }
@@ -195,17 +190,12 @@ static void desktop_idle_process(Desktop* desktop) {
     uint32_t now = furi_hal_power_uptime_sec();
     uint32_t elapsed_ms = (now - desktop->last_activity_sec) * 1000UL;
 
-    /* DFS: after a short idle on the bare foreground desktop (no app, no RF, BT off,
-     * USB off) let the CPU scale to its min frequency to save battery; the screen
-     * stays fully lit. Restored to max above the instant that idle state ends. */
-    furi_hal_power_perf_idle_set(elapsed_ms >= DESKTOP_CPU_IDLE_DELAY_MS);
-
     if(desktop->light_sleep_delay_ms != 0 && elapsed_ms >= desktop->light_sleep_delay_ms) {
         /* Blocks until a wake event; restores panel + backlight on return. */
         furi_hal_power_light_sleep();
         desktop->last_activity_sec = furi_hal_power_uptime_sec();
         desktop->idle_dimmed = false;
-        furi_hal_display_set_backlight(furi_hal_display_get_user_brightness());
+        furi_hal_display_set_backlight(DESKTOP_BACKLIGHT_FULL);
     } else if(
         desktop->idle_dim_delay_ms != 0 && elapsed_ms >= desktop->idle_dim_delay_ms &&
         !desktop->idle_dimmed) {
@@ -234,10 +224,6 @@ static void desktop_idle_input_callback(const void* value, void* context) {
     if(event->type == InputTypePress) {
         desktop->last_activity_sec = furi_hal_power_uptime_sec();
         desktop_idle_restore_backlight(desktop);
-        /* Always-on hook: fires even while an app is foreground, so any keypress
-         * restores full CPU immediately — an app opened from an idle (CPU-dropped)
-         * desktop never runs at min frequency. Thread-safe; a no-op when not dropped. */
-        furi_hal_power_perf_idle_set(false);
     }
 }
 

@@ -28,10 +28,3 @@ SubGhzProtocolStatus
     tpms_protocol_decoder_renault_deserialize(void* context, FlipperFormat* flipper_format);
 
 void tpms_protocol_decoder_renault_get_string(void* context, FuriString* output);
-
-void* tpms_protocol_encoder_renault_alloc(SubGhzEnvironment* environment);
-void tpms_protocol_encoder_renault_free(void* context);
-void tpms_protocol_encoder_renault_stop(void* context);
-LevelDuration tpms_protocol_encoder_renault_yield(void* context);
-SubGhzProtocolStatus
-    tpms_protocol_encoder_renault_deserialize(void* context, FlipperFormat* flipper_format);

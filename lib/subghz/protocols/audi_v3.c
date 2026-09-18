@@ -112,17 +112,6 @@ struct SubGhzProtocolDecoderAudiV3 {
     uint8_t chk;                       // bits 88..95 (trailer / checksum byte)
 };
 
-struct SubGhzProtocolEncoderAudiV3 {
-    SubGhzProtocolEncoderBase base;
-    SubGhzProtocolBlockEncoder encoder;
-    SubGhzBlockGeneric generic;
-
-    uint8_t button;                 // bits 0..7
-    uint8_t hop[AUDI_V3_HOP_BYTES]; // bits 8..63
-    uint32_t counter;               // bits 64..87
-    uint8_t chk;                    // bits 88..95
-};
-
 // ============================================================================
 // PROTOCOL DEFINITION
 // ============================================================================
@@ -144,21 +133,13 @@ const SubGhzProtocolDecoder subghz_protocol_audi_v3_decoder = {
     .get_generic = subghz_protocol_decoder_audi_v3_get_generic,
 };
 
-const SubGhzProtocolEncoder subghz_protocol_audi_v3_encoder = {
-    .alloc = subghz_protocol_encoder_audi_v3_alloc,
-    .free = subghz_protocol_encoder_audi_v3_free,
-    .deserialize = subghz_protocol_encoder_audi_v3_deserialize,
-    .stop = subghz_protocol_encoder_audi_v3_stop,
-    .yield = subghz_protocol_encoder_audi_v3_yield,
-};
-
 const SubGhzProtocol subghz_protocol_audi_v3 = {
     .name = SUBGHZ_PROTOCOL_AUDI_V3_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
     .decoder = &subghz_protocol_audi_v3_decoder,
-    .encoder = &subghz_protocol_audi_v3_encoder,
+    .encoder = NULL,
 };
 
 // ============================================================================
@@ -240,6 +221,12 @@ static void audi_v3_process_frame(SubGhzProtocolDecoderAudiV3* instance) {
     }
     if(hop_all_ff || hop_all_00) {
         FURI_LOG_D(TAG, "Rejected degenerate frame (uniform hop)");
+        return;
+    }
+
+    // Reject unknown buttons: real frames carry only Unlock(0x0C) / Lock(0x0D)
+    if(button != AUDI_V3_BTN_UNLOCK && button != AUDI_V3_BTN_LOCK) {
+        FURI_LOG_D(TAG, "Rejected frame (unknown button 0x%02X)", button);
         return;
     }
 
@@ -411,9 +398,7 @@ SubGhzProtocolStatus
             ((uint32_t)cnt[0] << 16) | ((uint32_t)cnt[1] << 8) | cnt[2];
     }
     flipper_format_read_hex(flipper_format, "Chk", &instance->chk, 1);
-    // generic deserialize restores only data (not btn); button is the top byte of
-    // the packed 64-bit data (button<<56 | hop56), so derive it from there.
-    instance->button = (uint8_t)(instance->generic.data >> 56);
+    instance->button = (uint8_t)instance->generic.btn;
     instance->generic.protocol_name = instance->base.protocol->name;
     return SubGhzProtocolStatusOk;
 }
@@ -455,162 +440,4 @@ void subghz_protocol_decoder_audi_v3_get_string(void* context, FuriString* outpu
     for(int b = 0; b < AUDI_V3_HOP_BYTES; b++) {
         furi_string_cat_printf(output, "%02X", instance->hop[b]);
     }
-}
-
-// ============================================================================
-// ENCODER
-//
-// Reproduces the exact 2-FSK Manchester waveform the decoder accepts:
-//   [>=MIN_PRE short preamble pulses][trigger LONG][96 Manchester bits][gap]
-// Each data bit is one symbol: a single LONG pulse, or a SHORT,SHORT pair.
-// Polarity is inverted (recorded bit = !level). For every bit exactly one of
-// {LONG, SHORT+SHORT} records the wanted value given the current line level, so
-// the symbol choice is forced — this round-trips the decoder bit-for-bit.
-// ============================================================================
-
-// preamble margin above the decoder minimum
-#define AUDI_V3_ENC_PREAMBLE (AUDI_V3_MIN_PRE + 6)
-// worst case: preamble + trigger + 2*(FRAME_BITS-1) + gap
-#define AUDI_V3_ENC_UPLOAD_SIZE (AUDI_V3_ENC_PREAMBLE + 2 + 2 * AUDI_V3_FRAME_BITS)
-
-void* subghz_protocol_encoder_audi_v3_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    SubGhzProtocolEncoderAudiV3* instance = malloc(sizeof(SubGhzProtocolEncoderAudiV3));
-    instance->base.protocol = &subghz_protocol_audi_v3;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 3;
-    instance->encoder.size_upload = AUDI_V3_ENC_UPLOAD_SIZE;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    return instance;
-}
-
-void subghz_protocol_encoder_audi_v3_free(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderAudiV3* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-static void subghz_protocol_encoder_audi_v3_get_upload(SubGhzProtocolEncoderAudiV3* instance) {
-    furi_assert(instance);
-
-    // Rebuild the 96-bit frame (MSB first per field).
-    uint8_t bits[AUDI_V3_FRAME_BITS];
-    for(int i = 0; i < AUDI_V3_BUTTON_BITS; i++)
-        bits[i] = (instance->button >> (7 - i)) & 1;
-    for(int b = 0; b < AUDI_V3_HOP_BYTES; b++)
-        for(int k = 0; k < 8; k++)
-            bits[AUDI_V3_HOP_OFF + b * 8 + k] = (instance->hop[b] >> (7 - k)) & 1;
-    for(int i = 0; i < AUDI_V3_COUNTER_BITS; i++)
-        bits[AUDI_V3_COUNTER_OFF + i] =
-            (instance->counter >> (AUDI_V3_COUNTER_BITS - 1 - i)) & 1;
-    for(int i = 0; i < AUDI_V3_CHK_BITS; i++)
-        bits[AUDI_V3_CHK_OFF + i] = (instance->chk >> (7 - i)) & 1;
-
-    const uint32_t te_s = (uint32_t)subghz_protocol_audi_v3_const.te_short;
-    const uint32_t te_l = (uint32_t)subghz_protocol_audi_v3_const.te_long;
-    size_t index = 0;
-    const size_t enc_cap = AUDI_V3_ENC_UPLOAD_SIZE;
-
-    // Trigger LONG records bit0 = !level -> level = !bits[0].
-    bool tl = !(bits[0] != 0);
-
-    // Preamble: alternating short pulses ending on !tl so the trigger alternates.
-    const int P = AUDI_V3_ENC_PREAMBLE;
-    bool lvl = (P & 1) ? !tl : tl;
-    for(int p = 0; p < P; p++) {
-        if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(lvl, te_s);
-        lvl = !lvl;
-    }
-
-    // Trigger LONG (bit0).
-    bool cur = tl;
-    if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_l);
-    cur = !cur;
-
-    // Data bits 1..95.
-    for(int i = 1; i < AUDI_V3_FRAME_BITS; i++) {
-        bool want = (bits[i] != 0);
-        bool long_records = !cur; // inverted polarity
-        if(long_records == want) {
-            if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_l);
-            cur = !cur;
-        } else {
-            if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_s);
-            cur = !cur;
-            if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_s);
-            cur = !cur;
-        }
-    }
-
-    // End gap (>= AUDI_V3_GAP) — alternates from the last data pulse.
-    if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, (uint32_t)20000);
-
-    instance->encoder.size_upload = index;
-}
-
-SubGhzProtocolStatus
-    subghz_protocol_encoder_audi_v3_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    SubGhzProtocolEncoderAudiV3* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        if(subghz_block_generic_deserialize(&instance->generic, flipper_format) !=
-           SubGhzProtocolStatusOk) {
-            FURI_LOG_E(TAG, "Deserialize error");
-            break;
-        }
-        if(instance->generic.data_count_bit != AUDI_V3_FRAME_BITS) {
-            FURI_LOG_E(
-                TAG, "Invalid bit count: %u", instance->generic.data_count_bit);
-            res = SubGhzProtocolStatusErrorValueBitCount;
-            break;
-        }
-
-        // Recover the extra serialized fields. generic restores only data/bit;
-        // the button is the top byte of the packed 64-bit data (button<<56|hop56).
-        flipper_format_rewind(flipper_format);
-        flipper_format_read_hex(flipper_format, "Hop", instance->hop, AUDI_V3_HOP_BYTES);
-        uint8_t cnt[3] = {0};
-        if(flipper_format_read_hex(flipper_format, "Counter", cnt, 3)) {
-            instance->counter =
-                ((uint32_t)cnt[0] << 16) | ((uint32_t)cnt[1] << 8) | cnt[2];
-        }
-        flipper_format_read_hex(flipper_format, "Chk", &instance->chk, 1);
-        instance->button = (uint8_t)(instance->generic.data >> 56);
-
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        subghz_protocol_encoder_audi_v3_get_upload(instance);
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-        res = SubGhzProtocolStatusOk;
-    } while(false);
-    return res;
-}
-
-void subghz_protocol_encoder_audi_v3_stop(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderAudiV3* instance = context;
-    instance->encoder.is_running = false;
-}
-
-LevelDuration subghz_protocol_encoder_audi_v3_yield(void* context) {
-    SubGhzProtocolEncoderAudiV3* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
 }

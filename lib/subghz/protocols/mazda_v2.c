@@ -977,12 +977,8 @@ SubGhzProtocolStatus
     furi_assert(context);
     SubGhzProtocolDecoderMazdaV2* instance = context;
 
-    /* Validate the stored Bit: count matches this protocol (siblings do), so a
-     * hand-edited .sub with a mismatched bit length is rejected, not misparsed. */
-    SubGhzProtocolStatus ret = subghz_block_generic_deserialize_check_count_bit(
-        &instance->generic,
-        flipper_format,
-        subghz_protocol_mazda_v2_const.min_count_bit_for_found);
+    SubGhzProtocolStatus ret =
+        subghz_block_generic_deserialize(&instance->generic, flipper_format);
     if(ret != SubGhzProtocolStatusOk) return ret;
 
     instance->generic.btn = (uint8_t)((instance->generic.data >> 56) & 0xFF);

@@ -164,19 +164,7 @@ SubBruteFileResult subbrute_device_attack_set(
     FuriHalSubGhzPreset preset;
     SubBruteFileProtocol file;
 #endif
-    if(type == SubBruteAttackDeBruijn) {
-        // RAW burst: there is no decodable protocol to look up. Accept directly.
-        protocol_check_result = SubBruteFileResultOk;
-        instance->max_value = subbrute_protocol_calc_max_value(
-            instance->attack, instance->protocol_info->bits, instance->two_bytes);
-#ifdef FURI_DEBUG
-        bits = instance->protocol_info->bits;
-        te = instance->protocol_info->te;
-        repeat = instance->protocol_info->repeat + instance->extra_repeats;
-        preset = instance->protocol_info->preset;
-        file = instance->protocol_info->file;
-#endif
-    } else if(type != SubBruteAttackLoadFile) {
+    if(type != SubBruteAttackLoadFile) {
         instance->decoder_result = subghz_receiver_search_decoder_base_by_name(
             instance->receiver, subbrute_protocol_file(instance->protocol_info->file));
 

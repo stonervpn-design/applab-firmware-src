@@ -6,34 +6,44 @@
 #include <lib/subghz/blocks/custom_btn.h>
 #include <storage/storage.h>
 #include <string.h>
-#ifndef PUBLIC_BUILD
 #include "subghz_keeloq_default_keys.h"
-#endif
+#include "subghz_vag_default_keys.h"
 
 #define TAG "SubGhzTxRx"
 
-/* Provision the firmware-embedded default keeloq_mfcodes_user (needed on SD-less
- * boards; also brings older devices up to the current key set). Version-gated: a
- * single-char marker file records which embedded set was last written. We (re)write
- * the keystore only when it is MISSING or the embedded version is NEWER than the
- * marker — so bumping SUBGHZ_KEELOQ_PROVISION_VERSION syncs every device once, while
- * a user's later edits (marker already current) are preserved across reboots. */
-#define SUBGHZ_KEELOQ_PROVISION_VERSION '3' /* bump when keeloq_mfcodes_user_default changes */
-#define SUBGHZ_KEELOQ_VERSION_FILE      EXT_PATH("subghz/assets/.keeloq_ver")
-#ifndef PUBLIC_BUILD
+/* On boards without an SD card (e.g. M5StickS3 internal FS), /ext starts empty,
+ * so the KeeLoq keystore is missing and decode/emulate can't derive device keys.
+ * Write the firmware-embedded default keeloq_mfcodes_user on first launch if it
+ * doesn't already exist. Never overwrites a user-provided/customised file. */
+static void subghz_txrx_provision_default_vag_keys(void) {
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    File* file = storage_file_alloc(storage);
+    bool ok = false;
+    if(storage_file_open(
+           file, EXT_PATH("apps_assets/subghz/vag"), FSAM_READ, FSOM_OPEN_EXISTING)) {
+        ok = (storage_file_size(file) == subghz_vag_default_keys_size);
+    }
+    storage_file_close(file);
+    if(!ok) {
+        storage_simply_mkdir(storage, EXT_PATH("apps_assets"));
+        storage_simply_mkdir(storage, EXT_PATH("apps_assets/subghz"));
+        if(storage_file_open(
+               file, EXT_PATH("apps_assets/subghz/vag"), FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+            size_t wr = storage_file_write(
+                file, subghz_vag_default_keys, subghz_vag_default_keys_size);
+            FURI_LOG_I(TAG, "Provisioned decrypted vag keys (%u bytes)", (unsigned)wr);
+            storage_file_close(file);
+        } else {
+            FURI_LOG_W(TAG, "vag keys write failed");
+        }
+    }
+    storage_file_free(file);
+    furi_record_close(RECORD_STORAGE);
+}
+
 static void subghz_txrx_provision_default_keeloq_keys(void) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
-
-    bool exists = storage_file_exists(storage, SUBGHZ_KEYSTORE_DIR_USER_NAME);
-    char stored_ver = 0;
-    File* vf = storage_file_alloc(storage);
-    if(storage_file_open(vf, SUBGHZ_KEELOQ_VERSION_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
-        storage_file_read(vf, &stored_ver, 1);
-    }
-    storage_file_close(vf);
-    storage_file_free(vf);
-
-    if(!exists || stored_ver < SUBGHZ_KEELOQ_PROVISION_VERSION) {
+    if(!storage_file_exists(storage, SUBGHZ_KEYSTORE_DIR_USER_NAME)) {
         storage_simply_mkdir(storage, EXT_PATH("subghz"));
         storage_simply_mkdir(storage, EXT_PATH("subghz/assets"));
         File* file = storage_file_alloc(storage);
@@ -48,89 +58,9 @@ static void subghz_txrx_provision_default_keeloq_keys(void) {
         }
         storage_file_close(file);
         storage_file_free(file);
-
-        char ver = SUBGHZ_KEELOQ_PROVISION_VERSION;
-        vf = storage_file_alloc(storage);
-        if(storage_file_open(vf, SUBGHZ_KEELOQ_VERSION_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
-            storage_file_write(vf, &ver, 1);
-        }
-        storage_file_close(vf);
-        storage_file_free(vf);
     }
     furi_record_close(RECORD_STORAGE);
 }
-
-/* Firmware-embedded VAG test captures (1.sub / 2.sub) written to /ext/subghz on
- * first launch of the SD-less M5StickS3 so they can be opened/replayed to test
- * decode. Never overwrites existing files. */
-static const char test_sub_1_default[] =
-    "Filetype: Flipper SubGhz Key File\n"
-    "Version: 1\n"
-    "Frequency: 434420000\n"
-    "Preset: FuriHalSubGhzPresetOok270Async\n"
-    "Protocol: VAG\n"
-    "Bit: 80\n"
-    "Key: C0 6B AC 39 D8 F9 F3 60\n"
-    "Key2: 00 00 00 00 00 00 73 2B\n"
-    "Type: 3\n";
-static const char test_sub_2_default[] =
-    "Filetype: Flipper SubGhz Key File\n"
-    "Version: 1\n"
-    "Frequency: 434420000\n"
-    "Preset: FuriHalSubGhzPresetOok270Async\n"
-    "Protocol: VAG\n"
-    "Bit: 80\n"
-    "Key: C0 D5 C8 CF 0B 83 C7 33\n"
-    "Key2: 00 00 00 00 00 00 57 1D\n"
-    "Type: 3\n";
-
-/* VAG AUT64 keystore. Without valid keys VAG frames decode but can't be decrypted,
- * so get_string shows "Key2:xxxx (corrupted)". VAG reads it from APP_ASSETS_PATH("vag")
- * = /ext/apps_assets/subghz/vag.
- *
- * This port's crypto enclave is stubbed: furi_hal_crypto_decrypt() is a memcpy
- * pass-through, so it CANNOT decrypt a real AES-encrypted keystore (that yields
- * garbage keys). We turn that into a feature: the raw-keystore reader still requires
- * Encryption:1 and runs the "decrypt", but since it's a pass-through the Encrypt_data
- * blob is handed to VAG verbatim. So the blob below is the PLAINTEXT 3x16-byte AUT64
- * keys (packed, index bytes 1/2/3) that vag.c expects — the real VAG keys, from KAT's
- * VAG keystore. IV is unused by the pass-through. */
-static const char vag_keystore_default[] =
-    "Filetype: Flipper SubGhz Keystore RAW File\r\n"
-    "Version: 0\r\n"
-    "Encryption: 1\r\n"
-    "IV: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\r\n"
-    "Encrypt_data: RAW\r\n"
-    "01376C86ADABCC43074DE859C12F36AB02377C65CEDC42EAA453E861D9B720FC038AA37B1E561F8384B619C52E0A3FD7";
-
-static void subghz_txrx_provision_test_subs(void) {
-    Storage* storage = furi_record_open(RECORD_STORAGE);
-    storage_simply_mkdir(storage, EXT_PATH("subghz"));
-    storage_simply_mkdir(storage, EXT_PATH("apps_assets"));
-    storage_simply_mkdir(storage, EXT_PATH("apps_assets/subghz"));
-    const char* paths[3] = {
-        EXT_PATH("subghz/1.sub"),
-        EXT_PATH("subghz/2.sub"),
-        EXT_PATH("apps_assets/subghz/vag"),
-    };
-    const char* data[3] = {test_sub_1_default, test_sub_2_default, vag_keystore_default};
-    // Always refresh the vag keystore (index 2) so a stale/wrong copy is replaced;
-    // the .subs (0,1) are user-openable so only write them if absent.
-    const bool force[3] = {false, false, true};
-    for(size_t i = 0; i < 3; i++) {
-        if(!force[i] && storage_file_exists(storage, paths[i])) continue;
-        File* file = storage_file_alloc(storage);
-        if(storage_file_open(file, paths[i], FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
-            size_t len = strlen(data[i]);
-            size_t wr = storage_file_write(file, data[i], len);
-            FURI_LOG_I(TAG, "Provisioned %s (%u/%u bytes)", paths[i], (unsigned)wr, (unsigned)len);
-        }
-        storage_file_close(file);
-        storage_file_free(file);
-    }
-    furi_record_close(RECORD_STORAGE);
-}
-#endif /* !PUBLIC_BUILD — car keystore provisioning is private-only */
 
 static void subghz_txrx_radio_device_power_on(SubGhzTxRx* instance) {
     UNUSED(instance);
@@ -168,10 +98,8 @@ SubGhzTxRx* subghz_txrx_alloc(void) {
     instance->fff_data = flipper_format_string_alloc();
 
     instance->environment = subghz_environment_alloc();
-#ifndef PUBLIC_BUILD
-    subghz_txrx_provision_default_keeloq_keys(); /* ensure keys exist on SD-less boards */
-    subghz_txrx_provision_test_subs(); /* VAG test captures for replay/decode testing */
-#endif
+    subghz_txrx_provision_default_keeloq_keys();
+    subghz_txrx_provision_default_vag_keys(); /* ensure keys exist on SD-less boards */
     user_keystore_loaded =
         subghz_environment_load_keystore(instance->environment, SUBGHZ_KEYSTORE_DIR_USER_NAME);
     if(!user_keystore_loaded) {
@@ -202,13 +130,13 @@ SubGhzTxRx* subghz_txrx_alloc(void) {
     return instance;
 }
 
-void subghz_txrx_set_car_mode(SubGhzTxRx* instance, uint8_t mode) {
+void subghz_txrx_set_automotive_mode(SubGhzTxRx* instance, bool enabled) {
     furi_check(instance);
-    if(subghz_protocol_registry_car_mode() == mode) return;
-    subghz_protocol_registry_set_car_mode(mode);
-    // Rebuild the receiver from the newly selected registry so the RESIDENT decoder
-    // set swaps wholesale (general / Cars 1 / Cars 2, never combined — the no-PSRAM
-    // board can't hold them together). Caller must have RX stopped.
+    if(subghz_protocol_registry_automotive_mode() == enabled) return;
+    subghz_protocol_registry_set_automotive_mode(enabled);
+    // Rebuild the receiver from the newly selected registry so the RESIDENT
+    // decoder set swaps wholesale (general <-> automotive, never both at once —
+    // the no-PSRAM board can't hold both). Caller must have RX stopped.
     subghz_environment_set_protocol_registry(
         instance->environment, (void*)subghz_protocol_registry_active());
     subghz_receiver_free(instance->receiver);
@@ -216,9 +144,9 @@ void subghz_txrx_set_car_mode(SubGhzTxRx* instance, uint8_t mode) {
     subghz_worker_set_context(instance->worker, instance->receiver);
 }
 
-uint8_t subghz_txrx_get_car_mode(SubGhzTxRx* instance) {
+bool subghz_txrx_get_automotive_mode(SubGhzTxRx* instance) {
     UNUSED(instance);
-    return subghz_protocol_registry_car_mode();
+    return subghz_protocol_registry_automotive_mode();
 }
 
 void subghz_txrx_free(SubGhzTxRx* instance) {

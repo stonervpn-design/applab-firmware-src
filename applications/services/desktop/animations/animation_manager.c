@@ -230,6 +230,14 @@ static void animation_manager_start_new_idle(AnimationManager* animation_manager
 static bool animation_manager_check_blocking(AnimationManager* animation_manager) {
     furi_assert(animation_manager);
 
+    /* ESP32 port: suppress the "install SD resources" blocking prompts
+     * (SD-OK / Bad-SD / No-DB / URL). This board has no removable SD and no
+     * /ext "Manifest" resource bundle (the SubGHz keystore is self-provisioned),
+     * so the No-DB prompt ("No database on SD") fires on every boot and blocks
+     * the idle screen until a keypress. Return early so the normal idle
+     * animation runs instead. */
+    return false;
+
     StorageAnimation* blocking_animation = NULL;
     Storage* storage = furi_record_open(RECORD_STORAGE);
     FS_Error sd_status = storage_sd_status(storage);

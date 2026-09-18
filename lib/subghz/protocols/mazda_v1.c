@@ -160,9 +160,6 @@ void* subghz_protocol_decoder_mazda_v1_alloc(SubGhzEnvironment* environment) {
     SubGhzProtocolDecoderMazdaV1* instance = malloc(sizeof(SubGhzProtocolDecoderMazdaV1));
     instance->base.protocol = &subghz_protocol_mazda_v1;
     instance->generic.protocol_name = instance->base.protocol->name;
-    /* Seed decoder state so a feed() before the first reset() can't run the
-     * state machine with a garbage parser_step / all_bit_count. */
-    subghz_protocol_decoder_mazda_v1_reset(instance);
     return instance;
 }
 

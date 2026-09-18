@@ -411,6 +411,11 @@ static void vag_parse_data(SubGhzProtocolDecoderVAG* instance) {
         // Requiring it rejects mis-aligned frames that otherwise decrypt to a
         // coincidentally-valid button on noisy captures ("valid but wrong serial").
         if((type_byte & 0xF0) != 0xC0) break;
+        // Type 3/4 dispatch byte (Key2 low) is a fixed 3-value set the encoder
+        // always writes: vag_get_dispatch_byte() for these types yields only
+        // 0x2B/0x1D/0x47. Type 4 already enforces this; type 3 did not, so a frame
+        // with any other low byte still ran the full 3-key AUT64 trial. Require it.
+        if(!vag_dispatch_type_3_4(dispatch_byte)) break;
         uint8_t block_copy[8];
 
         memcpy(block_copy, block, 8);

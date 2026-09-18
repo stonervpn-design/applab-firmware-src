@@ -122,7 +122,7 @@ const SubGhzProtocol subghz_protocol_ldv_v0 = {
     .name = SUBGHZ_PROTOCOL_LDV_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_AM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
+            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
 
     .decoder = &subghz_protocol_ldv_v0_decoder,
     .encoder = &subghz_protocol_ldv_v0_encoder,
@@ -221,6 +221,34 @@ void subghz_protocol_decoder_ldv_v0_reset(void* context) {
 // Decoder: feed
 // ============================================================================
 
+// Frame validation lifted from get_string: genuine LDV frames carry
+//   byte6 = 0x80 | (btn << 3) | 0x07,
+//   a fixed 0xFF 0xFF separator in bytes 7-8, and
+//   the button duplicated in byte6 and bytes 9-10.
+// Uses generic.data (Key = bytes 0-7) and data_2 (Key2 = bytes 8-15).
+static bool subghz_protocol_ldv_v0_frame_valid(SubGhzProtocolDecoderLdvV0* instance) {
+    uint8_t byte6 = (uint8_t)(instance->generic.data >> 8);
+    uint8_t byte7 = (uint8_t)(instance->generic.data);
+    uint8_t byte8 = (uint8_t)(instance->data_2 >> 56);
+    uint8_t byte9 = (uint8_t)(instance->data_2 >> 48);
+    uint8_t byte10 = (uint8_t)(instance->data_2 >> 40);
+
+    // byte6 framing: high bit set, low nibble marker 0x07
+    if((byte6 & 0x80) == 0) return false;
+    if((byte6 & 0x07) != 0x07) return false;
+
+    // fixed 0xFF 0xFF separator in bytes 7-8
+    if(byte7 != 0xFF || byte8 != 0xFF) return false;
+
+    // button duplicated in byte6 and bytes 9-10
+    uint8_t byte6_btn = (byte6 >> 3) & 0x03;
+    uint16_t cnt_field = ((uint16_t)byte9 << 8) | byte10;
+    uint8_t cnt_btn = (cnt_field >> 3) & 0x03;
+    if(byte6_btn != cnt_btn) return false;
+
+    return true;
+}
+
 void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t duration) {
     furi_assert(context);
     SubGhzProtocolDecoderLdvV0* instance = context;
@@ -312,7 +340,7 @@ void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t dur
                 instance->generic.data_count_bit = instance->decoder.decode_count_bit;
                 subghz_protocol_ldv_v0_extract_fields(instance);
 
-                if(instance->base.callback)
+                if(subghz_protocol_ldv_v0_frame_valid(instance) && instance->base.callback)
                     instance->base.callback(&instance->base, instance->base.context);
             }
             instance->decoder.parser_step = LdvV0StepReset;
@@ -349,7 +377,7 @@ void subghz_protocol_decoder_ldv_v0_feed(void* context, bool level, uint32_t dur
                     // Extract fields
                     subghz_protocol_ldv_v0_extract_fields(instance);
 
-                    if(instance->base.callback)
+                    if(subghz_protocol_ldv_v0_frame_valid(instance) && instance->base.callback)
                         instance->base.callback(&instance->base, instance->base.context);
 
                     instance->decoder.decode_data = 0;

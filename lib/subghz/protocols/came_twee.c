@@ -232,15 +232,6 @@ static void subghz_protocol_came_twee_remote_controller(SubGhzBlockGeneric* inst
     uint8_t cnt_parcel = (uint8_t)(instance->data & 0xF);
     uint32_t data = (uint32_t)(instance->data & 0x0FFFFFFFF);
 
-    /* Rainbow table holds 15 entries (0..14); a low nibble of 0xF is not a
-     * valid Came Twee parcel — bail out instead of reading past the array. */
-    if(cnt_parcel >= COUNT_OF(came_twee_magic_numbers_xor)) {
-        instance->serial = 0;
-        instance->btn = 0;
-        instance->cnt = 0;
-        return;
-    }
-
     data = (data ^ came_twee_magic_numbers_xor[cnt_parcel]);
     instance->serial = data;
     data /= 4;

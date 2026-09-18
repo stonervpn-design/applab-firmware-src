@@ -92,13 +92,3 @@ bool subghz_tx_rx_worker_is_running(SubGhzTxRxWorker* instance);
 #ifdef __cplusplus
 }
 #endif
-
-/* Diagnostic: read packet-RX counters (any pointer may be NULL). */
-void subghz_tx_rx_worker_get_debug(
-    SubGhzTxRxWorker* instance,
-    uint32_t* cycles,
-    uint32_t* gdo,
-    uint32_t* pipe,
-    uint32_t* crc_ok,
-    uint32_t* crc_bad,
-    int32_t* rssi);

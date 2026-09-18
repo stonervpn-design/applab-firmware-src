@@ -136,8 +136,7 @@ const SubGhzProtocol subghz_protocol_honda_v6 = {
     .name = SUBGHZ_PROTOCOL_HONDA_V6_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_315 |
-            SubGhzProtocolFlag_AM | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_AM | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
     .decoder = &subghz_protocol_honda_v6_decoder,
     .encoder = &subghz_protocol_honda_v6_encoder,
 };
@@ -186,26 +185,11 @@ void subghz_protocol_decoder_honda_v6_reset(void* context) {
 // ============================================================================
 
 static void honda_v6_process_ook(SubGhzProtocolDecoderHondaV6* instance) {
-    if(instance->ook_carriers < HONDA_V6_OOK_MIN_CARRIERS) {
-        instance->ook_carriers = 0;
-        return;
-    }
-
-    FURI_LOG_D(TAG, "OOK detection: %u carriers", instance->ook_carriers);
-
-    instance->generic.data = (uint64_t)instance->ook_carriers << 48;
-    instance->generic.data_count_bit = 0;
-    instance->generic.serial = 0;
-    instance->generic.cnt = instance->ook_carriers;
-    instance->generic.btn = 0;
-    instance->generic.seed = 0;
-    instance->generic.extra_check = true;
-    instance->ook_detected = true;
-
-    if(instance->base.callback) {
-        instance->base.callback(&instance->base, instance->base.context);
-    }
-
+    /* OOK carrier detection formerly emitted a decode (data_count_bit=0,
+     * serial=0, btn=0) on merely >= HONDA_V6_OOK_MIN_CARRIERS long pulses,
+     * which false-matched almost any OOK remote. Honda V6 only yields real
+     * data from an FSK-preset capture, so the OOK path must never report a
+     * decode. Keep the detector inert. */
     instance->ook_carriers = 0;
 }
 
@@ -343,15 +327,28 @@ static void honda_v6_process_fsk_frame(SubGhzProtocolDecoderHondaV6* instance) {
         return;
     }
 
-    /* Recover Manchester-drift frames (130–134 bit) into the clean 135-bit
-     * cell_0 layout before field extraction. */
-    if(is_pandora && instance->bit_count < 135) {
+    /* Pandora TS frames MUST carry the 40-bit frame skeleton (header magic
+     * 0x1E1E1F..0x51 + tail 0xFE). Drifted 130–134-bit frames are realigned
+     * to the clean 135-bit cell_0 layout by undrift(); a clean 135-bit frame
+     * is validated in place. A frame matching neither skeleton is not a
+     * Pandora frame — reject it (mandatory false-positive gate). */
+    if(is_pandora) {
         uint64_t rec_hi = instance->key_data_hi;
         uint64_t rec_lo = instance->key_data;
-        if(honda_v6_pandora_undrift(&rec_hi, &rec_lo, instance->bit_count)) {
+        if(instance->bit_count < 135) {
+            if(!honda_v6_pandora_undrift(&rec_hi, &rec_lo, instance->bit_count)) {
+                return;
+            }
             instance->key_data_hi = rec_hi;
             instance->key_data = rec_lo;
             instance->bit_count = 135;
+        } else {
+            bool header_ok = ((rec_lo >> 40) & 0xFFFFFF) == 0x1E1E1FULL &&
+                             (rec_lo & 0xFF) == 0x51ULL;
+            bool tail_ok = (rec_hi & 0xFF) == 0xFEULL;
+            if(!(header_ok && tail_ok)) {
+                return;
+            }
         }
     }
 
@@ -363,6 +360,11 @@ static void honda_v6_process_fsk_frame(SubGhzProtocolDecoderHondaV6* instance) {
         instance->generic.data_2 = 0;
         instance->generic.seed = 0;
         honda_v6_extract_fields(&instance->generic);
+        /* Plausibility gate: a genuine fob has a non-zero serial. Reject the
+         * near-zero frames that OOK/Manchester noise decodes into. */
+        if(instance->generic.serial == 0) {
+            return;
+        }
     } else {
         /* Pandora TS family — variable-width counter prefix at the start of
          * the frame. Counter width = bit_count - 119 (fits cell_0 16b,
@@ -410,6 +412,12 @@ static void honda_v6_313_process_frame(SubGhzProtocolDecoderHondaV6* instance) {
     instance->generic.btn = 0;
     instance->generic.seed = 0x313;  /* marker: 313 MHz mode */
     instance->generic.extra_check = true;
+
+    /* Plausibility gate: reject frames whose serial trits are all zero
+     * (empty/idle capture) rather than reporting a phantom 313 MHz decode. */
+    if(instance->generic.serial == 0) {
+        return;
+    }
 
     if(instance->base.callback) {
         instance->base.callback(&instance->base, instance->base.context);
@@ -623,22 +631,18 @@ SubGhzProtocolStatus subghz_protocol_decoder_honda_v6_serialize(
     FlipperFormat* flipper_format,
     SubGhzRadioPreset* preset) {
     furi_assert(context);
-    SubGhzProtocolDecoderHondaV6* instance = context;
-    // Only the 434 MHz stock 45-bit Manchester frame can be re-transmitted; the
-    // 313 MHz trit, Pandora TS and OOK-carrier captures are not re-encodable.
-    if(instance->generic.data_count_bit != HONDA_V6_DATA_BITS || instance->generic.seed != 0) {
-        return SubGhzProtocolStatusError;
-    }
-    return subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
+    UNUSED(context);
+    UNUSED(flipper_format);
+    UNUSED(preset);
+    return SubGhzProtocolStatusError;
 }
 
 SubGhzProtocolStatus
     subghz_protocol_decoder_honda_v6_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
-    SubGhzProtocolDecoderHondaV6* instance = context;
-    instance->generic.seed = 0;
-    return subghz_block_generic_deserialize_check_count_bit(
-        &instance->generic, flipper_format, HONDA_V6_DATA_BITS);
+    UNUSED(context);
+    UNUSED(flipper_format);
+    return SubGhzProtocolStatusError;
 }
 
 // ============================================================================
@@ -719,19 +723,8 @@ void subghz_protocol_decoder_honda_v6_get_string(void* context, FuriString* outp
 }
 
 // ============================================================================
-// ENCODER (434 MHz stock 45-bit Manchester)
-//
-// Reproduces the waveform the 434 MHz path accepts:
-//   [preamble short pairs][trigger LONG-LOW][45 Manchester bits][gap]
-// The Manchester state machine is the standard Flipper OOK-Manchester encoder
-// (identical to audi_v1/audi_v2), whose output the shared manchester_advance
-// decoder reads back verbatim. The trigger LONG-LOW yields no data bit (it only
-// re-seeds the FSM), and the terminator ends HIGH so the decoder's LONG-LOW
-// flush never appends a phantom bit — giving an exact 45-bit round-trip.
+// ENCODER (stub - no transmission support)
 // ============================================================================
-
-#define HONDA_V6_ENC_PREAMBLE_PAIRS 30
-#define HONDA_V6_ENC_UPLOAD_SIZE    (HONDA_V6_ENC_PREAMBLE_PAIRS * 2 + HONDA_V6_DATA_BITS * 2 + 4)
 
 void* subghz_protocol_encoder_honda_v6_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
@@ -739,115 +732,26 @@ void* subghz_protocol_encoder_honda_v6_alloc(SubGhzEnvironment* environment) {
     memset(instance, 0, sizeof(SubGhzProtocolEncoderHondaV6));
     instance->base.protocol = &subghz_protocol_honda_v6;
     instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 3;
-    instance->encoder.size_upload = HONDA_V6_ENC_UPLOAD_SIZE;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
     return instance;
 }
 
 void subghz_protocol_encoder_honda_v6_free(void* context) {
     furi_assert(context);
-    SubGhzProtocolEncoderHondaV6* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-static void subghz_protocol_encoder_honda_v6_get_upload(SubGhzProtocolEncoderHondaV6* instance) {
-    const uint32_t te_s = (uint32_t)subghz_protocol_honda_v6_const.te_short;
-    const uint32_t te_l = (uint32_t)subghz_protocol_honda_v6_const.te_long;
-    size_t index = 0;
-    const size_t enc_cap = HONDA_V6_ENC_UPLOAD_SIZE;
-
-    // Preamble: LOW-HIGH short pairs. The leading LOW is harmlessly skipped by
-    // the decoder (Reset needs a HIGH short); the run ends HIGH so the trigger
-    // LONG-LOW alternates cleanly.
-    for(int p = 0; p < HONDA_V6_ENC_PREAMBLE_PAIRS; p++) {
-        if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(false, te_s);
-        if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(true, te_s);
-    }
-
-    // Trigger LONG-LOW (re-seeds the FSM, produces no data bit).
-    if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(false, te_l);
-
-    // 45 Manchester data bits, MSB first, standard Flipper OOK-Manchester FSM.
-    uint8_t state = ManchesterStateMid1;
-    for(int i = HONDA_V6_DATA_BITS - 1; i >= 0; i--) {
-        bool b = (instance->generic.data >> i) & 1;
-        if(state == ManchesterStateMid1) {
-            if(!b) {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] = level_duration_make(true, te_l);
-                state = ManchesterStateMid0;
-            } else {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] = level_duration_make(true, te_s);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] = level_duration_make(false, te_s);
-                state = ManchesterStateMid1;
-            }
-        } else { // ManchesterStateMid0
-            if(!b) {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] = level_duration_make(false, te_s);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] = level_duration_make(true, te_s);
-                state = ManchesterStateMid0;
-            } else {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] = level_duration_make(false, te_l);
-                state = ManchesterStateMid1;
-            }
-        }
-    }
-
-    // Terminate on a HIGH gap so the decoder's LONG-LOW flush is skipped.
-    // Mid0 => last pulse was HIGH: insert a LOW short (Mid0+ShortLow -> Start0,
-    // no bit) to flip the level before the HIGH gap.
-    if(state == ManchesterStateMid0) {
-        if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(false, te_s);
-    }
-    if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(true, (uint32_t)6000);
-
-    instance->encoder.size_upload = index;
+    free(context);
 }
 
 SubGhzProtocolStatus
     subghz_protocol_encoder_honda_v6_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    SubGhzProtocolEncoderHondaV6* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        if(subghz_block_generic_deserialize_check_count_bit(
-               &instance->generic, flipper_format, HONDA_V6_DATA_BITS) != SubGhzProtocolStatusOk) {
-            break;
-        }
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-        subghz_protocol_encoder_honda_v6_get_upload(instance);
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-        res = SubGhzProtocolStatusOk;
-    } while(false);
-    return res;
+    UNUSED(context);
+    UNUSED(flipper_format);
+    return SubGhzProtocolStatusError;
 }
 
 void subghz_protocol_encoder_honda_v6_stop(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderHondaV6* instance = context;
-    instance->encoder.is_running = false;
+    UNUSED(context);
 }
 
 LevelDuration subghz_protocol_encoder_honda_v6_yield(void* context) {
-    SubGhzProtocolEncoderHondaV6* instance = context;
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-    return ret;
+    UNUSED(context);
+    return level_duration_reset();
 }

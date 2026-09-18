@@ -2,7 +2,6 @@
 #include "nrf24_hw.h"
 #include "helpers/nrf24_jam_config.h"
 #include "helpers/nrf24_channel_source.h"
-#include <furi_hal_power.h>
 #include <stdlib.h>
 
 static bool nrf24_app_custom_event_callback(void* context, uint32_t event) {
@@ -165,13 +164,8 @@ int32_t nrf24_app(void* args) {
         return 0;
     }
 
-    /* Hold the CPU at max for the whole nRF24 session: the jammer's channel-hop
-     * loop is CPU-timing-critical, and under DFS the CPU would otherwise sit at the
-     * min frequency even while busy-looping (esp_pm sets freq by lock, not load). */
-    furi_hal_power_perf_lock_acquire();
     scene_manager_next_scene(app->scene_manager, Nrf24AppSceneMenu);
     view_dispatcher_run(app->view_dispatcher);
-    furi_hal_power_perf_lock_release();
 
     nrf24_app_free(app);
     return 0;

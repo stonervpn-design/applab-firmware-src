@@ -15,6 +15,7 @@
 #include <board.h>
 #include <string.h>
 #include <stdio.h>
+#include <esp_heap_caps.h>
 
 #define TAG "St25rHal"
 
@@ -64,48 +65,6 @@ static void irq_poll(void) {
     }
 }
 
-/* ── Arm the chip's Mask-Receive Timer (MRT) + No-Response Timer (NRT) ────────
- * Flipper's own chip IS the ST25R3916, but its HAL times the FWT with an STM32
- * timer gated on the chip's IRQ pin — which the M5 NFC unit does not expose over
- * the Grove I2C bus. So, exactly like ST's rfal library, we drive the chip's
- * INTERNAL timers instead:
- *
- *   MRT (0x0F): masks the receiver for a fixed window after end-of-TX so it can
- *     NOT latch the transmit tail / EMD noise. Masked ~FDT_LISTEN/2 (576/fc),
- *     well under the card's earliest response (min FDT 1172/fc). Without this the
- *     receiver ran unmasked into the TX tail, corrupting the tight-timed Crypto1
- *     encrypted reads — only sector 0 (freshly selected) survived, hence 1/16.
- *
- *   NRT (0x10/0x11): the No-Response window (FWT). The transmit command auto-
- *     starts it at end-of-TX (nrt_nfc, nrt_emv=0), and nrt_nfc stops it at RX
- *     start — so on a genuine silent card it expires and the chip raises I_nre,
- *     a precise "no card" instead of the coarse ms budget.
- *
- * The transmit command auto-starts BOTH, so we only load the values. The wait
- * loops already consume I_nre; the NRT is loaded no shorter than that software
- * budget, so this can only sharpen no-response detection, never cut a live read
- * short. */
-static void st25r_arm_timers(uint32_t fwt_ms) {
-    if(fwt_ms == 0) fwt_ms = 20;
-    const uint32_t fwt_fc = fwt_ms * 13560u; /* 1 ms = 13560 carrier cycles @13.56 MHz */
-    /* Pick the NRT step so the 16-bit count fits: 64/fc reaches ~309 ms, else
-     * fall back to the coarse 4096/fc step (~19 s) for long ISO-DEP FWTs. */
-    const bool step4096 = (fwt_fc / 64u) > 0xFFFFu;
-    uint32_t nrt = step4096 ? (fwt_fc / 4096u) : (fwt_fc / 64u);
-    if(nrt == 0) nrt = 1;
-    if(nrt > 0xFFFF) nrt = 0xFFFF;
-
-    const uint8_t emv = ST25R3916_REG_TIMER_EMV_CONTROL_mrt_step_64 |
-                        ST25R3916_REG_TIMER_EMV_CONTROL_nrt_nfc_on |
-                        ST25R3916_REG_TIMER_EMV_CONTROL_nrt_emv_off |
-                        (step4096 ? ST25R3916_REG_TIMER_EMV_CONTROL_nrt_step_4096_fc :
-                                    ST25R3916_REG_TIMER_EMV_CONTROL_nrt_step_64fc);
-    st25r3916_write_reg(ST25R3916_REG_TIMER_EMV_CONTROL, emv);
-    st25r3916_write_reg(ST25R3916_REG_MASK_RX_TIMER, 0x09); /* 9 * 64/fc = 576/fc */
-    st25r3916_write_reg(ST25R3916_REG_NO_RESPONSE_TIMER1, (uint8_t)(nrt >> 8));
-    st25r3916_write_reg(ST25R3916_REG_NO_RESPONSE_TIMER2, (uint8_t)(nrt & 0xFFu));
-}
-
 /* Core transceive. tx_cmd fires the frame; tx/tx_len is the FIFO payload
  * (NULL/0 for REQA/WUPA which carry their own bits). no_crc_rx keeps the
  * received CRC in the FIFO instead of letting the receiver strip it. */
@@ -141,8 +100,6 @@ static St25rHalStatus st25r_transceive(
         st25r3916_write_reg(ST25R3916_REG_NUM_TX_BYTES2, (uint8_t)((tx_len & 0x1F) << 3));
     }
 
-    /* Arm MRT (FDT mask) + NRT (FWT) before the transmit auto-starts them. */
-    st25r_arm_timers(rx_budget_ms);
     if(st25r3916_cmd(tx_cmd) != ESP_OK) return St25rHalError;
 
     /* Wait end-of-transmit. HYBRID poll: tight µs-granularity for the first ~2 ms
@@ -246,9 +203,6 @@ St25rHalStatus st25r3916_hal_transceive_custom_parity(
         st25r3916_write_reg(
             ST25R3916_REG_NUM_TX_BYTES2, (uint8_t)(((tx_full & 0x1F) << 3) | (tx_nbtx & 0x07)));
 
-        /* Arm MRT (FDT mask) + NRT (FWT) — the receiver masking here is the fix
-         * for the Crypto1 encrypted multi-sector read (1/16 → full). */
-        st25r_arm_timers(rx_budget_ms);
         if(st25r3916_cmd(ST25R3916_CMD_TRANSMIT_WITHOUT_CRC) != ESP_OK) break;
 
         /* Hybrid poll (µs then ms) — the big win for MIFARE: the dict attack runs
@@ -336,13 +290,6 @@ bool st25r3916_hal_present(void) {
  * Reset by field_off so a fresh session re-initializes. */
 static bool s_chip_ready = false;
 static St25rTech s_current_tech = St25rTechNfcA;
-
-/* Force a full chip re-init on the next field_on. Call when the module may have been
- * power-cycled (unplugged/replugged) so its lost register config is reloaded. One
- * re-init per call (NOT per field poll), so it doesn't reintroduce the osc flakiness. */
-void st25r3916_hal_reset_ready(void) {
-    s_chip_ready = false;
-}
 
 void st25r3916_hal_set_tech(St25rTech tech) {
     s_current_tech = tech;
@@ -577,8 +524,18 @@ St25rHalStatus st25r3916_hal_field_on(void) {
 
 static void emu_trace_dump(void); /* defined below; flushes the emulation trace */
 
+/* Emulation trace buffer. Defined here (above its first use in field_off) rather
+ * than with the other s_emu_* counters below, which sit after this function. */
+static char* s_emu_trace = NULL;
+
 void st25r3916_hal_field_off(void) {
     emu_trace_dump(); /* if we were emulating, dump the exchange now (CDC free) */
+    /* Release the on-demand emulation trace buffer. This is the teardown that pairs
+     * with the listen_start alloc; field_off is also called for poller (reader)
+     * sessions where the buffer was never allocated, and heap_caps_free(NULL) is a
+     * documented no-op, so this is safe on every field_off path. */
+    heap_caps_free(s_emu_trace);
+    s_emu_trace = NULL;
     st25r3916_cmd(ST25R3916_CMD_STOP); /* abort any active transceive */
     /* Drop the RF field (tx/rx) but KEEP the oscillator + all configuration.
      * The reader's poll loop cycles the field off/on every ~100ms to reset tag
@@ -653,7 +610,10 @@ static bool s_listen_encrypted;
  * we record the reader<->card exchange into this RAM buffer and flush it out
  * AFTER the loop stops (field_off on teardown), when the CDC has recovered. */
 #define EMU_TRACE_CAP 3072
-static char s_emu_trace[EMU_TRACE_CAP];
+/* On-demand: allocated in listen_start, freed in field_off, so this 3 KB is
+ * resident ONLY during an active NFC card-emulation session and is reclaimed
+ * the rest of the time (e.g. while Sub-GHz runs). NULL when no session is up.
+ * (s_emu_trace itself is defined earlier, above st25r3916_hal_field_off.) */
 static uint16_t s_emu_trace_len;
 static uint16_t s_emu_seq;
 static uint16_t s_emu_poll_calls; /* how many times listen_poll ran */
@@ -675,6 +635,7 @@ static void emu_trace_reset(void) {
 }
 
 static void emu_trace_add(const char* tag, const uint8_t* d, uint16_t n) {
+    if(!s_emu_trace) return; /* trace buffer not allocated (no session / alloc failed) */
     if(s_emu_trace_len + 56 >= EMU_TRACE_CAP) return; /* buffer full: drop */
     int w = snprintf(
         s_emu_trace + s_emu_trace_len,
@@ -715,12 +676,14 @@ static void emu_trace_dump(void) {
     /* fsm bitmask: bit N set => pta_state N was observed. 0=PWROFF 1=IDLE
      * 2=READY_L1 3=READY_L2 5=ACTIVE 9=HALT 0xA=RDY_L1* 0xB=RDY_L2* 0xD=ACTIVE* */
     uint16_t start = 0;
-    for(uint16_t i = 0; i < s_emu_trace_len; i++) {
-        if(s_emu_trace[i] == '\n') {
-            s_emu_trace[i] = '\0';
-            FURI_LOG_I(TAG, "%s", &s_emu_trace[start]);
-            start = (uint16_t)(i + 1);
-            furi_delay_ms(2); /* let the CDC drain each line */
+    if(s_emu_trace) {
+        for(uint16_t i = 0; i < s_emu_trace_len; i++) {
+            if(s_emu_trace[i] == '\n') {
+                s_emu_trace[i] = '\0';
+                FURI_LOG_I(TAG, "%s", &s_emu_trace[start]);
+                start = (uint16_t)(i + 1);
+                furi_delay_ms(2); /* let the CDC drain each line */
+            }
         }
     }
     FURI_LOG_I(TAG, "=== EMU TRACE end ===");
@@ -896,6 +859,16 @@ St25rHalStatus st25r3916_hal_listen_start(
      * no_crc_rx on and the anticollision/reception is corrupted (observed: first
      * enter activates, subsequent re-arms stall at READY_L1). */
     st25r_listen_set_rx_mode(false);
+    /* On-demand: allocate the diagnostic trace buffer for this emulation session.
+     * Guarded (if !s_emu_trace) so a re-listen / re-sense that re-enters
+     * listen_start WITHOUT an intervening field_off reuses the existing buffer and
+     * never leaks. It is a pure debug ring-buffer: if the alloc fails we log and
+     * proceed — emu_trace_add is null-guarded and simply drops trace output, so a
+     * transient low-memory condition must not block NFC card emulation. */
+    if(!s_emu_trace) {
+        s_emu_trace = heap_caps_malloc(EMU_TRACE_CAP, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if(!s_emu_trace) FURI_LOG_W(TAG, "emu trace alloc failed; tracing disabled");
+    }
     emu_trace_reset(); /* fresh trace for this emulation session */
     st25r3916_cmd(ST25R3916_CMD_GOTO_SENSE); /* ready to be sensed/activated */
     s_irq_target = 0;
@@ -1092,8 +1065,6 @@ void st25r3916_hal_listen_stop(void) {
 
 bool st25r3916_hal_present(void) {
     return false;
-}
-void st25r3916_hal_reset_ready(void) {
 }
 St25rHalStatus st25r3916_hal_field_on(void) {
     return St25rHalError;

@@ -1,0 +1,14 @@
+App(
+    appid="subghz_debruijn",
+    name="De Bruijn BF",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="subghz_debruijn_app",
+    stack_size=4 * 1024,
+    requires=[
+        "gui",
+    ],
+    order=54,
+    icon="A_Plugins_14",
+    fap_category="Sub-GHz",
+    fap_description="De Bruijn fixed-code brute forcer (OpenSesame): all 2^N codes in one continuous OOK sweep",
+)

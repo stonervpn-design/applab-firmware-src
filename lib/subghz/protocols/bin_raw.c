@@ -545,9 +545,6 @@ static bool
         ind = (BIN_RAW_BUF_DATA_SIZE * 8);
         uint16_t bit_count = 0;
         do {
-            /* gap_ind is uint16; if it enters at 0 the decrement wraps to 65535
-             * and data_raw[gap_ind] reads far out of bounds. Stop instead. */
-            if(gap_ind == 0) break;
             gap_ind--;
             data_temp = (int)(roundf((float)(instance->data_raw[gap_ind]) / instance->te));
             bin_raw_debug("%d ", data_temp);

@@ -34,13 +34,6 @@ void furi_hal_display_commit(const uint8_t* data, uint32_t size);
  */
 void furi_hal_display_set_backlight(uint8_t brightness);
 
-/** Persisted user brightness (0..255, floored so the screen can't go black). Default
- * 255 = unchanged. set applies immediately + saves to NVS; load applies the saved value
- * (call once at boot); the desktop uses get as its "full" backlight level. */
-void furi_hal_display_set_user_brightness(uint8_t level);
-uint8_t furi_hal_display_get_user_brightness(void);
-void furi_hal_display_load_user_brightness(void);
-
 /** Put the display panel into sleep mode (ST7789 SLPIN + display off).
  *
  * Intended for the power-off / deep-sleep path: the panel keeps drawing

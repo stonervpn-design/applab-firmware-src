@@ -122,15 +122,7 @@ static bool hid_parse(const NfcDevice* device, FuriString* parsed_data) {
         uint64_t credential = get_pacs_bits(credential_block, bitLength);
         if(credential == 0) break;
 
-        /* ESP32 nano-printf has no 64-bit %llx; print as two 32-bit halves so the
-         * full credential shows (it can exceed 32 bits). */
-        uint32_t cred_hi = (uint32_t)(credential >> 32);
-        uint32_t cred_lo = (uint32_t)credential;
-        if(cred_hi)
-            furi_string_printf(
-                parsed_data, "\e#HID Card\n%dbit\n%lx%08lx", bitLength, cred_hi, cred_lo);
-        else
-            furi_string_printf(parsed_data, "\e#HID Card\n%dbit\n%lx", bitLength, cred_lo);
+        furi_string_printf(parsed_data, "\e#HID Card\n%dbit\n%llx", bitLength, credential);
 
         parsed = true;
 

@@ -23,11 +23,3 @@ SubGhzProtocolStatus subghz_protocol_decoder_hitag2_serialize(
 SubGhzProtocolStatus
     subghz_protocol_decoder_hitag2_deserialize(void* context, FlipperFormat* flipper_format);
 void subghz_protocol_decoder_hitag2_get_string(void* context, FuriString* output);
-
-/* Encoder */
-void* subghz_protocol_encoder_hitag2_alloc(SubGhzEnvironment* environment);
-void subghz_protocol_encoder_hitag2_free(void* context);
-SubGhzProtocolStatus
-    subghz_protocol_encoder_hitag2_deserialize(void* context, FlipperFormat* flipper_format);
-void subghz_protocol_encoder_hitag2_stop(void* context);
-LevelDuration subghz_protocol_encoder_hitag2_yield(void* context);

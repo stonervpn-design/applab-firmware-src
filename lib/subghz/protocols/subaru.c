@@ -387,6 +387,9 @@ SubGhzProtocolStatus
     b[1] = (uint8_t)(instance->serial >> 16);
     b[2] = (uint8_t)(instance->serial >> 8);
     b[3] = (uint8_t)(instance->serial);
+    // Predict-next: advance the weak sequential counter +1 so Send transmits the
+    // next valid rolling code (documented Subaru weakness), not a stale replay.
+    instance->cnt = (uint16_t)(instance->cnt + 1U);
     subaru_encode_count(b, instance->cnt);
 
     instance->key = pp_bytes_to_u64_be(b);
@@ -526,10 +529,10 @@ void subghz_protocol_decoder_subaru_feed(void* context, bool level, uint32_t dur
                 instance->generic.serial = instance->serial;
                 instance->generic.btn = instance->btn;
                 instance->generic.cnt = instance->cnt;
-            }
 
-            if(instance->base.callback) {
-                instance->base.callback(&instance->base, instance->base.context);
+                if(instance->base.callback) {
+                    instance->base.callback(&instance->base, instance->base.context);
+                }
             }
 
             instance->decoder.decode_data = 0;

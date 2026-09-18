@@ -635,3 +635,58 @@ void canvas_remove_framebuffer_callback(
     CanvasCallbackPairArray_remove_val(canvas->canvas_callback_pair, p);
     canvas_unlock(canvas);
 }
+
+// --- Momentum port: scaled animated-icon draw (nearest-neighbour downscale) ---
+void canvas_draw_icon_animation_ex(
+    Canvas* canvas,
+    int32_t x,
+    int32_t y,
+    int32_t width_scale,
+    int32_t height_scale,
+    IconAnimation* icon_animation) {
+    furi_check(canvas);
+    furi_check(icon_animation);
+
+    if(width_scale <= 0) width_scale = 100;
+    if(height_scale <= 0) height_scale = 100;
+    if(width_scale >= 100 && height_scale >= 100) {
+        canvas_draw_icon_animation(canvas, x, y, icon_animation);
+        return;
+    }
+
+    uint8_t* icon_data = NULL;
+    compress_icon_decode(
+        canvas->compress_icon, icon_animation_get_data(icon_animation), &icon_data);
+
+    const int32_t src_w = icon_animation_get_width(icon_animation);
+    const int32_t src_h = icon_animation_get_height(icon_animation);
+    const int32_t dst_w = (src_w * width_scale) / 100;
+    const int32_t dst_h = (src_h * height_scale) / 100;
+    if(dst_w <= 0 || dst_h <= 0) return;
+
+    const size_t src_stride = (src_w + 7) >> 3;
+    const size_t dst_stride = (dst_w + 7) >> 3;
+
+    uint8_t scaled[128];
+    if(dst_stride * (size_t)dst_h > sizeof(scaled)) {
+        canvas_draw_icon_animation(canvas, x, y, icon_animation);
+        return;
+    }
+    memset(scaled, 0, dst_stride * dst_h);
+
+    for(int32_t dy = 0; dy < dst_h; dy++) {
+        const int32_t sy = (dy * src_h) / dst_h;
+        const uint8_t* srow = icon_data + (size_t)sy * src_stride;
+        uint8_t* drow = scaled + (size_t)dy * dst_stride;
+        for(int32_t dx = 0; dx < dst_w; dx++) {
+            const int32_t sx = (dx * src_w) / dst_w;
+            if((u8x8_pgm_read(srow + (sx >> 3)) >> (sx & 7)) & 1) {
+                drow[dx >> 3] |= (1 << (dx & 7));
+            }
+        }
+    }
+
+    x += canvas->offset_x;
+    y += canvas->offset_y;
+    canvas_draw_u8g2_bitmap(&canvas->fb, x, y, dst_w, dst_h, scaled, IconRotation0);
+}

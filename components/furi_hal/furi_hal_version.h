@@ -30,6 +30,7 @@ typedef enum {
     FuriHalVersionColorBlack = 0x01,
     FuriHalVersionColorWhite = 0x02,
     FuriHalVersionColorTransparent = 0x03,
+    FuriHalVersionColorCount, // Momentum port: terminator for spoof_color enum setting
 } FuriHalVersionColor;
 
 typedef enum {

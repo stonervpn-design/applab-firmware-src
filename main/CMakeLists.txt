@@ -12,32 +12,6 @@ endif()
 
 set(ENV{FLIPPER_BOARD} "${FLIPPER_BOARD}")
 
-# Build variant: private (default, everything) | public (car stuff stripped) |
-# hardened (full features + RE-friction flags via sdkconfig.defaults.hardened).
-# ONLY public defines PUBLIC_BUILD (in the root CMakeLists.txt), which compiles
-# out the Sub-GHz Automotive (ProtoPirate car-key) registries in
-# lib/subghz/protocols/protocol_items.c; fam_config.py drops the car apps
-# (can_commander/defender) for public only. Selected via FLIPPER_VARIANT (OS env
-# set by the build_m5stick_s3[_public|_hardened].bat scripts).
-if(NOT DEFINED FLIPPER_VARIANT)
-    if(DEFINED ENV{FLIPPER_VARIANT})
-        set(FLIPPER_VARIANT "$ENV{FLIPPER_VARIANT}")
-    else()
-        set(FLIPPER_VARIANT "private")
-    endif()
-endif()
-set(ENV{FLIPPER_VARIANT} "${FLIPPER_VARIANT}")
-# NOTE: the PUBLIC_BUILD compile definition is set in the ROOT CMakeLists.txt
-# (after project.cmake, before project()) — NOT here. A component CMakeLists is
-# evaluated during ESP-IDF's early requirements-expansion pass, where
-# idf_build_set_property is undefined. This block only forwards the variant to
-# generate.py (which drops the car apps) and logs it.
-if(FLIPPER_VARIANT STREQUAL "public")
-    message(STATUS "Flipper variant: public (car stuff stripped; PUBLIC_BUILD set in root)")
-else()
-    message(STATUS "Flipper variant: ${FLIPPER_VARIANT} (full features)")
-endif()
-
 execute_process(
     COMMAND
         ${Python3_EXECUTABLE}
@@ -101,11 +75,6 @@ if(NOT CMAKE_SCRIPT_MODE_FILE)
         target_link_libraries(${esp32_fam_target} PRIVATE ${ESP32_FAM_PORTED_COMPONENT_LIBS})
         target_include_directories(${esp32_fam_target} PRIVATE
             "${ESP32_DIR}/components"
-            # Short-form <flipper_application.h> (used by the NFC supported-card
-            # parsers now compiled into the nfc app). <flipper_application/...> already
-            # resolves via the idf::flipper_application component; this adds the inner
-            # dir so the plugin-style short include also resolves.
-            "${ESP32_DIR}/components/flipper_application/flipper_application"
             "${ESP32_DIR}/lib"
             "${ESP32_DIR}/lib/subghz"
             "${ESP32_DIR}/lib/infrared"

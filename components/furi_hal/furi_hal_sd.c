@@ -712,11 +712,38 @@ FuriStatus furi_hal_sd_init(bool power_reset) {
 #endif
 
 FuriStatus furi_hal_sd_get_card_state(void) {
+#if defined(BOARD_HAS_SD) && (BOARD_HAS_SD == 0)
+    /* No physical card: the internal-flash FatFs *is* the card. Once the virtual
+     * SD is initialised, report a healthy present card so every SD-status /
+     * card-state check in the UI treats it as a real, mounted SD. */
+    return sd_initialized ? FuriStatusOk : FuriStatusError;
+#else
     return (sd_initialized && sd_card != NULL) ? FuriStatusOk : FuriStatusError;
+#endif
 }
 
 FuriStatus furi_hal_sd_info(FuriHalSdInfo* info) {
     if(!info) return FuriStatusError;
+#if defined(BOARD_HAS_SD) && (BOARD_HAS_SD == 0)
+    /* No physical card: report a synthetic healthy card for the internal-flash
+     * FatFs so every "card present / card info" check treats it as a real SD. */
+    if(!sd_initialized) return FuriStatusError;
+    memset(info, 0, sizeof(FuriHalSdInfo));
+    info->manufacturer_id = 0x1D;
+    info->oem_id[0] = 'M';
+    info->oem_id[1] = '5';
+    info->oem_id[2] = '\0';
+    strncpy(info->product_name, "INTFLASH", sizeof(info->product_name) - 1);
+    info->product_name[sizeof(info->product_name) - 1] = '\0';
+    info->product_revision_major = 1;
+    info->product_revision_minor = 0;
+    info->product_serial_number = 0x00000001;
+    info->manufacturing_month = 1;
+    info->manufacturing_year = 2026;
+    info->sector_size = 512;
+    info->capacity = (uint64_t)0x460000; /* internal "storage" partition size */
+    return FuriStatusOk;
+#else
     if(!sd_initialized || !sd_card) return FuriStatusError;
 
     memset(info, 0, sizeof(FuriHalSdInfo));
@@ -742,6 +769,7 @@ FuriStatus furi_hal_sd_info(FuriHalSdInfo* info) {
     info->capacity = (uint64_t)sd_card->csd.capacity * sd_card->csd.sector_size;
 
     return FuriStatusOk;
+#endif
 }
 
 uint8_t furi_hal_sd_max_mount_retry_count(void) {

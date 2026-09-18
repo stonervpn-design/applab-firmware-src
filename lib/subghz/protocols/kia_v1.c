@@ -167,7 +167,6 @@ static void kia_protocol_encoder_v1_get_upload(SubGhzProtocolEncoderKiaV1* insta
     furi_check(instance);
     if(instance->encoder.upload == NULL) return; // lazy buffer not yet allocated
     size_t index = 0;
-    const size_t enc_cap = KIA_V1_UPLOAD_CAPACITY;
 
     uint8_t cnt_high = (instance->generic.cnt >> 8) & 0xF;
     uint8_t char_data[7];
@@ -187,39 +186,31 @@ static void kia_protocol_encoder_v1_get_upload(SubGhzProtocolEncoderKiaV1* insta
 
     for(uint8_t burst = 0; burst < KIA_V1_TOTAL_BURSTS; burst++) {
         if(burst > 0) {
-            if(index < enc_cap)
-                instance->encoder.upload[index++] =
-                    level_duration_make(false, KIA_V1_INTER_BURST_GAP_US);
+            instance->encoder.upload[index++] =
+                level_duration_make(false, KIA_V1_INTER_BURST_GAP_US);
         }
 
         for(int i = 0; i < KIA_V1_HEADER_PULSES; i++) {
-            if(index < enc_cap)
-                instance->encoder.upload[index++] =
-                    level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_long);
-            if(index < enc_cap)
-                instance->encoder.upload[index++] =
-                    level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_long);
+            instance->encoder.upload[index++] =
+                level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_long);
+            instance->encoder.upload[index++] =
+                level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_long);
         }
 
-        if(index < enc_cap)
-            instance->encoder.upload[index++] =
-                level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
+        instance->encoder.upload[index++] =
+            level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
 
         for(uint8_t i = instance->generic.data_count_bit; i > 1; i--) {
             if(bit_read(instance->generic.data, i - 2)) {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
             } else {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(false, (uint32_t)kia_protocol_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(true, (uint32_t)kia_protocol_v1_const.te_short);
             }
         }
     }
@@ -433,7 +424,8 @@ void kia_protocol_decoder_v1_feed(void* context, bool level, uint32_t duration) 
         if(instance->decoder.decode_count_bit == kia_protocol_v1_const.min_count_bit_for_found) {
             instance->generic.data = instance->decoder.decode_data;
             instance->generic.data_count_bit = instance->decoder.decode_count_bit;
-            if(instance->base.callback)
+            kia_v1_check_remote_controller(instance);
+            if(instance->crc_check && instance->base.callback)
                 instance->base.callback(&instance->base, instance->base.context);
 
             instance->decoder.decode_data = 0;

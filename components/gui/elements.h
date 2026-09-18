@@ -288,6 +288,25 @@ void elements_text_box(
     const char* text,
     bool strip_to_dots);
 
+/** Momentum port: styled-menu helpers. */
+void elements_scrollable_text_line_centered(
+    Canvas* canvas,
+    int32_t x,
+    int32_t y,
+    size_t width,
+    FuriString* string,
+    size_t scroll,
+    bool ellipsis,
+    bool centered);
+
+void elements_scrollbar_horizontal(
+    Canvas* canvas,
+    int32_t x,
+    int32_t y,
+    size_t width,
+    size_t pos,
+    size_t total);
+
 #ifdef __cplusplus
 }
 #endif

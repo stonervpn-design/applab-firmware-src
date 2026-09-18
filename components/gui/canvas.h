@@ -447,6 +447,16 @@ void canvas_draw_icon_bitmap(
     int16_t h,
     const Icon* icon);
 
+/** Draw animated icon at x,y scaled by a percentage (100 = native; downscale
+ * uses nearest-neighbour, upscale draws 1:1). Momentum port. */
+void canvas_draw_icon_animation_ex(
+    Canvas* canvas,
+    int32_t x,
+    int32_t y,
+    int32_t width_scale,
+    int32_t height_scale,
+    IconAnimation* icon_animation);
+
 #ifdef __cplusplus
 }
 #endif

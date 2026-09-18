@@ -11,25 +11,10 @@
 #include <furi.h>
 #include <furi_hal_spi.h>
 #include <furi_hal_resources.h>
-#include <furi_hal_power.h>
 #include <cc1101.h>
 #include "boards/board.h"
 
 static const char* TAG = "FuriHalSubGhz";
-
-/* Hold the CPU at max frequency while the radio is actively RX/TX so DFS never
- * slows the edge-timing-sensitive capture/transmit path. Idempotent: acquired once
- * on the first active transition, released when the radio parks (idle/sleep). */
-static bool furi_hal_subghz_perf_held = false;
-static void furi_hal_subghz_perf(bool on) {
-    if(on && !furi_hal_subghz_perf_held) {
-        furi_hal_power_perf_lock_acquire();
-        furi_hal_subghz_perf_held = true;
-    } else if(!on && furi_hal_subghz_perf_held) {
-        furi_hal_power_perf_lock_release();
-        furi_hal_subghz_perf_held = false;
-    }
-}
 
 typedef enum {
     FuriHalSubGhzStateInit,
@@ -514,7 +499,6 @@ void furi_hal_subghz_sleep(void) {
     cc1101_shutdown(&furi_hal_spi_bus_handle_subghz);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
     furi_hal_subghz.state = FuriHalSubGhzStateIdle;
-    furi_hal_subghz_perf(false); /* radio parked → allow CPU to scale down */
 }
 
 void furi_hal_subghz_dump_state(void) {
@@ -632,11 +616,9 @@ void furi_hal_subghz_idle(void) {
     cc1101_wait_status_state(&furi_hal_spi_bus_handle_subghz, CC1101StateIDLE, 10000);
     furi_hal_spi_release(&furi_hal_spi_bus_handle_subghz);
     furi_hal_subghz.state = FuriHalSubGhzStateIdle;
-    furi_hal_subghz_perf(false); /* radio parked → allow CPU to scale down */
 }
 
 void furi_hal_subghz_rx(void) {
-    furi_hal_subghz_perf(true); /* active RX → pin CPU at max for capture timing */
     furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
     cc1101_switch_to_rx(&furi_hal_spi_bus_handle_subghz);
     cc1101_wait_status_state(&furi_hal_spi_bus_handle_subghz, CC1101StateRX, 10000);
@@ -646,7 +628,6 @@ void furi_hal_subghz_rx(void) {
 bool furi_hal_subghz_tx(void) {
     if(furi_hal_subghz.regulation != FuriHalSubGhzRegulationTxRx) return false;
 
-    furi_hal_subghz_perf(true); /* active TX → pin CPU at max for transmit timing */
     furi_hal_spi_acquire(&furi_hal_spi_bus_handle_subghz);
     cc1101_switch_to_tx(&furi_hal_spi_bus_handle_subghz);
     bool ok = cc1101_wait_status_state(&furi_hal_spi_bus_handle_subghz, CC1101StateTX, 10000);

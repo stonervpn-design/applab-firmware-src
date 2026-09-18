@@ -197,6 +197,13 @@ SubGhz* subghz_alloc(bool alloc_for_tx_only) {
             subghz->view_dispatcher,
             SubGhzViewIdFrequencyAnalyzer,
             subghz_frequency_analyzer_get_view(subghz->subghz_frequency_analyzer));
+
+        // Fob Analyzer (frequency + modulation + TE)
+        subghz->subghz_fob_analyzer = subghz_fob_analyzer_alloc(subghz->txrx);
+        view_dispatcher_add_view(
+            subghz->view_dispatcher,
+            SubGhzViewIdFobAnalyzer,
+            subghz_fob_analyzer_get_view(subghz->subghz_fob_analyzer));
     }
     // Read RAW
     subghz->subghz_read_raw = subghz_read_raw_alloc(alloc_for_tx_only);
@@ -370,6 +377,10 @@ void subghz_free(SubGhz* subghz, bool alloc_for_tx_only) {
         // Frequency Analyzer
         view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFrequencyAnalyzer);
         subghz_frequency_analyzer_free(subghz->subghz_frequency_analyzer);
+
+        // Fob Analyzer
+        view_dispatcher_remove_view(subghz->view_dispatcher, SubGhzViewIdFobAnalyzer);
+        subghz_fob_analyzer_free(subghz->subghz_fob_analyzer);
     }
     if(!alloc_for_tx_only && subghz->subbrute_main_view) {
         // SubBrute Bruteforcer — only registered/allocated when heap allowed it

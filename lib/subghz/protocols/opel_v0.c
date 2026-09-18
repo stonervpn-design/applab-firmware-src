@@ -37,6 +37,12 @@
 #define OPEL_V0_MAX_BITS        150   /* maximum bits to collect */
 #define OPEL_V0_FRAME_GAP       20000 /* gap that ends a frame */
 
+/* Structural gate (false-positive rejection). The classifier emits on burst-width
+ * structure alone; require a fixed modal frame length instead of the wide 40..96
+ * window, and reject degenerate all-zero / all-one payloads. */
+#define OPEL_V0_FRAME_BITS      64    /* modal captured frame length */
+#define OPEL_V0_FRAME_DELTA     2     /* tolerance around modal (quantization jitter) */
+
 static const SubGhzBlockConst subghz_protocol_opel_v0_const = {
     .te_short = 830,
     .te_long = 5400,
@@ -138,6 +144,24 @@ static void subghz_protocol_opel_v0_process_frame(SubGhzProtocolDecoderOpelV0* i
         }
     }
 
+    /* Structural gate: require the modal fixed frame length (reject the wide
+     * 40..96 window) and reject degenerate all-zero / all-one data. Emitting on
+     * width-threshold structure alone produced the false positives. */
+    if(count < (OPEL_V0_FRAME_BITS - OPEL_V0_FRAME_DELTA) ||
+       count > (OPEL_V0_FRAME_BITS + OPEL_V0_FRAME_DELTA)) {
+        return;
+    }
+    {
+        uint64_t used_mask =
+            (count >= 64) ? 0xFFFFFFFFFFFFFFFFULL : ((1ULL << count) - 1ULL);
+        bool all_zero = (data == 0) && (data_2 == 0);
+        bool all_one = (data == used_mask) &&
+                       (count <= 64 || data_2 == ((1UL << (count - 64)) - 1UL));
+        if(all_zero || all_one) {
+            return;
+        }
+    }
+
     /* Pad data to 64 bits if shorter */
     if(count < 64) {
         data <<= (64 - count);
@@ -163,32 +187,16 @@ static void subghz_protocol_opel_v0_process_frame(SubGhzProtocolDecoderOpelV0* i
 }
 
 // ============================================================================
-// Encoder (OOK burst-width replay)
-//
-// Reproduces the waveform the decoder classifies back into the stored bits:
-//   [long preamble carrier][for each bit: a mark burst + inter-burst gap]
-// Bit value is encoded in burst width (>OPEL_V0_BIT_THRESHOLD => 1, else 0);
-// bits are separated by gaps in the [GAP_MIN,GAP_MAX] window, the last by a
-// >FRAME_GAP gap that ends the frame. Bit order mirrors the decoder's packing
-// (data holds bits 0..63 left-aligned; seed holds the >64 tail), so this
-// round-trips the decoder's Key/Seed/Bit exactly.
+// Encoder stubs (no encoding yet)
 // ============================================================================
-
-#define OPEL_V0_ENC_MARK_ONE    4000  /* > BIT_THRESHOLD  -> decodes as 1 */
-#define OPEL_V0_ENC_MARK_ZERO   2500  /* <= BIT_THRESHOLD -> decodes as 0 */
-#define OPEL_V0_ENC_BIT_GAP     5000  /* within [GAP_MIN, GAP_MAX] */
-#define OPEL_V0_ENC_FRAME_GAP   25000 /* > FRAME_GAP */
-#define OPEL_V0_ENC_PREAMBLE    55000 /* >= PREAMBLE_MIN */
-#define OPEL_V0_ENC_MAX_BITS    96
-#define OPEL_V0_ENC_UPLOAD_SIZE (2 + OPEL_V0_ENC_MAX_BITS * 2)
 
 void* subghz_protocol_encoder_opel_v0_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
     SubGhzProtocolEncoderOpelV0* instance = malloc(sizeof(SubGhzProtocolEncoderOpelV0));
     instance->base.protocol = &subghz_protocol_opel_v0;
     instance->generic.protocol_name = subghz_protocol_opel_v0.name;
-    instance->encoder.repeat = 3;
-    instance->encoder.size_upload = OPEL_V0_ENC_UPLOAD_SIZE;
+    instance->encoder.repeat = 1;
+    instance->encoder.size_upload = 2;
     instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
     instance->encoder.is_running = false;
     return instance;
@@ -201,91 +209,24 @@ void subghz_protocol_encoder_opel_v0_free(void* context) {
     free(instance);
 }
 
-static void subghz_protocol_encoder_opel_v0_get_upload(SubGhzProtocolEncoderOpelV0* instance) {
-    uint16_t count = instance->generic.data_count_bit;
-    if(count > OPEL_V0_ENC_MAX_BITS) count = OPEL_V0_ENC_MAX_BITS;
-    uint64_t data = instance->generic.data;
-    uint32_t seed = (uint32_t)instance->generic.seed;
-
-    size_t idx = 0;
-    const size_t enc_cap = OPEL_V0_ENC_UPLOAD_SIZE;
-    // Preamble carrier + a gap to close it.
-    if(idx < enc_cap)
-        instance->encoder.upload[idx++] =
-            level_duration_make(true, (uint32_t)OPEL_V0_ENC_PREAMBLE);
-    if(idx < enc_cap)
-        instance->encoder.upload[idx++] =
-            level_duration_make(false, (uint32_t)OPEL_V0_ENC_BIT_GAP);
-
-    for(uint16_t i = 0; i < count; i++) {
-        uint8_t bit;
-        if(i < 64) {
-            bit = (uint8_t)((data >> (63 - i)) & 1);
-        } else {
-            bit = (uint8_t)((seed >> (31 - (i - 64))) & 1);
-        }
-        uint32_t mark = bit ? OPEL_V0_ENC_MARK_ONE : OPEL_V0_ENC_MARK_ZERO;
-        if(idx < enc_cap)
-            instance->encoder.upload[idx++] = level_duration_make(true, mark);
-        uint32_t gap = (i < count - 1) ? OPEL_V0_ENC_BIT_GAP : OPEL_V0_ENC_FRAME_GAP;
-        if(idx < enc_cap)
-            instance->encoder.upload[idx++] = level_duration_make(false, gap);
-    }
-
-    instance->encoder.size_upload = idx;
-}
-
 SubGhzProtocolStatus
     subghz_protocol_encoder_opel_v0_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    SubGhzProtocolEncoderOpelV0* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        instance->generic.seed = 0;
-        if(subghz_block_generic_deserialize(&instance->generic, flipper_format) !=
-           SubGhzProtocolStatusOk) {
-            break;
-        }
-        if(instance->generic.data_count_bit < OPEL_V0_MIN_BITS ||
-           instance->generic.data_count_bit > OPEL_V0_ENC_MAX_BITS) {
-            res = SubGhzProtocolStatusErrorValueBitCount;
-            break;
-        }
-        uint32_t seed = 0;
-        flipper_format_rewind(flipper_format);
-        if(flipper_format_read_uint32(flipper_format, "Seed", &seed, 1)) {
-            instance->generic.seed = seed;
-        }
-        flipper_format_rewind(flipper_format);
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        subghz_protocol_encoder_opel_v0_get_upload(instance);
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-        res = SubGhzProtocolStatusOk;
-    } while(false);
-    return res;
+    UNUSED(context);
+    UNUSED(flipper_format);
+    return SubGhzProtocolStatusErrorEncoderGetUpload;
 }
 
 void subghz_protocol_encoder_opel_v0_stop(void* context) {
-    furi_assert(context);
     SubGhzProtocolEncoderOpelV0* instance = context;
     instance->encoder.is_running = false;
 }
 
 LevelDuration subghz_protocol_encoder_opel_v0_yield(void* context) {
     SubGhzProtocolEncoderOpelV0* instance = context;
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
+    if(!instance->encoder.is_running) {
         return level_duration_reset();
     }
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-    return ret;
+    return level_duration_reset();
 }
 
 // ============================================================================
@@ -426,15 +367,8 @@ void subghz_protocol_decoder_opel_v0_feed(void* context, bool level, uint32_t du
 uint8_t subghz_protocol_decoder_opel_v0_get_hash_data(void* context) {
     furi_assert(context);
     SubGhzProtocolDecoderOpelV0* instance = context;
-    /* This decoder fills generic.data, not decoder.decode_data, so hashing the
-     * latter returned the same value for every frame and distinct captures were
-     * dropped as duplicates in RX history. Hash the actual payload + seed. */
-    uint64_t v = instance->generic.data ^ ((uint64_t)instance->generic.seed << 1);
-    uint8_t hash = 0;
-    for(uint8_t i = 0; i < 8; i++) {
-        hash ^= (uint8_t)(v >> (i * 8));
-    }
-    return hash;
+    return subghz_protocol_blocks_get_hash_data(
+        &instance->decoder, (instance->decoder.decode_count_bit / 8) + 1);
 }
 
 SubGhzProtocolStatus subghz_protocol_decoder_opel_v0_serialize(
@@ -443,36 +377,17 @@ SubGhzProtocolStatus subghz_protocol_decoder_opel_v0_serialize(
     SubGhzRadioPreset* preset) {
     furi_assert(context);
     SubGhzProtocolDecoderOpelV0* instance = context;
-    SubGhzProtocolStatus ret =
-        subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
-    // generic_serialize only stores the 64-bit data; persist the high bits (seed,
-    // shown as Key2 for >64-bit frames) or they reload as uninitialised memory.
-    if(ret == SubGhzProtocolStatusOk) {
-        uint32_t seed = (uint32_t)instance->generic.seed;
-        if(!flipper_format_write_uint32(flipper_format, "Seed", &seed, 1)) {
-            return SubGhzProtocolStatusErrorParserOthers;
-        }
-    }
-    return ret;
+    return subghz_block_generic_serialize(&instance->generic, flipper_format, preset);
 }
 
 SubGhzProtocolStatus
     subghz_protocol_decoder_opel_v0_deserialize(void* context, FlipperFormat* flipper_format) {
     furi_assert(context);
     SubGhzProtocolDecoderOpelV0* instance = context;
-    instance->generic.seed = 0;
-    SubGhzProtocolStatus ret = subghz_block_generic_deserialize_check_count_bit(
+    return subghz_block_generic_deserialize_check_count_bit(
         &instance->generic,
         flipper_format,
         subghz_protocol_opel_v0_const.min_count_bit_for_found);
-    if(ret == SubGhzProtocolStatusOk) {
-        uint32_t seed = 0;
-        flipper_format_rewind(flipper_format);
-        if(flipper_format_read_uint32(flipper_format, "Seed", &seed, 1)) {
-            instance->generic.seed = seed;
-        }
-    }
-    return ret;
 }
 
 // ============================================================================

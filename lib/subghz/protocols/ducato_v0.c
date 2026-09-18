@@ -421,7 +421,12 @@ void subghz_protocol_decoder_ducato_v0_feed(void* context, bool level, uint32_t 
 
             subghz_protocol_ducato_v0_extract_data(&instance->generic, instance->crc);
 
-            if(instance->base.callback) {
+            // Gate emission on the firmware-derived CRC parity AND a
+            // non-degenerate payload. The CRC is only a 1-bit stub (~50%
+            // pass), so the all-zero rejection stops that stub from being
+            // the sole gate against noise.
+            if(instance->generic.crc_check && instance->generic.data != 0 &&
+               instance->base.callback) {
                 instance->base.callback(&instance->base, instance->base.context);
             }
 

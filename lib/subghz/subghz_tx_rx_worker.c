@@ -1,7 +1,6 @@
 #include "subghz_tx_rx_worker.h"
 
 #include <furi.h>
-#include <furi_hal_power.h>
 
 #define TAG "SubGhzTxRxWorker"
 
@@ -27,31 +26,7 @@ struct SubGhzTxRxWorker {
 
     SubGhzTxRxWorkerCallbackHaveRead callback_have_read;
     void* context_have_read;
-
-    /* --- diagnostic counters (packet RX) --- */
-    uint32_t dbg_cycles;   /* rx() calls */
-    uint32_t dbg_gdo;      /* times GDO0 seen high (sync) */
-    uint32_t dbg_pipe;     /* times rx FIFO non-empty */
-    uint32_t dbg_crc_ok;   /* CRC-valid packets */
-    uint32_t dbg_crc_bad;  /* CRC-invalid packets */
-    int32_t dbg_rssi;      /* last RSSI (dBm) sampled in RX */
 };
-
-void subghz_tx_rx_worker_get_debug(
-    SubGhzTxRxWorker* instance,
-    uint32_t* cycles,
-    uint32_t* gdo,
-    uint32_t* pipe,
-    uint32_t* crc_ok,
-    uint32_t* crc_bad,
-    int32_t* rssi) {
-    if(cycles) *cycles = instance->dbg_cycles;
-    if(gdo) *gdo = instance->dbg_gdo;
-    if(pipe) *pipe = instance->dbg_pipe;
-    if(crc_ok) *crc_ok = instance->dbg_crc_ok;
-    if(crc_bad) *crc_bad = instance->dbg_crc_bad;
-    if(rssi) *rssi = instance->dbg_rssi;
-}
 
 bool subghz_tx_rx_worker_write(SubGhzTxRxWorker* instance, uint8_t* data, size_t size) {
     furi_check(instance);
@@ -96,11 +71,8 @@ bool subghz_tx_rx_worker_rx(SubGhzTxRxWorker* instance, uint8_t* data, uint8_t* 
         instance->status = SubGhzTxRxWorkerStatusRx;
         furi_delay_tick(1);
     }
-    instance->dbg_cycles++;
     //waiting for reception to complete
-    bool gdo_high = false;
     while(furi_hal_gpio_read(instance->device_data_gpio)) {
-        gdo_high = true;
         furi_delay_tick(1);
         if(!--timeout) {
             FURI_LOG_W(TAG, "RX cc1101_g0 timeout");
@@ -109,22 +81,16 @@ bool subghz_tx_rx_worker_rx(SubGhzTxRxWorker* instance, uint8_t* data, uint8_t* 
             break;
         }
     }
-    if(gdo_high) instance->dbg_gdo++;
-    instance->dbg_rssi = (int32_t)subghz_devices_get_rssi(instance->device);
 
     if(subghz_devices_rx_pipe_not_empty(instance->device)) {
-        instance->dbg_pipe++;
         FURI_LOG_I(
             TAG,
             "RSSI: %03.1fdbm LQI: %d",
             (double)subghz_devices_get_rssi(instance->device),
             subghz_devices_get_lqi(instance->device));
         if(subghz_devices_is_rx_data_crc_valid(instance->device)) {
-            instance->dbg_crc_ok++;
             subghz_devices_read_packet(instance->device, data, size);
             ret = true;
-        } else {
-            instance->dbg_crc_bad++;
         }
         subghz_devices_flush_rx(instance->device);
         subghz_devices_set_rx(instance->device);
@@ -168,14 +134,6 @@ static int32_t subghz_tx_rx_worker_thread(void* context) {
     SubGhzTxRxWorker* instance = context;
     furi_check(instance->device);
     FURI_LOG_I(TAG, "Worker start");
-
-    /* Pin the CPU at max frequency for the whole worker lifetime. This worker
-     * polls the CC1101 GDO0 line and reads its FIFO with tick delays; with DFS
-     * enabled the CPU drops to 80 MHz when "idle" (which a chat waiting for
-     * messages looks like), slowing the SPI + polling enough to corrupt/drop
-     * received packets so peer messages never render. The async-capture RX path
-     * already holds this lock, but this worker does not go through it. */
-    furi_hal_power_perf_lock_acquire();
 
     subghz_devices_begin(instance->device);
     instance->device_data_gpio = subghz_devices_get_data_gpio(instance->device);
@@ -242,9 +200,6 @@ static int32_t subghz_tx_rx_worker_thread(void* context) {
 
     subghz_devices_sleep(instance->device);
     subghz_devices_end(instance->device);
-
-    /* release the CPU-max hold acquired at worker start */
-    furi_hal_power_perf_lock_release();
 
     FURI_LOG_I(TAG, "Worker stop");
     return 0;

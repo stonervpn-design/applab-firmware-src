@@ -3,16 +3,6 @@
 #include <lib/toolbox/value_index.h>
 #include <locale/locale.h>
 
-/* Board capability flags (BOARD_HAS_TILT_NAV). Guarded so boards without a board
- * header still build. */
-#ifdef BOARD_INCLUDE
-#include BOARD_INCLUDE
-#endif
-#ifdef BOARD_HAS_TILT_NAV
-#include "target_input.h"
-#endif
-#include <furi_hal_display.h>
-
 const char* const log_level_text[] = {
     "Default",
     "None",
@@ -218,34 +208,6 @@ static void filename_scheme_changed(VariableItem* item) {
     }
 }
 
-#ifdef BOARD_HAS_TILT_NAV
-const char* const tilt_nav_text[] = {
-    "OFF",
-    "ON",
-};
-
-static void tilt_nav_changed(VariableItem* item) {
-    uint8_t index = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, tilt_nav_text[index]);
-    target_input_set_tilt_enabled(index != 0); /* persists to NVS + updates live flag */
-}
-#endif
-
-const char* const brightness_text[] = {
-    "15%",
-    "30%",
-    "50%",
-    "75%",
-    "100%",
-};
-const uint8_t brightness_value[] = {38, 76, 128, 191, 255};
-
-static void brightness_changed(VariableItem* item) {
-    uint8_t index = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, brightness_text[index]);
-    furi_hal_display_set_user_brightness(brightness_value[index]); /* applies + persists */
-}
-
 static uint32_t system_settings_exit(void* context) {
     UNUSED(context);
     return VIEW_NONE;
@@ -271,30 +233,6 @@ SystemSettings* system_settings_alloc(void) {
     value_index = furi_hal_rtc_is_flag_set(FuriHalRtcFlagHandOrient) ? 1 : 0;
     variable_item_set_current_value_index(item, value_index);
     variable_item_set_current_value_text(item, hand_mode[value_index]);
-
-#ifdef BOARD_HAS_TILT_NAV
-    item = variable_item_list_add(
-        app->var_item_list, "Tilt Wake", COUNT_OF(tilt_nav_text), tilt_nav_changed, app);
-    value_index = target_input_get_tilt_enabled() ? 1 : 0;
-    variable_item_set_current_value_index(item, value_index);
-    variable_item_set_current_value_text(item, tilt_nav_text[value_index]);
-#endif
-
-    item = variable_item_list_add(
-        app->var_item_list, "Brightness", COUNT_OF(brightness_text), brightness_changed, app);
-    {
-        /* pick the preset closest to (>=) the current brightness */
-        uint8_t cur = furi_hal_display_get_user_brightness();
-        value_index = COUNT_OF(brightness_value) - 1;
-        for(uint8_t i = 0; i < COUNT_OF(brightness_value); i++) {
-            if(cur <= brightness_value[i]) {
-                value_index = i;
-                break;
-            }
-        }
-    }
-    variable_item_set_current_value_index(item, value_index);
-    variable_item_set_current_value_text(item, brightness_text[value_index]);
 
     item = variable_item_list_add(
         app->var_item_list,

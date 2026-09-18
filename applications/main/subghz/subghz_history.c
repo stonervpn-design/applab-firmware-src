@@ -230,25 +230,6 @@ bool subghz_history_add_to_history(
         preset->name ? furi_string_get_cstr(preset->name) : "NULL",
         preset->frequency);
 
-    if(ser_status != SubGhzProtocolStatusOk) {
-        // Serialize failed → flipper_string has no valid "Protocol"/"Key", so this
-        // entry would later miss decoder-by-name lookup and show "Error history parse".
-        // Roll the half-built item back instead of committing a broken entry (matches
-        // upstream, which drops the signal on serialize failure).
-        FURI_LOG_E(TAG, "serialize failed (%d) - dropping history entry", (int)ser_status);
-        furi_string_free(text);
-        furi_string_free(item->item_str);
-        furi_string_free(item->preset->name);
-        free(item->preset);
-        flipper_format_free(item->flipper_string);
-        item->type = 0;
-        SubGhzHistoryItemArray_remove_v(
-            instance->history->data,
-            SubGhzHistoryItemArray_size(instance->history->data) - 1,
-            SubGhzHistoryItemArray_size(instance->history->data));
-        return false;
-    }
-
     do {
         if(!flipper_format_rewind(item->flipper_string)) {
             FURI_LOG_E(TAG, "Rewind error");

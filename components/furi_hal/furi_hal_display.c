@@ -21,7 +21,6 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_ops.h>
 #include <freertos/semphr.h>
-#include <nvs.h>
 
 static const char* TAG = "FuriHalDisplay";
 
@@ -418,40 +417,6 @@ void furi_hal_display_commit(const uint8_t* data, uint32_t size) {
 
 void furi_hal_display_set_backlight(uint8_t brightness) {
     furi_hal_light_set(LightBacklight, brightness);
-}
-
-/* User backlight brightness (0..255). Single shared static — this is one binary, so
- * the settings app and the desktop see the same value. Default 255 == prior behavior;
- * a hard floor keeps the screen from ever going black. */
-#define DISPLAY_BRIGHTNESS_MIN 25u
-static uint8_t s_user_brightness = 255;
-
-void furi_hal_display_load_user_brightness(void) {
-    nvs_handle_t h;
-    uint8_t v = 255;
-    if(nvs_open("display", NVS_READONLY, &h) == ESP_OK) {
-        if(nvs_get_u8(h, "bright", &v) != ESP_OK) v = 255;
-        nvs_close(h);
-    }
-    if(v < DISPLAY_BRIGHTNESS_MIN) v = DISPLAY_BRIGHTNESS_MIN;
-    s_user_brightness = v;
-    furi_hal_display_set_backlight(s_user_brightness);
-}
-
-uint8_t furi_hal_display_get_user_brightness(void) {
-    return s_user_brightness;
-}
-
-void furi_hal_display_set_user_brightness(uint8_t level) {
-    if(level < DISPLAY_BRIGHTNESS_MIN) level = DISPLAY_BRIGHTNESS_MIN;
-    s_user_brightness = level;
-    furi_hal_display_set_backlight(level); /* apply immediately */
-    nvs_handle_t h;
-    if(nvs_open("display", NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, "bright", level);
-        nvs_commit(h);
-        nvs_close(h);
-    }
 }
 
 void furi_hal_display_sleep(void) {

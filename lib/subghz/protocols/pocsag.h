@@ -11,11 +11,3 @@
 #define SUBGHZ_PROTOCOL_POCSAG_NAME "POCSAG"
 
 extern const SubGhzProtocol subghz_protocol_pocsag;
-
-/* Encoder */
-void* subghz_protocol_encoder_pocsag_alloc(SubGhzEnvironment* environment);
-void subghz_protocol_encoder_pocsag_free(void* context);
-SubGhzProtocolStatus
-    subghz_protocol_encoder_pocsag_deserialize(void* context, FlipperFormat* flipper_format);
-void subghz_protocol_encoder_pocsag_stop(void* context);
-LevelDuration subghz_protocol_encoder_pocsag_yield(void* context);

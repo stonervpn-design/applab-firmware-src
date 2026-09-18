@@ -38,9 +38,11 @@ const SubGhzProtocol* const subghz_protocol_registry_items[] = {
     &subghz_protocol_nord_ice,      &subghz_protocol_x10,
     &subghz_protocol_hormann_bisecur, &subghz_protocol_cardin_s508,
     &subghz_protocol_pocsag,
+    &subghz_protocol_genie,
     &tpms_protocol_schrader_gg4, &tpms_protocol_ford,
     &tpms_protocol_renault,      &tpms_protocol_citroen,
     &tpms_protocol_pmv107j,
+    &tpms_protocol_hyundai_vdo,
 };
 
 const SubGhzProtocolRegistry subghz_protocol_registry = {
@@ -50,11 +52,9 @@ const SubGhzProtocolRegistry subghz_protocol_registry = {
 // --- Automotive protocol set — ProtoPirate car decoders, loaded on-demand ---
 // Includes raw/bin_raw so undecoded car signals can still be captured. 26
 // decoders total; the working baseline was ~60 native, so this fits with room.
-// Car group 1 (original automotive set + audi_v1/v2). raw/bin_raw included so raw
-// capture works in this mode.
-static const SubGhzProtocol* const subghz_protocol_registry_items_automotive_a[] = {
-#ifndef PUBLIC_BUILD
+const SubGhzProtocol* const subghz_protocol_registry_items_automotive[] = {
     &subghz_protocol_raw,        &subghz_protocol_bin_raw,
+#ifndef PUBLIC_BUILD  // car-key decoders below are compiled out of public builds (see root CMakeLists.txt FLIPPER_VARIANT=public)
     &bmw_cas4_protocol,          &hyundai_kia_rio_protocol,
     &mazda_siemens_protocol,     &sheriff_cfm_protocol,
     &fiat_v1_protocol,           &chrysler_protocol_v0,
@@ -69,23 +69,9 @@ static const SubGhzProtocol* const subghz_protocol_registry_items_automotive_a[]
     &porsche_touareg_protocol,   &psa_protocol,
     &subghz_protocol_scher_khan, &subghz_protocol_star_line,
     &subaru_protocol,            &vag_protocol,
+    &vag_polo_protocol,          &santa_fe_protocol,
     // --- Archiv WIP automotive batch (added 2026-07-24) ---
     &subghz_protocol_audi_v1,        &subghz_protocol_audi_v2,
-#else
-    // PUBLIC_BUILD (public/hardened): the ProtoPirate car-key decoders are
-    // stripped. Keep the registry symbol valid with only generic raw capture so
-    // the Automotive toggle and every reference still link, but expose NO car
-    // decoders; those symbols are then unreferenced and dropped by --gc-sections.
-    &subghz_protocol_raw,
-    &subghz_protocol_bin_raw,
-#endif
-};
-
-// Car group 2 (remaining Archiv protocols). raw/bin_raw duplicated so raw capture
-// works in this mode too. Kept ~32 wide to match group 1's footprint.
-static const SubGhzProtocol* const subghz_protocol_registry_items_automotive_b[] = {
-#ifndef PUBLIC_BUILD
-    &subghz_protocol_raw,            &subghz_protocol_bin_raw,
     &subghz_protocol_audi_v3,        &subghz_protocol_bmw_v2,
     &subghz_protocol_bmw_v3,         &subghz_protocol_chevrolet_v0,
     &subghz_protocol_ducato_v0,      &subghz_protocol_fiat_spa,
@@ -102,46 +88,48 @@ static const SubGhzProtocol* const subghz_protocol_registry_items_automotive_b[]
     &subghz_protocol_renault_v1,     &subghz_protocol_renault_v2,
     &subghz_protocol_renault_v3,     &subghz_protocol_renault_v4,
     &subghz_protocol_toyota_v0,
-#else
-    // PUBLIC_BUILD (public variant): car-key decoders stripped; raw capture only
-    // so the registry symbol still links. See group A above.
-    &subghz_protocol_raw,
-    &subghz_protocol_bin_raw,
-#endif
+    // Ported rtl_433 car remotes + TPMS + specials (propagated from momentum-tembed)
+    &subghz_protocol_compustar,      &subghz_protocol_code_alarm,
+    &subghz_protocol_audiovox,       &subghz_protocol_astrostart,
+    &subghz_protocol_continental_rke, &subghz_protocol_gm_rke,
+    &subghz_protocol_nidec_rke,      &subghz_protocol_alps_rke,
+    &subghz_protocol_siemens_vdo,    &subghz_protocol_mic6sc2,
+    &tpms_protocol_toyota,           &tpms_protocol_trw,
+    &tpms_protocol_honda,            &tpms_protocol_jeep,
+    &tpms_protocol_nissan,           &tpms_protocol_kia,
+    &tpms_protocol_gm,               &tpms_protocol_bmw,
+    &tpms_protocol_bmw_g3,           &tpms_protocol_mercedes,
+    &tpms_protocol_porsche,          &tpms_protocol_abarth124,
+    &tpms_protocol_elantra2012,      &tpms_protocol_renault_0435r,
+    &tpms_protocol_jansite,          &tpms_protocol_jansite_solar,
+    &tpms_protocol_jansite_ty468,    &tpms_protocol_jansite_ty588,
+    &tpms_protocol_eezrv,            &tpms_protocol_smartire,
+    &tpms_protocol_tyreguard400,     &tpms_protocol_imars_t240,
+    &tpms_protocol_ave,              &tpms_protocol_airpuxem,
+    &tpms_protocol_gear_hive,        &tpms_protocol_sefis_m3,
+    &tpms_protocol_truck,            &tpms_protocol_schrader_moto,
+    &subghz_protocol_tesla_charge,   &subghz_protocol_mercedes_fob,
+    &subghz_protocol_porsche_cayenne,
+#endif // PUBLIC_BUILD: car-key (RKE/immobiliser) decoders stripped for the public applab build;
+       // raw/bin_raw above stay so the Automotive toggle + every reference still link (no car decoders exposed).
 };
 
-static const SubGhzProtocolRegistry subghz_protocol_registry_automotive_a = {
-    .items = subghz_protocol_registry_items_automotive_a,
-    .size = COUNT_OF(subghz_protocol_registry_items_automotive_a)};
-static const SubGhzProtocolRegistry subghz_protocol_registry_automotive_b = {
-    .items = subghz_protocol_registry_items_automotive_b,
-    .size = COUNT_OF(subghz_protocol_registry_items_automotive_b)};
+const SubGhzProtocolRegistry subghz_protocol_registry_automotive = {
+    .items = subghz_protocol_registry_items_automotive,
+    .size = COUNT_OF(subghz_protocol_registry_items_automotive)};
 
-// --- Car mode selector: 0=general, 1=Cars 1, 2=Cars 2. The automotive set is
-// split in two so only ~32 decoders are resident at once — allocating all 62
-// (each ProtoPirate decoder carries its own large capture buffer) exhausts the
-// Cardputer ADV heap. Each half matches the general-mode footprint that fits. ---
-static uint8_t s_subghz_car_mode = 0;
-
-uint8_t subghz_protocol_registry_car_mode(void) {
-    return s_subghz_car_mode;
-}
-
-void subghz_protocol_registry_set_car_mode(uint8_t mode) {
-    s_subghz_car_mode = (mode > 2) ? 0 : mode;
-}
+// --- On-demand mode selector (default: general) ---
+static bool s_subghz_automotive_mode = false;
 
 bool subghz_protocol_registry_automotive_mode(void) {
-    return s_subghz_car_mode != 0;
+    return s_subghz_automotive_mode;
+}
+
+void subghz_protocol_registry_set_automotive_mode(bool enabled) {
+    s_subghz_automotive_mode = enabled;
 }
 
 const SubGhzProtocolRegistry* subghz_protocol_registry_active(void) {
-    switch(s_subghz_car_mode) {
-    case 1:
-        return &subghz_protocol_registry_automotive_a;
-    case 2:
-        return &subghz_protocol_registry_automotive_b;
-    default:
-        return &subghz_protocol_registry;
-    }
+    return s_subghz_automotive_mode ? &subghz_protocol_registry_automotive :
+                                      &subghz_protocol_registry;
 }

@@ -455,7 +455,7 @@ static bool kia_v6_decrypt(SubGhzProtocolDecoderKiaV6* instance) {
 
     instance->crc2_field = decrypted[15];
 
-    return (calculated_crc ^ stored_crc) < 2;
+    return calculated_crc == stored_crc;
 }
 
 void* kia_protocol_decoder_v6_alloc(SubGhzEnvironment* environment) {
@@ -628,11 +628,10 @@ void kia_protocol_decoder_v6_feed(void* context, bool level, uint32_t duration) 
         instance->generic.data_count_bit = kia_protocol_v6_const.min_count_bit_for_found;
         instance->data_part3 = ~((uint16_t)instance->data_part1_low);
 
-        /* Only surface the frame if its CRC checks out (kia_v7 already does
-         * this). Previously the decrypt/CRC result was discarded and the
-         * callback fired on every 64-bit frame, including noise. */
-        if(kia_v6_decrypt(instance) && instance->base.callback) {
-            instance->base.callback(&instance->base, instance->base.context);
+        if(kia_v6_decrypt(instance)) {
+            if(instance->base.callback) {
+                instance->base.callback(&instance->base, instance->base.context);
+            }
         }
 
         instance->data_part1_low = 0;

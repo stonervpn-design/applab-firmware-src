@@ -416,14 +416,9 @@ static void toyota_v0_build_upload(SubGhzProtocolEncoderToyotaV0* instance) {
         bool b;
         if(i < TOYOTA_V0_DATA_BITS) {
             b = toyota_v0_get_data_bit(instance, i);
-        } else if(i < 96) {
-            // 8-bit zero gap between data and complement. The decoder checks
-            // all_bits[i] ^ all_bits[i+96] over data bits 0..87, so the complement
-            // must start at frame offset 96 (88 data + 8 gap), not contiguously at 88.
-            b = 0;
         } else {
-            // Complement of data bit (i-96) so decoder's data[i]^comp[i+96] == 1.
-            b = !toyota_v0_get_data_bit(instance, i - 96);
+            // Complement: invert the corresponding data bit
+            b = !toyota_v0_get_data_bit(instance, i - TOYOTA_V0_DATA_BITS);
         }
 
         switch(manchester_state) {

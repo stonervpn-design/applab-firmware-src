@@ -353,6 +353,7 @@ void subghz_protocol_decoder_honda_v8_reset(void* ctx) {
     inst->decoder.parser_step      = 0;
     inst->decoder.decode_data      = 0;
     inst->decoder.decode_count_bit = 0;
+    inst->preamble_run             = 0;
 }
 
 /*
@@ -372,37 +373,70 @@ void subghz_protocol_decoder_honda_v8_feed(
     furi_assert(ctx);
     SubGhzProtocolDecoderHondaV8* inst = ctx;
 
+    /* A genuine Honda V8 low is either ~HV8_TE_BASE (bit 0) or the short
+     * HV8_TE_BIT1_LOW (bit 1); the frame is preceded by HV8_PREAMBLE_COUNT (23)
+     * ~HV8_TE_BASE pulse pairs and delimited by LOW >= HV8_SYNC_MIN_US gaps. */
+    bool is_sync = (!level) && (duration >= HV8_SYNC_MIN_US);
+    bool is_base = (duration + HV8_TE_DELTA >= HV8_TE_BASE) &&
+                   (duration <= HV8_TE_BASE + HV8_TE_DELTA); /* ~400us +/- delta */
+
+    /* Structural preamble anchor: count consecutive base-width pulses so a sync
+     * gap is only honoured when a real preamble preceded it. A foreign OOK burst
+     * (e.g. VAG) whose long gaps would otherwise be latched as a Honda sync is
+     * rejected up front. A sync pulse does not reset the run (it consumes it). */
+    if(is_base) {
+        if(inst->preamble_run < 0xFFFFu) inst->preamble_run++;
+    } else if(!is_sync) {
+        inst->preamble_run = 0;
+    }
+
     switch(inst->decoder.parser_step) {
 
     case 0:
-        if(!level && duration >= HV8_SYNC_MIN_US) {
-            inst->decoder.decode_data      = 0;
-            inst->decoder.decode_count_bit = 0;
-            inst->decoder.parser_step      = 1;
-            FURI_LOG_D(TAG, "[KL] sync dur=%lu", (unsigned long)duration);
+        if(is_sync) {
+            if(inst->preamble_run >= HV8_PREAMBLE_MIN) {
+                inst->decoder.decode_data      = 0;
+                inst->decoder.decode_count_bit = 0;
+                inst->decoder.parser_step      = 1;
+                FURI_LOG_D(TAG, "[KL] sync dur=%lu pre=%u",
+                           (unsigned long)duration, inst->preamble_run);
+            }
+            inst->preamble_run = 0;
         }
         break;
 
     case 1:
         if(!level) {
-            if(duration >= HV8_SYNC_MIN_US) {
-                if(inst->decoder.decode_count_bit == HV8_FRAME_BITS) {
-                    kl_process_frame(inst);
-                } else if(inst->decoder.decode_count_bit > 60u) {
+            if(is_sync) {
+                /* A genuine frame's final data low merges into the trailing gap,
+                 * so the decoder sees 65 distinct lows (bits 0..63 carry the
+                 * enc+serial+btn payload). Keep the original >60 acceptance so
+                 * real frames still decode; the preamble anchor and the
+                 * overlong-low abort below are what reject foreign bursts. */
+                if(inst->decoder.decode_count_bit == HV8_FRAME_BITS ||
+                   inst->decoder.decode_count_bit > 60u) {
                     kl_process_frame(inst);
                 }
                 inst->decoder.decode_data      = 0;
                 inst->decoder.decode_count_bit = 0;
+                inst->decoder.parser_step      = 0;
+                inst->preamble_run             = 0;
                 break;
             }
 
-            uint8_t bit_val;
-            if(duration + HV8_TE_DELTA >= HV8_TE_BASE &&
-               duration <= HV8_TE_BASE + HV8_TE_DELTA) {
-                bit_val = 0u;
-            } else {
-                bit_val = 1u;
+            /* Any in-frame low longer than a real Honda base low but shorter than
+             * a sync gap is corruption / a foreign waveform (e.g. VAG ~570us
+             * full-bit) -> abort. A genuine frame never carries such a low, so
+             * this cannot drop a real frame. */
+            if(duration > HV8_TE_BASE + HV8_TE_DELTA) {
+                inst->decoder.decode_data      = 0;
+                inst->decoder.decode_count_bit = 0;
+                inst->decoder.parser_step      = 0;
+                inst->preamble_run             = 0;
+                break;
             }
+
+            uint8_t bit_val = is_base ? 0u : 1u;
 
             if(inst->decoder.decode_count_bit < 64u) {
                 inst->decoder.decode_data >>= 1;
@@ -416,6 +450,7 @@ void subghz_protocol_decoder_honda_v8_feed(
                 inst->decoder.decode_data      = 0;
                 inst->decoder.decode_count_bit = 0;
                 inst->decoder.parser_step      = 0;
+                inst->preamble_run             = 0;
             }
         }
 

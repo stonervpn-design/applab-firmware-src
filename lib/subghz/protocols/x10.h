@@ -81,38 +81,3 @@ SubGhzProtocolStatus
  * @param output Resulting text
  */
 void subghz_protocol_decoder_x10_get_string(void* context, FuriString* output);
-
-/**
- * Allocate SubGhzProtocolEncoderX10.
- * @param environment Pointer to a SubGhzEnvironment instance
- * @return SubGhzProtocolEncoderX10* pointer to a SubGhzProtocolEncoderX10 instance
- */
-void* subghz_protocol_encoder_x10_alloc(SubGhzEnvironment* environment);
-
-/**
- * Free SubGhzProtocolEncoderX10.
- * @param context Pointer to a SubGhzProtocolEncoderX10 instance
- */
-void subghz_protocol_encoder_x10_free(void* context);
-
-/**
- * Deserialize and generating an upload to send.
- * @param context Pointer to a SubGhzProtocolEncoderX10 instance
- * @param flipper_format Pointer to a FlipperFormat instance
- * @return SubGhzProtocolStatus
- */
-SubGhzProtocolStatus
-    subghz_protocol_encoder_x10_deserialize(void* context, FlipperFormat* flipper_format);
-
-/**
- * Forced transmission stop.
- * @param context Pointer to a SubGhzProtocolEncoderX10 instance
- */
-void subghz_protocol_encoder_x10_stop(void* context);
-
-/**
- * Getting the level and duration of the upload to be loaded into DMA.
- * @param context Pointer to a SubGhzProtocolEncoderX10 instance
- * @return LevelDuration
- */
-LevelDuration subghz_protocol_encoder_x10_yield(void* context);

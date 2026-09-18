@@ -1,5 +1,4 @@
 #include "tpms_pmv107j.h"
-#include "../blocks/generic.h"
 
 #define TAG "TPMSPmv107j"
 
@@ -68,12 +67,6 @@ typedef struct {
     uint64_t head_64_bit;
 } TPMSProtocolDecoderPmv107j;
 
-typedef struct {
-    SubGhzProtocolEncoderBase base;
-    SubGhzProtocolBlockEncoder encoder;
-    TPMSBlockGeneric generic;
-} TPMSProtocolEncoderPmv107j;
-
 const SubGhzProtocolDecoder tpms_protocol_pmv107j_decoder = {
     .alloc = tpms_protocol_decoder_pmv107j_alloc,
     .free = tpms_protocol_decoder_pmv107j_free,
@@ -86,19 +79,18 @@ const SubGhzProtocolDecoder tpms_protocol_pmv107j_decoder = {
 };
 
 const SubGhzProtocolEncoder tpms_protocol_pmv107j_encoder = {
-    .alloc = tpms_protocol_encoder_pmv107j_alloc,
-    .free = tpms_protocol_encoder_pmv107j_free,
-    .deserialize = tpms_protocol_encoder_pmv107j_deserialize,
-    .stop = tpms_protocol_encoder_pmv107j_stop,
-    .yield = tpms_protocol_encoder_pmv107j_yield,
+    .alloc = NULL,
+    .free = NULL,
+    .deserialize = NULL,
+    .stop = NULL,
+    .yield = NULL,
 };
 
 const SubGhzProtocol tpms_protocol_pmv107j = {
     .name = TPMS_PROTOCOL_PMV107J_NAME,
     .type = SubGhzProtocolTypeTpms,
     .flag = SubGhzProtocolFlag_315 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Sensors | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load |
-            SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Sensors | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load,
     .decoder = &tpms_protocol_pmv107j_decoder,
     .encoder = &tpms_protocol_pmv107j_encoder,
 };
@@ -280,167 +272,4 @@ void tpms_protocol_decoder_pmv107j_get_string(void* context, FuriString* output)
         instance->generic.battery_low ? "low" : "ok",
         (double)instance->generic.temperature,
         (double)instance->generic.pressure);
-}
-
-// -----------------------------------------------------------------------------
-// Encoder
-// -----------------------------------------------------------------------------
-//
-// FSK 315 MHz Differential-Manchester as consumed by the decoder above (which
-// ignores level and looks only at pulse durations):
-//   bit 1 -> one te_long pulse
-//   bit 0 -> two te_short pulses (mid-bit transition)
-// Levels strictly alternate pulse-to-pulse (no run-length merge).
-//
-// Frame on the wire: inter-frame gap (reset) + lead-in of '1' bits and a
-// terminating '0' forming the 6-bit preamble 0b111110 (0x3E) + 66 data bits.
-//
-// The 66-bit frame is b[0](2 bits) + b[1..8]; generic.data holds b[1..8]
-// (including the CRC b[8]). The 2-bit b[0] (top of the 28-bit ID) is recovered
-// by brute force from the CRC-8 (poly 0x13, init 0x00 over b[0..7] == b[8]) so
-// both the CRC check and the ID reproduce exactly.
-//
-// Worst-case entries: 1 gap + 8 lead-in + 2 ('0') + 66*2 (all-zero data) = 143.
-#define TPMS_PMV107J_ENCODER_UPLOAD_SIZE 200
-#define TPMS_PMV107J_PREAMBLE_ONES       8
-
-void* tpms_protocol_encoder_pmv107j_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    TPMSProtocolEncoderPmv107j* instance = malloc(sizeof(TPMSProtocolEncoderPmv107j));
-    instance->base.protocol = &tpms_protocol_pmv107j;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 10;
-    instance->encoder.size_upload = TPMS_PMV107J_ENCODER_UPLOAD_SIZE;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    return instance;
-}
-
-void tpms_protocol_encoder_pmv107j_free(void* context) {
-    furi_assert(context);
-    TPMSProtocolEncoderPmv107j* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-void tpms_protocol_encoder_pmv107j_stop(void* context) {
-    TPMSProtocolEncoderPmv107j* instance = context;
-    instance->encoder.is_running = false;
-}
-
-// Rebuild b[0..8]. b[1..8] from generic.data; b[0] (low 2 bits) recovered from CRC.
-static void tpms_protocol_encoder_pmv107j_build_frame(TPMSBlockGeneric* generic, uint8_t b[9]) {
-    for(int i = 0; i < 8; i++) {
-        b[i + 1] = (generic->data >> (8 * (7 - i))) & 0xFF;
-    }
-    b[0] = 0x00;
-    for(int cand = 0; cand < 4; cand++) {
-        uint8_t msg[8];
-        msg[0] = (uint8_t)cand;
-        for(int i = 1; i < 8; i++) msg[i] = b[i];
-        if(subghz_protocol_blocks_crc8(msg, 8, 0x13, 0x00) == b[8]) {
-            b[0] = (uint8_t)cand;
-            break;
-        }
-    }
-}
-
-static bool tpms_protocol_encoder_pmv107j_get_upload(TPMSProtocolEncoderPmv107j* instance) {
-    furi_assert(instance);
-    const uint32_t te_short = tpms_protocol_pmv107j_const.te_short;
-    const uint32_t te_long = tpms_protocol_pmv107j_const.te_long;
-
-    uint8_t frame[9];
-    tpms_protocol_encoder_pmv107j_build_frame(&instance->generic, frame);
-
-    // Build the 66-bit stream: b[0] bits 1,0 then b[1..8] MSB-first.
-    uint8_t bits[PMV107J_DATA_BITS];
-    int n = 0;
-    bits[n++] = (frame[0] >> 1) & 0x1;
-    bits[n++] = (frame[0] >> 0) & 0x1;
-    for(int i = 1; i <= 8; i++) {
-        for(int j = 7; j >= 0; j--) bits[n++] = (frame[i] >> j) & 0x1;
-    }
-
-    size_t index = 0;
-    const size_t max = instance->encoder.size_upload;
-    bool level = true;
-
-#define PUSH(dur)                                                                  \
-    do {                                                                           \
-        if(index >= max) return false;                                             \
-        instance->encoder.upload[index++] = level_duration_make(level, (dur));     \
-        level = !level;                                                            \
-    } while(0)
-
-    // Inter-frame gap: out-of-range low -> decoder reset (loses sync/clock)
-    PUSH(te_short * 40);
-
-    // Preamble: lead-in '1' bits (te_long) then a single '0' -> forms 0x3E
-    for(int i = 0; i < TPMS_PMV107J_PREAMBLE_ONES; i++) {
-        PUSH(te_long);
-    }
-    PUSH(te_short); // '0' first half
-    PUSH(te_short); // '0' second half
-
-    // 66 data bits
-    for(int i = 0; i < PMV107J_DATA_BITS; i++) {
-        if(bits[i]) {
-            PUSH(te_long);
-        } else {
-            PUSH(te_short);
-            PUSH(te_short);
-        }
-    }
-
-#undef PUSH
-
-    instance->encoder.size_upload = index;
-    return true;
-}
-
-SubGhzProtocolStatus
-    tpms_protocol_encoder_pmv107j_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    TPMSProtocolEncoderPmv107j* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        res = tpms_block_generic_deserialize_check_count_bit(
-            &instance->generic,
-            flipper_format,
-            tpms_protocol_pmv107j_const.min_count_bit_for_found);
-        if(res != SubGhzProtocolStatusOk) {
-            FURI_LOG_E(TAG, "Deserialize error");
-            break;
-        }
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        instance->encoder.size_upload = TPMS_PMV107J_ENCODER_UPLOAD_SIZE;
-        if(!tpms_protocol_encoder_pmv107j_get_upload(instance)) {
-            res = SubGhzProtocolStatusErrorEncoderGetUpload;
-            break;
-        }
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-    } while(false);
-    return res;
-}
-
-LevelDuration tpms_protocol_encoder_pmv107j_yield(void* context) {
-    TPMSProtocolEncoderPmv107j* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
 }

@@ -1,5 +1,4 @@
 #include "subbrute_main_view.h"
-#include "../helpers/subbrute_debruijn.h"
 
 #include <furi.h>
 #include <furi_hal.h>
@@ -180,17 +179,15 @@ void subbrute_main_view_draw_is_ordinary_selected(Canvas* canvas, SubBruteMainVi
 
             uint8_t current_repeat_count = model->repeat_values[position];
             uint8_t min_repeat_count = subbrute_protocol_repeats_count(position);
-            bool is_debruijn = (position == SubBruteAttackDeBruijn);
 
-            if(is_debruijn || current_repeat_count > min_repeat_count) {
+            if(current_repeat_count > min_repeat_count) {
 #ifdef FW_ORIGIN_Official
                 canvas_set_font(canvas, FontSecondary);
 #else
                 canvas_set_font(canvas, FontBatteryPercent);
 #endif
                 char buffer[10] = {0};
-                snprintf(
-                    buffer, sizeof(buffer), is_debruijn ? "n%d" : "x%d", current_repeat_count);
+                snprintf(buffer, sizeof(buffer), "x%d", current_repeat_count);
                 uint8_t temp_x_offset_repeats =
                     current_repeat_count <= SUBBRUTE_PROTOCOL_MAX_REPEATS ? 15 : 18;
 
@@ -265,11 +262,6 @@ bool subbrute_main_view_input_ordinary_protocol(
     uint8_t index = instance->index;
     uint8_t min_repeats = subbrute_protocol_repeats_count(index);
     uint8_t max_repeats = min_repeats * 3;
-    // On the De Bruijn row the value is n (bits per code), not a repeat count.
-    if(index == SubBruteAttackDeBruijn) {
-        min_repeats = SUBBRUTE_DEBRUIJN_MIN_TX_N;
-        max_repeats = SUBBRUTE_DEBRUIJN_MAX_TX_N;
-    }
     uint8_t current_repeats = instance->repeat_values[index];
 
     bool updated = false;

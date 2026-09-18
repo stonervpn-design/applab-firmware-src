@@ -1,5 +1,4 @@
 #include "tpms_citroen.h"
-#include "../blocks/generic.h"
 #include <lib/toolbox/manchester_decoder.h>
 
 #define TAG "TPMSCitroen"
@@ -46,12 +45,6 @@ typedef struct {
     uint64_t head_64_bit;
 } TPMSProtocolDecoderCitroen;
 
-typedef struct {
-    SubGhzProtocolEncoderBase base;
-    SubGhzProtocolBlockEncoder encoder;
-    TPMSBlockGeneric generic;
-} TPMSProtocolEncoderCitroen;
-
 const SubGhzProtocolDecoder tpms_protocol_citroen_decoder = {
     .alloc = tpms_protocol_decoder_citroen_alloc,
     .free = tpms_protocol_decoder_citroen_free,
@@ -64,29 +57,27 @@ const SubGhzProtocolDecoder tpms_protocol_citroen_decoder = {
 };
 
 const SubGhzProtocolEncoder tpms_protocol_citroen_encoder = {
-    .alloc = tpms_protocol_encoder_citroen_alloc,
-    .free = tpms_protocol_encoder_citroen_free,
-    .deserialize = tpms_protocol_encoder_citroen_deserialize,
-    .stop = tpms_protocol_encoder_citroen_stop,
-    .yield = tpms_protocol_encoder_citroen_yield,
+    .alloc = NULL,
+    .free = NULL,
+    .deserialize = NULL,
+    .stop = NULL,
+    .yield = NULL,
 };
 
 const SubGhzProtocol tpms_protocol_citroen = {
     .name = TPMS_PROTOCOL_CITROEN_NAME,
     .type = SubGhzProtocolTypeTpms,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Sensors | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load |
-            SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Sensors | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load,
     .decoder = &tpms_protocol_citroen_decoder,
     .encoder = &tpms_protocol_citroen_encoder,
 };
 
 void* tpms_protocol_decoder_citroen_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
-    TPMSProtocolDecoderCitroen* instance = calloc(1, sizeof(TPMSProtocolDecoderCitroen));
+    TPMSProtocolDecoderCitroen* instance = malloc(sizeof(TPMSProtocolDecoderCitroen));
     instance->base.protocol = &tpms_protocol_citroen;
     instance->generic.protocol_name = instance->base.protocol->name;
-    instance->manchester_saved_state = ManchesterStateStart1;
     return instance;
 }
 
@@ -103,7 +94,6 @@ void tpms_protocol_decoder_citroen_reset(void* context) {
     instance->decoder.decode_count_bit = 0;
     instance->head_64_bit = 0;
     instance->header_shift = 0;
-    instance->manchester_saved_state = ManchesterStateStart1;
 }
 
 static ManchesterEvent citroen_evt(bool level, uint32_t duration) {
@@ -245,170 +235,4 @@ void tpms_protocol_decoder_citroen_get_string(void* context, FuriString* output)
         instance->generic.id,
         (double)instance->generic.temperature,
         (double)instance->generic.pressure);
-}
-
-// -----------------------------------------------------------------------------
-// Encoder
-// -----------------------------------------------------------------------------
-//
-// FSK Manchester-II, non-inverting (see round-trip verification):
-//   bit 1 -> first half LOW,  second half HIGH
-//   bit 0 -> first half HIGH, second half LOW
-// Frame: gap (reset) + 0x55 0x55 0x55 0x56 preamble + 80 data bits.
-//
-// The 80-bit frame is b[0..9]; the serialized generic.data holds only the low 64
-// bits (b[2..9]). b[1] is recovered from the XOR integrity field (XOR(b[1..9])==0
-// => b[1] = XOR(b[2..9])), which restores it exactly (and makes the decoder's
-// XOR check pass). b[0] is a state byte the decoder neither validates nor
-// displays, so it is emitted as 0x00.
-//
-// Worst-case entries: 1 gap + 2*(32 preamble + 80 data) + 1 = 226.
-#define TPMS_CITROEN_ENCODER_UPLOAD_SIZE 240
-
-void* tpms_protocol_encoder_citroen_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    TPMSProtocolEncoderCitroen* instance = malloc(sizeof(TPMSProtocolEncoderCitroen));
-    instance->base.protocol = &tpms_protocol_citroen;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 10;
-    instance->encoder.size_upload = TPMS_CITROEN_ENCODER_UPLOAD_SIZE;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    return instance;
-}
-
-void tpms_protocol_encoder_citroen_free(void* context) {
-    furi_assert(context);
-    TPMSProtocolEncoderCitroen* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-void tpms_protocol_encoder_citroen_stop(void* context) {
-    TPMSProtocolEncoderCitroen* instance = context;
-    instance->encoder.is_running = false;
-}
-
-// Rebuild the full 10-byte frame. b[2..9] come from generic.data; b[1] is
-// recovered from the XOR checksum; b[0] (uncovered state byte) is set to 0.
-static void tpms_protocol_encoder_citroen_build_frame(TPMSBlockGeneric* generic, uint8_t b[10]) {
-    for(int i = 0; i < 8; i++) {
-        b[i + 2] = (generic->data >> (8 * (7 - i))) & 0xFF;
-    }
-    uint8_t x = 0;
-    for(int i = 2; i <= 9; i++) x ^= b[i];
-    b[1] = x; // makes XOR(b[1..9]) == 0
-    b[0] = 0x00;
-}
-
-static bool tpms_protocol_encoder_citroen_get_upload(TPMSProtocolEncoderCitroen* instance) {
-    furi_assert(instance);
-    const uint32_t te = tpms_protocol_citroen_const.te_short;
-
-    uint8_t frame[10];
-    tpms_protocol_encoder_citroen_build_frame(&instance->generic, frame);
-
-    size_t index = 0;
-    const size_t max = instance->encoder.size_upload;
-    bool last_level = false;
-    uint32_t last_duration = 0;
-
-#define EMIT(lvl, dur)                                                                \
-    do {                                                                              \
-        if(last_duration != 0 && last_level == (lvl)) {                               \
-            last_duration += (dur);                                                   \
-        } else {                                                                      \
-            if(last_duration != 0) {                                                  \
-                if(index >= max) return false;                                        \
-                instance->encoder.upload[index++] =                                   \
-                    level_duration_make(last_level, last_duration);                   \
-            }                                                                         \
-            last_level = (lvl);                                                       \
-            last_duration = (dur);                                                    \
-        }                                                                             \
-    } while(0)
-
-#define MAN_BIT(bit)                 \
-    do {                             \
-        if(bit) {                    \
-            EMIT(false, te);         \
-            EMIT(true, te);          \
-        } else {                     \
-            EMIT(true, te);          \
-            EMIT(false, te);         \
-        }                            \
-    } while(0)
-
-    EMIT(false, te * 50);
-
-    static const uint8_t preamble[4] = {0x55, 0x55, 0x55, 0x56};
-    for(int i = 0; i < 4; i++) {
-        for(int b = 7; b >= 0; b--) {
-            MAN_BIT((preamble[i] >> b) & 0x1);
-        }
-    }
-
-    // 80 data bits, MSB first (frame[0]..frame[9])
-    for(int i = 0; i < CITROEN_DATA_BITS; i++) {
-        int byte = i / 8;
-        int bit = 7 - (i % 8);
-        MAN_BIT((frame[byte] >> bit) & 0x1);
-    }
-
-    if(last_duration != 0) {
-        if(index >= max) return false;
-        instance->encoder.upload[index++] = level_duration_make(last_level, last_duration);
-    }
-
-#undef MAN_BIT
-#undef EMIT
-
-    instance->encoder.size_upload = index;
-    return true;
-}
-
-SubGhzProtocolStatus
-    tpms_protocol_encoder_citroen_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    TPMSProtocolEncoderCitroen* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        res = tpms_block_generic_deserialize_check_count_bit(
-            &instance->generic,
-            flipper_format,
-            tpms_protocol_citroen_const.min_count_bit_for_found);
-        if(res != SubGhzProtocolStatusOk) {
-            FURI_LOG_E(TAG, "Deserialize error");
-            break;
-        }
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        instance->encoder.size_upload = TPMS_CITROEN_ENCODER_UPLOAD_SIZE;
-        if(!tpms_protocol_encoder_citroen_get_upload(instance)) {
-            res = SubGhzProtocolStatusErrorEncoderGetUpload;
-            break;
-        }
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-    } while(false);
-    return res;
-}
-
-LevelDuration tpms_protocol_encoder_citroen_yield(void* context) {
-    TPMSProtocolEncoderCitroen* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
 }

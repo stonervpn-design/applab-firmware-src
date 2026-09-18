@@ -1,12 +1,6 @@
 #include "widget_element_i.h"
 #include <gui/elements.h>
 
-/* Board capability flags (e.g. BOARD_TWO_BUTTON_INPUT). Guarded include so this
- * builds even on a board that does not set BOARD_INCLUDE. */
-#ifdef BOARD_INCLUDE
-#include BOARD_INCLUDE
-#endif
-
 typedef struct {
     GuiButtonType button_type;
     FuriString* text;
@@ -37,25 +31,13 @@ static bool gui_button_input(InputEvent* event, WidgetElement* element) {
 
     if(model->callback == NULL) return consumed;
 
-    InputKey key = event->key;
-#ifdef BOARD_TWO_BUTTON_INPUT
-    /* Two-button board has no Left/Right key: alias Down->Left button, Ok->Right
-     * button so confirmation rows ("Exit to X Menu?") are reachable. Center still
-     * uses Ok. See BOARD_TWO_BUTTON_INPUT in the board header. */
-    if(key == InputKeyDown) {
-        key = InputKeyLeft;
-    } else if(key == InputKeyOk && model->button_type == GuiButtonTypeRight) {
-        key = InputKeyRight;
-    }
-#endif
-
-    if((model->button_type == GuiButtonTypeLeft) && (key == InputKeyLeft)) {
+    if((model->button_type == GuiButtonTypeLeft) && (event->key == InputKeyLeft)) {
         model->callback(model->button_type, event->type, model->context);
         consumed = true;
-    } else if((model->button_type == GuiButtonTypeRight) && (key == InputKeyRight)) {
+    } else if((model->button_type == GuiButtonTypeRight) && (event->key == InputKeyRight)) {
         model->callback(model->button_type, event->type, model->context);
         consumed = true;
-    } else if((model->button_type == GuiButtonTypeCenter) && (key == InputKeyOk)) {
+    } else if((model->button_type == GuiButtonTypeCenter) && (event->key == InputKeyOk)) {
         model->callback(model->button_type, event->type, model->context);
         consumed = true;
     }

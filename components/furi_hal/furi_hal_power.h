@@ -19,25 +19,6 @@ void furi_hal_power_init(void);
 bool furi_hal_power_gauge_is_ok(void);
 bool furi_hal_power_is_shutdown_requested(void);
 
-/** Configure Dynamic Frequency Scaling (DFS): CPU scales between a min floor and
- * the board's max (240 MHz) to save battery when idle. Light sleep stays OFF.
- * Call once at boot after furi_hal_power_init(). No-op if CONFIG_PM_ENABLE is off. */
-void furi_hal_power_pm_init(void);
-
-/** Hold/release the CPU at max frequency for a timing-critical section (RF TX/RX,
- * etc.). Counted internally, so nested/independent callers are safe as long as each
- * acquire is matched by a release. Callers that toggle by state should guard with a
- * local bool so they acquire at most once. No-op if PM is disabled. */
-void furi_hal_power_perf_lock_acquire(void);
-void furi_hal_power_perf_lock_release(void);
-
-/** Drop to / restore from the DFS min frequency. `idle=true` releases the always-on
- * boot hold so the CPU can scale down; `idle=false` re-takes it (back to max). Driven
- * by the desktop idle manager, and only in a confirmed-safe idle state (foreground
- * desktop, no app/RF, BT off, USB off); the always-on input hook calls it with false
- * so any keypress restores max immediately. Thread-safe. No-op if PM is disabled. */
-void furi_hal_power_perf_idle_set(bool idle);
-
 uint16_t furi_hal_power_insomnia_level(void);
 void furi_hal_power_insomnia_enter(void);
 void furi_hal_power_insomnia_exit(void);

@@ -83,7 +83,6 @@ FAP_FILENAME="${APP_ID}.fap"
 TARGETS=(
     "m5stack_cardputer_adv      esp32s3     xtensa-esp32s3-elf      build_cardputer_adv"
     "lilygo_t_embed_cc1101      esp32s3     xtensa-esp32s3-elf      build_t_embed"
-    "m5stick_s3                 esp32s3     xtensa-esp32s3-elf      build_m5stick_s3_public"
 #    "waveshare_c6_1.9           esp32c6     riscv32-esp-elf         build_waveshare_c6"
 )
 
@@ -293,8 +292,6 @@ build_for_target() {
         )
         if [ "$BOARD" = "m5stack_cardputer_adv" ]; then
             TARGET_CFLAGS+=(-DBOARD_INCLUDE=\"board_m5stack_cardputer_adv.h\")
-        elif [ "$BOARD" = "m5stick_s3" ]; then
-            TARGET_CFLAGS+=(-DBOARD_INCLUDE=\"board_m5stick_s3.h\")
         else
             TARGET_CFLAGS+=(-DBOARD_INCLUDE=\"board_lilygo_t_embed_cc1101.h\")
         fi

@@ -261,6 +261,27 @@ void subghz_protocol_decoder_jeep_v0_feed(void* context, bool level, uint32_t du
 
                 jeep_v0_extract_fields(instance);
 
+                /* False-positive gate: a genuine Jeep V0 frame has B6==0x07 and
+                 * a button code in the known set. Reject anything else instead
+                 * of reporting a phantom decode. */
+                {
+                    uint8_t b6 = (uint8_t)((instance->generic.data >> 8) & 0xFF);
+                    uint16_t btn_code =
+                        (uint16_t)((instance->generic.data >> 16) & 0xFFFF);
+                    bool btn_ok = btn_code == JEEP_V0_BTN_UNLOCK ||
+                                  btn_code == JEEP_V0_BTN_LOCK ||
+                                  btn_code == JEEP_V0_BTN_RS ||
+                                  btn_code == JEEP_V0_BTN_PANIC;
+                    if(b6 != 0x07 || !btn_ok) {
+                        instance->decoder.decode_data = 0;
+                        instance->decoder.decode_count_bit = 0;
+                        instance->data_32 = 0;
+                        instance->preamble_count = 0;
+                        instance->decoder.parser_step = JeepV0DecoderStepReset;
+                        break;
+                    }
+                }
+
                 FURI_LOG_I(TAG, "Decoded: Sn:%08lX Btn:%04X Cnt:%lu",
                     (unsigned long)instance->generic.serial,
                     (unsigned)((instance->generic.btn << 8) | instance->generic.type),
@@ -376,9 +397,7 @@ void* subghz_protocol_encoder_jeep_v0_alloc(SubGhzEnvironment* environment) {
     instance->generic.protocol_name = instance->base.protocol->name;
     instance->encoder.repeat = JEEP_V0_TOTAL_BURSTS;
     // Preamble(20*2) + sync(8*2) + data(96*2) + gap = ~250
-    // 23 bytes (10 preamble + 1 sync + 8 data + 4 hop) * 16 Manchester entries + end
-    // gap = 369 entries; the byte encoder has no bounds check, so allocate above that.
-    instance->encoder.size_upload = 400;
+    instance->encoder.size_upload = 300;
     instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
     instance->encoder.is_running = false;
     return instance;
@@ -393,18 +412,18 @@ void subghz_protocol_encoder_jeep_v0_free(void* context) {
 
 static size_t jeep_v0_manchester_encode_byte(
     LevelDuration* upload, size_t index, uint8_t byte_val, uint32_t te,
-    bool* last_level, size_t cap) {
+    bool* last_level) {
     for(int bit = 7; bit >= 0; bit--) {
         bool b = (byte_val >> bit) & 1;
         if(b) {
             // Manchester 1: LOW→HIGH
-            if(index < cap) upload[index++] = level_duration_make(false, te);
-            if(index < cap) upload[index++] = level_duration_make(true, te);
+            upload[index++] = level_duration_make(false, te);
+            upload[index++] = level_duration_make(true, te);
             *last_level = true;
         } else {
             // Manchester 0: HIGH→LOW
-            if(index < cap) upload[index++] = level_duration_make(true, te);
-            if(index < cap) upload[index++] = level_duration_make(false, te);
+            upload[index++] = level_duration_make(true, te);
+            upload[index++] = level_duration_make(false, te);
             *last_level = false;
         }
     }
@@ -414,37 +433,35 @@ static size_t jeep_v0_manchester_encode_byte(
 static void jeep_v0_build_upload(SubGhzProtocolEncoderJeepV0* instance) {
     furi_assert(instance);
     size_t index = 0;
-    const size_t enc_cap = 400;
     uint32_t te = subghz_protocol_jeep_v0_const.te_short;
     bool last_level = false;
 
     // Preamble: 10 bytes of 0xFF
     for(int i = 0; i < 10; i++) {
         index = jeep_v0_manchester_encode_byte(
-            instance->encoder.upload, index, 0xFF, te, &last_level, enc_cap);
+            instance->encoder.upload, index, 0xFF, te, &last_level);
     }
 
     // Sync: 0xFE
     index = jeep_v0_manchester_encode_byte(
-        instance->encoder.upload, index, 0xFE, te, &last_level, enc_cap);
+        instance->encoder.upload, index, 0xFE, te, &last_level);
 
     // Data: 8 bytes from generic.data (B0-B7)
     for(int i = 7; i >= 0; i--) {
         uint8_t byte_val = (instance->generic.data >> (i * 8)) & 0xFF;
         index = jeep_v0_manchester_encode_byte(
-            instance->encoder.upload, index, byte_val, te, &last_level, enc_cap);
+            instance->encoder.upload, index, byte_val, te, &last_level);
     }
 
     // Data: 4 bytes from data_32 (B8-B11)
     for(int i = 3; i >= 0; i--) {
         uint8_t byte_val = (instance->data_32 >> (i * 8)) & 0xFF;
         index = jeep_v0_manchester_encode_byte(
-            instance->encoder.upload, index, byte_val, te, &last_level, enc_cap);
+            instance->encoder.upload, index, byte_val, te, &last_level);
     }
 
     // End gap
-    if(index < enc_cap)
-        instance->encoder.upload[index++] = level_duration_make(false, 78000);
+    instance->encoder.upload[index++] = level_duration_make(false, 78000);
 
     instance->encoder.size_upload = index;
 }

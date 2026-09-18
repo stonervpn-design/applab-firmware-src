@@ -100,70 +100,6 @@ static void furi_hal_m5pm1_init(void) {
 }
 #endif
 
-void furi_hal_grove_5v_set(bool on) {
-#ifdef BOARD_HAS_M5PM1
-    /* Toggle M5PM1 reg 0x06 bit3 (Port.A / Grove 5V boost). The PMIC I2C driver was
-     * installed in furi_hal_m5pm1_init(); reuse it. Read-modify-write so we only
-     * touch the 5V-enable bit. Safe on the RF side: the CC1101/nRF24 pack is on the
-     * SPI3 header powered from 3V3, not this rail. */
-    uint8_t reg = 0x06, v = 0;
-    if(i2c_master_write_read_device(
-           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &v, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
-        return;
-    }
-    if(on) {
-        v |= (uint8_t)(1u << 3);
-    } else {
-        v &= (uint8_t)~(1u << 3);
-    }
-    uint8_t buf[2] = {0x06, v};
-    esp_err_t e = i2c_master_write_to_device(
-        BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, buf, 2, pdMS_TO_TICKS(50));
-    ESP_LOGI(TAG, "Grove 5V %s (reg0x06=0x%02X, err=%s)",
-             on ? "ON" : "OFF", v, esp_err_to_name(e));
-#else
-    (void)on;
-#endif
-}
-
-#ifdef BOARD_HAS_M5PM1
-bool furi_hal_m5pm1_read_vbat_mv(uint16_t* out_mv) {
-    /* The M5PM1 continuously measures VBAT and exposes it, already in millivolts,
-     * at reg 0x22 (low byte) / 0x23 (high 4 bits) — a 12-bit value. The PMIC I2C
-     * driver was installed at boot in furi_hal_m5pm1_init(); reuse it. */
-    if(!out_mv) return false;
-    uint8_t reg = 0x22;
-    uint8_t b[2] = {0, 0};
-    if(i2c_master_write_read_device(
-           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, b, 2, pdMS_TO_TICKS(50)) != ESP_OK) {
-        return false;
-    }
-    *out_mv = (uint16_t)((b[0] | ((uint16_t)b[1] << 8)) & 0x0FFF);
-    return true;
-}
-
-bool furi_hal_m5pm1_read_charging(bool* out_charging) {
-    /* Reg 0x12 = GPIO input state [4:0]; GPIO0 (bit0) low = charging. */
-    if(!out_charging) return false;
-    uint8_t reg = 0x12, v = 0;
-    if(i2c_master_write_read_device(
-           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &v, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
-        return false;
-    }
-    *out_charging = ((v & 0x01u) == 0u);
-    return true;
-}
-#else
-bool furi_hal_m5pm1_read_vbat_mv(uint16_t* out_mv) {
-    (void)out_mv;
-    return false;
-}
-bool furi_hal_m5pm1_read_charging(bool* out_charging) {
-    (void)out_charging;
-    return false;
-}
-#endif
-
 
 void furi_hal_init_early(void) {
     furi_hal_cortex_init_early();
@@ -216,14 +152,12 @@ void furi_hal_init(void) {
     furi_hal_rtc_init();
     furi_hal_version_init();
     furi_hal_power_init();
-    furi_hal_power_pm_init(); /* enable DFS (CPU freq scaling); light sleep stays off */
     furi_hal_crypto_init();
     furi_hal_module_pins_apply_nvs(); /* apply configured CC1101/NRF24/IR pins before probing */
     furi_hal_subghz_init();
     furi_hal_usb_init();
     furi_hal_light_init();
     furi_hal_display_init();
-    furi_hal_display_load_user_brightness(); /* apply persisted brightness (default 255) */
     furi_hal_speaker_init();
     furi_hal_nfc_init();
     ESP_LOGI(TAG, "Init complete");

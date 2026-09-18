@@ -28,10 +28,3 @@ SubGhzProtocolStatus
     tpms_protocol_decoder_citroen_deserialize(void* context, FlipperFormat* flipper_format);
 
 void tpms_protocol_decoder_citroen_get_string(void* context, FuriString* output);
-
-void* tpms_protocol_encoder_citroen_alloc(SubGhzEnvironment* environment);
-void tpms_protocol_encoder_citroen_free(void* context);
-void tpms_protocol_encoder_citroen_stop(void* context);
-LevelDuration tpms_protocol_encoder_citroen_yield(void* context);
-SubGhzProtocolStatus
-    tpms_protocol_encoder_citroen_deserialize(void* context, FlipperFormat* flipper_format);

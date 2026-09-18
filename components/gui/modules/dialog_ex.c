@@ -2,12 +2,6 @@
 #include "../elements.h"
 #include <furi.h>
 
-/* Board capability flags (e.g. BOARD_TWO_BUTTON_INPUT). Guarded so this builds
- * even where BOARD_INCLUDE is undefined. */
-#ifdef BOARD_INCLUDE
-#include BOARD_INCLUDE
-#endif
-
 struct DialogEx {
     View* view;
     void* context;
@@ -104,54 +98,41 @@ static bool dialog_ex_view_input_callback(InputEvent* event, void* context) {
         },
         false);
 
-    InputKey key = event->key;
-#ifdef BOARD_TWO_BUTTON_INPUT
-    /* Two-button board has no Left/Right key: alias Down->Left button, and Ok->Right
-     * button when there is a Right but no Center (Ok stays mapped to Center whenever a
-     * Center button exists, so 3-button dialogs are unaffected). See
-     * BOARD_TWO_BUTTON_INPUT in the board header. */
-    if(key == InputKeyDown) {
-        key = InputKeyLeft;
-    } else if(key == InputKeyOk && right_text_present && !center_text_present) {
-        key = InputKeyRight;
-    }
-#endif
-
     if(dialog_ex->callback) {
         if(event->type == InputTypeShort) {
-            if(key == InputKeyLeft && left_text_present) {
+            if(event->key == InputKeyLeft && left_text_present) {
                 dialog_ex->callback(DialogExResultLeft, dialog_ex->context);
                 consumed = true;
-            } else if(key == InputKeyOk && center_text_present) {
+            } else if(event->key == InputKeyOk && center_text_present) {
                 dialog_ex->callback(DialogExResultCenter, dialog_ex->context);
                 consumed = true;
-            } else if(key == InputKeyRight && right_text_present) {
+            } else if(event->key == InputKeyRight && right_text_present) {
                 dialog_ex->callback(DialogExResultRight, dialog_ex->context);
                 consumed = true;
             }
         }
 
         if(event->type == InputTypePress && dialog_ex->enable_extended_events) {
-            if(key == InputKeyLeft && left_text_present) {
+            if(event->key == InputKeyLeft && left_text_present) {
                 dialog_ex->callback(DialogExPressLeft, dialog_ex->context);
                 consumed = true;
-            } else if(key == InputKeyOk && center_text_present) {
+            } else if(event->key == InputKeyOk && center_text_present) {
                 dialog_ex->callback(DialogExPressCenter, dialog_ex->context);
                 consumed = true;
-            } else if(key == InputKeyRight && right_text_present) {
+            } else if(event->key == InputKeyRight && right_text_present) {
                 dialog_ex->callback(DialogExPressRight, dialog_ex->context);
                 consumed = true;
             }
         }
 
         if(event->type == InputTypeRelease && dialog_ex->enable_extended_events) {
-            if(key == InputKeyLeft && left_text_present) {
+            if(event->key == InputKeyLeft && left_text_present) {
                 dialog_ex->callback(DialogExReleaseLeft, dialog_ex->context);
                 consumed = true;
-            } else if(key == InputKeyOk && center_text_present) {
+            } else if(event->key == InputKeyOk && center_text_present) {
                 dialog_ex->callback(DialogExReleaseCenter, dialog_ex->context);
                 consumed = true;
-            } else if(key == InputKeyRight && right_text_present) {
+            } else if(event->key == InputKeyRight && right_text_present) {
                 dialog_ex->callback(DialogExReleaseRight, dialog_ex->context);
                 consumed = true;
             }

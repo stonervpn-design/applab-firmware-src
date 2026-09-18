@@ -271,15 +271,7 @@ const SubGhzProtocolDecoder subghz_protocol_bmw_cas4_decoder = {
     .get_string = subghz_protocol_decoder_bmw_cas4_get_string,
 };
 
-// Decode-only: no encoder (.yield = NULL). BMW CAS4 is a fixed code, so a replay
-// would be conceptually possible, BUT bmw_manchester_advance is a non-standard
-// Manchester variant that only emits on high-in-Mid1 (->0) / low-in-Mid0 (->1).
-// It is not the standard Flipper line code (a standard-encoder waveform decodes to
-// garbage) and it has no clean per-bit inverse: from some reachable states the next
-// required bit cannot be produced without first emitting a different bit, so a
-// simple deterministic get_upload() cannot reproduce an accepted waveform for an
-// arbitrary 64-bit codeword. Only a whole-frame backtracking search yields a
-// (synthetic, non-physical) waveform, which is not worth shipping. Left NULL.
+// Decode-only: BMW CAS4 is a fixed code with no key-recovery / TX path in KAT.
 const SubGhzProtocolEncoder subghz_protocol_bmw_cas4_encoder = {
     .alloc = NULL,
     .free = NULL,

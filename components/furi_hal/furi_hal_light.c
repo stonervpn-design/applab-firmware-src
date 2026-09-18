@@ -133,19 +133,8 @@ void furi_hal_light_init(void) {
 #endif
 }
 
-/* Last backlight value written (0 = screen dark). Every backlight change on this
- * board funnels through furi_hal_light_set (display HAL, notification service,
- * light-sleep), so this is an authoritative "is the screen dark?" query without a
- * separate state channel — used by tilt-to-wake. */
-static uint8_t s_backlight_value = 255;
-
-uint8_t furi_hal_light_get_backlight(void) {
-    return s_backlight_value;
-}
-
 void furi_hal_light_set(Light light, uint8_t value) {
     if(light & LightBacklight) {
-        s_backlight_value = value;
         ledc_set_duty(
             BACKLIGHT_LEDC_SPEED,
             BACKLIGHT_LEDC_CHANNEL,

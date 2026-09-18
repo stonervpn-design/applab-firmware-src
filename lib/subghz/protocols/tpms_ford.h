@@ -28,10 +28,3 @@ SubGhzProtocolStatus
     tpms_protocol_decoder_ford_deserialize(void* context, FlipperFormat* flipper_format);
 
 void tpms_protocol_decoder_ford_get_string(void* context, FuriString* output);
-
-void* tpms_protocol_encoder_ford_alloc(SubGhzEnvironment* environment);
-void tpms_protocol_encoder_ford_free(void* context);
-void tpms_protocol_encoder_ford_stop(void* context);
-LevelDuration tpms_protocol_encoder_ford_yield(void* context);
-SubGhzProtocolStatus
-    tpms_protocol_encoder_ford_deserialize(void* context, FlipperFormat* flipper_format);

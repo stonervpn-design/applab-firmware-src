@@ -271,7 +271,9 @@ void subghz_protocol_decoder_fiat_spa_feed(void* context, bool level, uint32_t d
                     instance->generic.cnt = instance->hop;
                     instance->decoder.decode_data = instance->generic.data;
                     instance->decoder.decode_count_bit = instance->generic.data_count_bit;
-                    if(instance->base.callback) {
+                    /* Degenerate-serial reject (no checksum in this protocol). */
+                    if(instance->fix != 0u && instance->fix != 0xFFFFFFFFu &&
+                       instance->base.callback) {
                         instance->base.callback(&instance->base, instance->base.context);
                     }
                     instance->data_low = 0;
@@ -290,7 +292,9 @@ void subghz_protocol_decoder_fiat_spa_feed(void* context, bool level, uint32_t d
                 instance->generic.cnt = instance->hop;
                 instance->decoder.decode_data = instance->generic.data;
                 instance->decoder.decode_count_bit = instance->generic.data_count_bit;
-                if(instance->base.callback) {
+                /* Degenerate-serial reject (no checksum in this protocol). */
+                if(instance->fix != 0u && instance->fix != 0xFFFFFFFFu &&
+                   instance->base.callback) {
                     instance->base.callback(&instance->base, instance->base.context);
                 }
                 instance->data_low = 0;

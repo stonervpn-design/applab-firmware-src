@@ -244,9 +244,30 @@ void subghz_scene_receiver_info_draw_widget(SubGhz* subghz) {
                 subghz);
         }
     } else {
-        widget_add_icon_element(subghz->widget, 83, 22, &I_WarningDolphinFlip_45x42);
-        widget_add_string_element(
-            subghz->widget, 13, 8, AlignLeft, AlignBottom, FontSecondary, "Error history parse.");
+        // The item's stored protocol name was not found among the ACTIVE
+        // receiver's decoder slots — typically because it was captured in the
+        // other (Automotive <-> general) mode and the receiver has since been
+        // rebuilt from the other registry. Degrade gracefully instead of the
+        // hard "Error history parse." wipe: keep the user on the info screen
+        // showing whatever is stored (name + key data, frequency, preset) plus
+        // a hint to re-open it after toggling the mode.
+        FuriString* item_str = furi_string_alloc();
+        FuriString* text = furi_string_alloc();
+        subghz_history_get_text_item_menu(subghz->history, item_str, subghz->idx_menu_chosen);
+        uint32_t frequency =
+            subghz_history_get_frequency(subghz->history, subghz->idx_menu_chosen);
+        const char* preset = subghz_history_get_preset(subghz->history, subghz->idx_menu_chosen);
+        furi_string_printf(
+            text,
+            "%s\n%lu.%02lu MHz %s\n\nNot in current mode -\ntoggle mode to re-open.",
+            furi_string_get_cstr(item_str),
+            (unsigned long)(frequency / 1000000UL),
+            (unsigned long)((frequency % 1000000UL) / 10000UL),
+            preset ? preset : "");
+        widget_add_string_multiline_element(
+            subghz->widget, 0, 0, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(text));
+        furi_string_free(text);
+        furi_string_free(item_str);
     }
 
     view_dispatcher_switch_to_view(subghz->view_dispatcher, SubGhzViewIdWidget);

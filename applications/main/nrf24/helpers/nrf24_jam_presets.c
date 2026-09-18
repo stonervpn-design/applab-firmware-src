@@ -5,11 +5,10 @@
 
 /* ── Channel lists (channel = frequency in MHz minus 2400) ──────────── */
 
-/* WiFi: concentrated sweep across the band (matches the standalone WS app, which
- * jams measurably harder — fewer channels = each revisited faster = harder hit).
- * Turbo noise-flood needs revisit rate more than dense coverage. */
-static const uint8_t CH_WIFI[] = {1,  4,  7,  10, 13, 16, 19, 22, 26, 29, 32, 35,
-                                  38, 41, 44, 47, 51, 54, 57, 60, 63, 66, 69, 72};
+/* WiFi ch 1/6/11: each spans 22 MHz, sub-channels cover the bandwidth. */
+static const uint8_t CH_WIFI[] = {1,  3,  5,  7,  9,  11, 13, 15, 17, 19, 21, 23, /* ch 1 */
+                                  26, 28, 30, 32, 34, 36, 38, 40, 42, /* ch 6 */
+                                  51, 53, 55, 57, 59, 61, 63, 65, 67, 69, 71, 73}; /* ch 11 */
 
 /* BLE data channels: even nRF24 ch 2..80 cover BLE ch 0..36. */
 static const uint8_t CH_BLE[] = {2,  4,  6,  8,  10, 12, 14, 16, 18, 20, 22, 24, 26, 28,
@@ -19,12 +18,20 @@ static const uint8_t CH_BLE[] = {2,  4,  6,  8,  10, 12, 14, 16, 18, 20, 22, 24,
 /* BLE advertising: ch37=2402→nRF2, ch38=2426→nRF26, ch39=2480→nRF80. */
 static const uint8_t CH_BLE_ADV[] = {2, 26, 80};
 
-/* Classic Bluetooth: concentrated FHSS subset (matches the standalone WS app).
- * BT hops 1600×/s across 79 channels and a single radio can only sit on one at a
- * time — sweeping all 79 dilutes each hit to 1/79; a curated 21-channel subset
- * revisits ~4× faster and collides with the hop sequence far harder. */
-static const uint8_t CH_BLUETOOTH[] =
-    {32, 34, 46, 48, 50, 52, 0, 1, 2, 4, 6, 8, 22, 24, 26, 28, 30, 74, 76, 78, 80};
+/* Classic Bluetooth: all FHSS channels 2..80. */
+static const uint8_t CH_BLUETOOTH[] = {
+    2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+    40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58,
+    59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80};
+
+/* BT Classic 2 — EXACT replica of the nRF24_jammer FAP (W0rthlessS0ul) BT list.
+ * A curated, scattered 21-channel subset spanning the band (not the full 79).
+ * Fewer channels → each is revisited ~4x more often (closer to the ~625us BT
+ * hop slot), which is why the FAP beats a wide 79-channel smear. Order kept
+ * verbatim; jammed sequentially with zero dwell (see scene_jam FAP path). */
+static const uint8_t CH_BLUETOOTH2[] = {32, 34, 46, 48, 50, 52, 0,  1,  2,  4, 6,
+                                        8,  22, 24, 26, 28, 30, 74, 76, 78, 80};
 
 /* Wireless USB dongles. */
 static const uint8_t CH_USB[] = {40, 50, 60};
@@ -35,22 +42,13 @@ static const uint8_t CH_VIDEO[] = {70, 75, 80};
 /* RC controllers (low channels). */
 static const uint8_t CH_RC[] = {1, 3, 5, 7};
 
-/* Zigbee: the 16 IEEE 802.15.4 channel CENTERS (ch 11..26) across the FULL band.
- * Zigbee ch k center = 2405 + 5*(k-11) MHz → nRF24 ch 5,10,...,80. One flood per
- * Zigbee channel = whole-band coverage with NO missed channels, at the same
- * 16-channel revisit speed. (The old contiguous {11..26} block only covered
- * 2411-2426 MHz = Zigbee ch ~12-16, missing any target on the upper band such as
- * the common WiFi-avoiding ch 25/26.) */
-static const uint8_t CH_ZIGBEE[] = {5,  10, 15, 20, 25, 30, 35, 40,
-                                    45, 50, 55, 60, 65, 70, 75, 80};
+/* Zigbee ch 11..26: 3 nRF sub-channels per Zigbee channel (±1 MHz). */
+static const uint8_t CH_ZIGBEE[] = {4,  5,  6,  9,  10, 11, 14, 15, 16, 19, 20, 21,
+                                    24, 25, 26, 29, 30, 31, 34, 35, 36, 39, 40, 41,
+                                    44, 45, 46, 49, 50, 51, 54, 55, 56, 59, 60, 61,
+                                    64, 65, 66, 69, 70, 71, 74, 75, 76, 79, 80, 81};
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
-
-/* Real 2.4 GHz ISM sweep is nRF24 ch 0..83 (2400..2483.5 MHz). Channels 84..124
- * (2484..2525 MHz) are out of band / empty — sweeping them wastes ~33% of every
- * revisit on dead air. Full/Drone sweep 0..83 only (matches the standalone WS
- * app's i % 84). */
-#define NRF24_ISM_CH_COUNT 84
 
 const char* nrf24_jam_preset_name(Nrf24JamPreset preset) {
     switch(preset) {
@@ -64,6 +62,8 @@ const char* nrf24_jam_preset_name(Nrf24JamPreset preset) {
         return "BLE Advertising";
     case Nrf24JamPresetBluetooth:
         return "BT Classic";
+    case Nrf24JamPresetBluetooth2:
+        return "BT Classic 2";
     case Nrf24JamPresetUsb:
         return "USB Dongles";
     case Nrf24JamPresetVideo:
@@ -91,6 +91,8 @@ const char* nrf24_jam_preset_short(Nrf24JamPreset preset) {
         return "BLE Adv";
     case Nrf24JamPresetBluetooth:
         return "BT Classic";
+    case Nrf24JamPresetBluetooth2:
+        return "BT Cls 2";
     case Nrf24JamPresetUsb:
         return "USB Dongle";
     case Nrf24JamPresetVideo:
@@ -120,6 +122,9 @@ const uint8_t* nrf24_jam_preset_channels(Nrf24JamPreset preset, size_t* count) {
     case Nrf24JamPresetBluetooth:
         *count = ARRAY_COUNT(CH_BLUETOOTH);
         return CH_BLUETOOTH;
+    case Nrf24JamPresetBluetooth2:
+        *count = ARRAY_COUNT(CH_BLUETOOTH2);
+        return CH_BLUETOOTH2;
     case Nrf24JamPresetUsb:
         *count = ARRAY_COUNT(CH_USB);
         return CH_USB;
@@ -148,54 +153,69 @@ uint16_t nrf24_jam_preset_default_dwell_us(Nrf24JamPreset preset) {
     case Nrf24JamPresetUsb: /* 3 channels */
     case Nrf24JamPresetVideo: /* 3 channels */
         return 1000;
-    case Nrf24JamPresetWifi:
-    case Nrf24JamPresetBle:
-    case Nrf24JamPresetZigbee:
+    case Nrf24JamPresetWifi: /* fixed AP channels (1/6/11) */
+    case Nrf24JamPresetZigbee: /* fixed channels */
         return 300;
-    case Nrf24JamPresetFull:
+    case Nrf24JamPresetBluetooth2: /* FAP replica — engine runs it zero-dwell */
+        return 20;
     case Nrf24JamPresetBluetooth:
+    case Nrf24JamPresetBle:
+    case Nrf24JamPresetFull:
     case Nrf24JamPresetDrone:
     default:
-        return 200; /* fast sweep across many channels */
+        /* Wide/hopping targets (BT-Classic AFH ~1600 hops/s, BLE data hopping,
+         * FHSS drones): a very short dwell keeps the PLL below its ~130us re-lock
+         * time on purpose → the carrier chirps/smears across the whole band
+         * instead of cleanly parking on one channel and leaving the other ~78
+         * open. This is Bruce's zero-dwell smear, which blankets a fast hopper
+         * far better than clean per-channel parks. (The narrow fixed-channel
+         * presets above keep a long dwell — there clean parks concentrate more
+         * energy on the few channels that matter.) */
+        return 30;
     }
 }
 
 uint8_t nrf24_jam_preset_default_strategy(Nrf24JamPreset preset) {
-    /* Correct noise per protocol (research 2026-07-21):
-     *  - OFDM (WiFi) and DSSS (Zigbee) shrug off a single tone — OFDM subcarrier
-     *    structure / DSSS despreading processing gain — so they need wideband
-     *    NOISE in-channel: Turbo flood.
-     *  - Everything GFSK/narrowband (BT, BLE, drone, USB, RC, video) is best hit
-     *    by an on-channel TONE (targeted tone ~20 dB more efficient than
-     *    barrage). Our CW is now ZERO-DWELL swept, so the AGC can't settle on it
-     *    (the old parked-carrier weakness is gone). Full = barrage CW sweep. */
-    switch(preset) {
-    case Nrf24JamPresetWifi:   /* OFDM -> noise */
-    case Nrf24JamPresetZigbee: /* DSSS -> noise */
-        return Nrf24StrategyTurbo;
-    default:
-        return Nrf24StrategyCw; /* GFSK / narrowband / barrage -> swept tone */
-    }
+    (void)preset;
+    /* Match Bruce's nrf_jammer, which jams EVERY mode with a single continuous
+     * carrier (RF24::startConstCarrier) that never switches off — it only
+     * retunes across the mode's channels. A parked/sweeping CW tone saturates
+     * the victim's AGC far more effectively than discrete garbage packets, so
+     * data flooding (Flood/Turbo) is a much weaker jam in practice. Every preset
+     * therefore defaults to CW; users can still pick Flood/Turbo/AFH per preset
+     * in the config editor. */
+    return Nrf24StrategyCw;
 }
 
 uint8_t nrf24_jam_preset_default_hop(Nrf24JamPreset preset) {
-    /* CW presets walk their handful of channels sequentially (no point shuffling
-     * 3 channels); the Turbo sweeps randomise to spread collisions. */
-    return nrf24_jam_preset_default_strategy(preset) == Nrf24StrategyCw ? 0 : 1;
+    switch(preset) {
+    case Nrf24JamPresetBluetooth:
+    case Nrf24JamPresetBle:
+    case Nrf24JamPresetFull:
+    case Nrf24JamPresetDrone:
+        /* Wide smear presets: random hop spreads the chirp uniformly across the
+         * band. Sequential-ascending would let the slewing PLL chronically lag
+         * and weight the energy toward the low end of the band. */
+        return 1;
+    default:
+        /* Narrow fixed-channel presets walk their handful of channels
+         * sequentially — nothing to gain from shuffling 3-4 channels. */
+        return 0;
+    }
 }
 
 uint8_t nrf24_jam_preset_next_channel(Nrf24JamPreset preset, uint32_t* hop_index) {
     if(preset == Nrf24JamPresetDrone) {
-        /* FHSS target — random hop across the real ISM band (0..83). */
-        return (uint8_t)(rand() % NRF24_ISM_CH_COUNT);
+        /* FHSS target — random hop across the whole band. */
+        return (uint8_t)(rand() % 125);
     }
 
     size_t count = 0;
     const uint8_t* list = nrf24_jam_preset_channels(preset, &count);
 
     if(list == NULL || count == 0) {
-        /* Full spectrum — sequential sweep 0..83 (real ISM only). */
-        uint8_t ch = (uint8_t)(*hop_index % NRF24_ISM_CH_COUNT);
+        /* Full spectrum — sequential sweep 0..124. */
+        uint8_t ch = (uint8_t)(*hop_index % 125);
         (*hop_index)++;
         return ch;
     }
@@ -212,8 +232,8 @@ size_t nrf24_jam_preset_fill_channels(Nrf24JamPreset preset, uint8_t* out, size_
     const uint8_t* list = nrf24_jam_preset_channels(preset, &count);
 
     if(list == NULL || count == 0) {
-        /* Full / Drone — expand to the real ISM band 0..83 only. */
-        size_t n = cap < NRF24_ISM_CH_COUNT ? cap : NRF24_ISM_CH_COUNT;
+        /* Full / Drone — expand to every channel 0..124. */
+        size_t n = cap < 125 ? cap : 125;
         for(size_t i = 0; i < n; i++) {
             out[i] = (uint8_t)i;
         }

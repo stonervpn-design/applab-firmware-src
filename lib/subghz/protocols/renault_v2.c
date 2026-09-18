@@ -150,35 +150,31 @@ static void renault_v2_process_frame(SubGhzProtocolDecoderRenaultV2* instance) {
     // Sync pattern: 71 EA = 0111 0001 1110 1010
     static const uint8_t sync_bits[16] = {0,1,1,1,0,0,0,1, 1,1,1,0,1,0,1,0};
 
-    // Search for sync pattern
+    // Fixed-position sync + exact bit count. Anchor the 16-bit sync to the single
+    // end position that yields exactly RENAULT_V2_DATA_BITS bits (tolerating up to
+    // 2 trailing bits of Manchester edge jitter) instead of scanning every offset.
+    if(instance->all_bit_count < RENAULT_V2_DATA_BITS) return;
     int sync_pos = -1;
-    int search_end = instance->all_bit_count - 60; // need at least 60 bits after sync start
-    for(int i = 0; i <= search_end; i++) {
+    int anchor = instance->all_bit_count - RENAULT_V2_DATA_BITS;
+    for(int off = anchor; off >= 0 && off >= anchor - 2; off--) {
         bool match = true;
         for(int j = 0; j < 16; j++) {
-            if(instance->all_bits[i + j] != sync_bits[j]) {
+            if(instance->all_bits[off + j] != sync_bits[j]) {
                 match = false;
                 break;
             }
         }
         if(match) {
-            sync_pos = i;
+            sync_pos = off;
             break;
         }
     }
 
     if(sync_pos < 0) {
-//        FURI_LOG_D(TAG, "No sync found in %d bits", instance->all_bit_count);
         return;
     }
 
-    int data_len = instance->all_bit_count - sync_pos;
-    if(data_len > RENAULT_V2_DATA_BITS) data_len = RENAULT_V2_DATA_BITS;
-
-    if(data_len < 60) {
-        FURI_LOG_D(TAG, "Frame too short: %d bits", data_len);
-        return;
-    }
+    int data_len = RENAULT_V2_DATA_BITS; // exact bit count enforced by anchor
 
     // Extract generic.data (first 64 bits from sync)
     instance->generic.data = 0;
@@ -193,6 +189,17 @@ static void renault_v2_process_frame(SubGhzProtocolDecoderRenaultV2* instance) {
     }
     if(data_len > 64 && data_len - 64 < 18) {
         instance->data_18 <<= (18 - (data_len - 64));
+    }
+
+    // Payload invariant: bits 16..81 are an encrypted rolling code, never all-zero
+    // or all-one. Reject degenerate buffers that satisfy the sync by accident.
+    // (Sync bits live in the high 16 of generic.data, so mask them off.)
+    {
+        uint64_t payload = instance->generic.data & 0xFFFFFFFFFFFFULL; // bits 16..63
+        if((payload == 0 && instance->data_18 == 0) ||
+           (payload == 0xFFFFFFFFFFFFULL && instance->data_18 == 0x3FFFFUL)) {
+            return;
+        }
     }
 
     instance->generic.data_count_bit = data_len;

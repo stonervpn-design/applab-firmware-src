@@ -1,5 +1,3 @@
-# All build output dirs (build_m5stick_s3, build_*_public, build_custom_*, …)
-build_*/
 build/
 build_t_embed/
 build_test/
@@ -61,11 +59,3 @@ sdkconfig.bak_ble
 build_pid.txt
 build_test_marker.txt
 test_build.bat
-
-# The web-flasher deployments are their own separate git repos (not build inputs)
-/webflash/
-/webflash_cardputer_adv/
-/webflash_private/
-
-# Keep the pre-baked /ext image the CI workflow bakes into m5stick builds
-!ci/ext_m5stick_s3.bin

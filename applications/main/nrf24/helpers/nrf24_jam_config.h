@@ -69,12 +69,6 @@ uint32_t nrf24_jam_config_generation(void);
 /* Bump the generation counter (call after editing a config field). */
 void nrf24_jam_config_touch(void);
 
-/* Global "force flood" override (persisted). When enabled, the jam worker treats
- * every strategy as Turbo/flood regardless of the per-preset setting — the max-
- * power default. Off = honor each preset's configured strategy. */
-uint8_t nrf24_jam_config_force_flood_get(void);
-void nrf24_jam_config_force_flood_set(uint8_t on);
-
 /* Short labels for the status view. */
 const char* nrf24_jam_strategy_label(uint8_t strategy); /* "CW"/"FLOOD"/"TURBO" */
 const char* nrf24_jam_pa_label(uint8_t pa); /* "MIN".."MAX" */

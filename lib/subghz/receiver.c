@@ -100,6 +100,21 @@ static void subghz_receiver_rx_callback(SubGhzProtocolDecoderBase* decoder_base,
     } else {
         FURI_LOG_W(TAG, "No callback set!");
     }
+
+    // Step 4 (dispatch integrity net): after ANY decoder emits on a burst, reset
+    // the SIBLING decoders so a single RF burst cannot fan out to multiple
+    // protocols each writing its own row. The emitting decoder (decoder_base)
+    // resets itself in its own state machine, so it is skipped here. This bounds
+    // the blast radius of fieldless (no-CRC) decoders that grab a foreign signal:
+    // once a genuine keyed frame is decoded, the loose ones can't also complete on
+    // the same burst tail. Resetting only clears partial state (the slots array is
+    // not modified), so this is safe re-entrant from a decoder feed() call.
+    for
+        M_EACH(slot, instance->slots, SubGhzReceiverSlotArray_t) {
+            if((SubGhzProtocolDecoderBase*)slot->base != decoder_base) {
+                slot->base->protocol->decoder->reset(slot->base);
+            }
+        }
 }
 
 void subghz_receiver_set_rx_callback(

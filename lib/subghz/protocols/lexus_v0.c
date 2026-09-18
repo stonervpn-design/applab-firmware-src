@@ -90,15 +90,6 @@ struct SubGhzProtocolDecoderLexusV0 {
     uint8_t rolling[LEXUS_V0_DATA_BYTES];   // bits 32..191 (160-bit rolling code)
 };
 
-struct SubGhzProtocolEncoderLexusV0 {
-    SubGhzProtocolEncoderBase base;
-    SubGhzProtocolBlockEncoder encoder;
-    SubGhzBlockGeneric generic;
-
-    uint32_t serial;
-    uint8_t rolling[LEXUS_V0_DATA_BYTES];
-};
-
 // ============================================================================
 // PROTOCOL DEFINITION
 // ============================================================================
@@ -120,21 +111,13 @@ const SubGhzProtocolDecoder subghz_protocol_lexus_v0_decoder = {
     .get_generic = subghz_protocol_decoder_lexus_v0_get_generic,
 };
 
-const SubGhzProtocolEncoder subghz_protocol_lexus_v0_encoder = {
-    .alloc = subghz_protocol_encoder_lexus_v0_alloc,
-    .free = subghz_protocol_encoder_lexus_v0_free,
-    .deserialize = subghz_protocol_encoder_lexus_v0_deserialize,
-    .stop = subghz_protocol_encoder_lexus_v0_stop,
-    .yield = subghz_protocol_encoder_lexus_v0_yield,
-};
-
 const SubGhzProtocol subghz_protocol_lexus_v0 = {
     .name = SUBGHZ_PROTOCOL_LEXUS_V0_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
     .decoder = &subghz_protocol_lexus_v0_decoder,
-    .encoder = &subghz_protocol_lexus_v0_encoder,
+    .encoder = NULL,
 };
 
 // ============================================================================
@@ -322,17 +305,6 @@ SubGhzProtocolStatus subghz_protocol_decoder_lexus_v0_serialize(
     if(!flipper_format_write_hex(flipper_format, "Rolling", instance->rolling, LEXUS_V0_DATA_BYTES))
         return SubGhzProtocolStatusErrorParserOthers;
 
-    // Persist the 32-bit serial (bits 192..223). subghz_block_generic_serialize
-    // does not store generic.serial, so without this the serial reloads as 0 and
-    // the frame is rejected as degenerate on the next decode/encode.
-    uint8_t sn[4] = {
-        (uint8_t)(instance->serial >> 24),
-        (uint8_t)(instance->serial >> 16),
-        (uint8_t)(instance->serial >> 8),
-        (uint8_t)(instance->serial)};
-    if(!flipper_format_write_hex(flipper_format, "Serial", sn, 4))
-        return SubGhzProtocolStatusErrorParserOthers;
-
     return SubGhzProtocolStatusOk;
 }
 
@@ -346,16 +318,7 @@ SubGhzProtocolStatus
     if(ret != SubGhzProtocolStatusOk) return ret;
 
     flipper_format_read_hex(flipper_format, "Rolling", instance->rolling, LEXUS_V0_DATA_BYTES);
-    // Prefer the persisted Serial field; fall back to generic.serial for
-    // backward compatibility with older captures.
-    uint8_t sn[4] = {0};
-    if(flipper_format_read_hex(flipper_format, "Serial", sn, 4)) {
-        instance->serial = ((uint32_t)sn[0] << 24) | ((uint32_t)sn[1] << 16) |
-                           ((uint32_t)sn[2] << 8) | sn[3];
-        instance->generic.serial = instance->serial;
-    } else {
-        instance->serial = instance->generic.serial;
-    }
+    instance->serial = instance->generic.serial;
     instance->generic.protocol_name = instance->base.protocol->name;
     return SubGhzProtocolStatusOk;
 }
@@ -380,158 +343,4 @@ void subghz_protocol_decoder_lexus_v0_get_string(void* context, FuriString* outp
     for(int b = 0; b < LEXUS_V0_DATA_BYTES; b++) {
         furi_string_cat_printf(output, "%02X", instance->rolling[b]);
     }
-}
-
-// ============================================================================
-// ENCODER
-//
-// Reproduces the 2-FSK Manchester waveform the decoder accepts:
-//   [>=MIN_PRE short preamble][trigger LONG][224 Manchester bits][gap]
-// Frame = 32-bit header (discarded by the decoder) + 160-bit Rolling + 32-bit
-// Serial. Each data bit is one symbol (a LONG pulse, or a SHORT,SHORT pair);
-// recorded bit == line level. For every bit exactly one symbol records the
-// wanted value, so the choice is forced and the decoder round-trips bit-for-bit.
-// ============================================================================
-
-// A fixed header (the decoder discards bits 0..31 — only its bit position matters).
-#define LEXUS_V0_ENC_HEADER  0xFF00FF30u
-#define LEXUS_V0_ENC_PREAMBLE (LEXUS_V0_MIN_PRE + 6)
-#define LEXUS_V0_ENC_UPLOAD_SIZE \
-    (LEXUS_V0_ENC_PREAMBLE + 2 + 2 * LEXUS_V0_FRAME_BITS)
-
-void* subghz_protocol_encoder_lexus_v0_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    SubGhzProtocolEncoderLexusV0* instance = malloc(sizeof(SubGhzProtocolEncoderLexusV0));
-    instance->base.protocol = &subghz_protocol_lexus_v0;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 3;
-    instance->encoder.size_upload = LEXUS_V0_ENC_UPLOAD_SIZE;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    return instance;
-}
-
-void subghz_protocol_encoder_lexus_v0_free(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderLexusV0* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-static void subghz_protocol_encoder_lexus_v0_get_upload(SubGhzProtocolEncoderLexusV0* instance) {
-    furi_assert(instance);
-
-    // Rebuild the 224-bit frame: header(32) + rolling(160) + serial(32), MSB first.
-    uint8_t bits[LEXUS_V0_FRAME_BITS];
-    for(int i = 0; i < LEXUS_V0_HEADER_BITS; i++)
-        bits[i] = (LEXUS_V0_ENC_HEADER >> (LEXUS_V0_HEADER_BITS - 1 - i)) & 1;
-    for(int b = 0; b < LEXUS_V0_DATA_BYTES; b++)
-        for(int k = 0; k < 8; k++)
-            bits[LEXUS_V0_HEADER_BITS + b * 8 + k] = (instance->rolling[b] >> (7 - k)) & 1;
-    for(int i = 0; i < LEXUS_V0_SERIAL_BITS; i++)
-        bits[LEXUS_V0_HEADER_BITS + LEXUS_V0_DATA_BITS + i] =
-            (instance->serial >> (LEXUS_V0_SERIAL_BITS - 1 - i)) & 1;
-
-    const uint32_t te_s = (uint32_t)subghz_protocol_lexus_v0_const.te_short;
-    const uint32_t te_l = (uint32_t)subghz_protocol_lexus_v0_const.te_long;
-    size_t index = 0;
-    const size_t enc_cap = LEXUS_V0_ENC_UPLOAD_SIZE;
-
-    // Trigger LONG records bit0 == level -> level = bits[0].
-    bool tl = (bits[0] != 0);
-
-    const int P = LEXUS_V0_ENC_PREAMBLE;
-    bool lvl = (P & 1) ? !tl : tl;
-    for(int p = 0; p < P; p++) {
-        if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(lvl, te_s);
-        lvl = !lvl;
-    }
-
-    bool cur = tl;
-    if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_l);
-    cur = !cur;
-
-    for(int i = 1; i < LEXUS_V0_FRAME_BITS; i++) {
-        bool want = (bits[i] != 0);
-        bool long_records = cur; // non-inverted polarity
-        if(long_records == want) {
-            if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_l);
-            cur = !cur;
-        } else {
-            if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_s);
-            cur = !cur;
-            if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, te_s);
-            cur = !cur;
-        }
-    }
-
-    if(index < enc_cap) instance->encoder.upload[index++] = level_duration_make(cur, (uint32_t)20000);
-    instance->encoder.size_upload = index;
-}
-
-SubGhzProtocolStatus
-    subghz_protocol_encoder_lexus_v0_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    SubGhzProtocolEncoderLexusV0* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        if(subghz_block_generic_deserialize(&instance->generic, flipper_format) !=
-           SubGhzProtocolStatusOk) {
-            FURI_LOG_E(TAG, "Deserialize error");
-            break;
-        }
-        if(instance->generic.data_count_bit != LEXUS_V0_PAYLOAD_BITS) {
-            FURI_LOG_E(TAG, "Invalid bit count: %u", instance->generic.data_count_bit);
-            res = SubGhzProtocolStatusErrorValueBitCount;
-            break;
-        }
-
-        flipper_format_rewind(flipper_format);
-        flipper_format_read_hex(
-            flipper_format, "Rolling", instance->rolling, LEXUS_V0_DATA_BYTES);
-        uint8_t sn[4] = {0};
-        if(flipper_format_read_hex(flipper_format, "Serial", sn, 4)) {
-            instance->serial = ((uint32_t)sn[0] << 24) | ((uint32_t)sn[1] << 16) |
-                               ((uint32_t)sn[2] << 8) | sn[3];
-        } else {
-            instance->serial = instance->generic.serial;
-        }
-        if(instance->serial == 0u || instance->serial == 0xFFFFFFFFu) {
-            FURI_LOG_E(TAG, "Missing/degenerate Serial");
-            break;
-        }
-
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        subghz_protocol_encoder_lexus_v0_get_upload(instance);
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-        res = SubGhzProtocolStatusOk;
-    } while(false);
-    return res;
-}
-
-void subghz_protocol_encoder_lexus_v0_stop(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderLexusV0* instance = context;
-    instance->encoder.is_running = false;
-}
-
-LevelDuration subghz_protocol_encoder_lexus_v0_yield(void* context) {
-    SubGhzProtocolEncoderLexusV0* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
 }

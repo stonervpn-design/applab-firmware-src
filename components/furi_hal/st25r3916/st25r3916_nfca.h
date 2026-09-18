@@ -47,61 +47,11 @@ St25rNfcaStatus st25r3916_nfca_init(void);
  *  success. Returns St25rNfcaErrNoCard when the field is empty. */
 St25rNfcaStatus st25r3916_nfca_poll(St25rNfcaTag* out);
 
-/** Post-activation poller data exchange (the transport's "standard frame"):
- *  transmit @p tx with CRC-A appended, then receive the card's answer (CRC-A
- *  checked + stripped) within a ~90 ms window sized for the Flipper-Share
- *  transport FWT. Call after a successful st25r3916_nfca_poll(). Returns
- *  St25rNfcaErrNoCard on silence, St25rNfcaErrProto on framing/CRC error. */
-St25rNfcaStatus st25r3916_nfca_poller_txrx(
-    const uint8_t* tx,
-    uint8_t tx_len,
-    uint8_t* rx,
-    uint8_t rx_cap,
-    uint8_t* rx_len);
-
 /** Switch the RF field off and disable the receiver/oscillator. */
 void st25r3916_nfca_deinit(void);
 
 /** Human-readable status string (for the test scene). */
 const char* st25r3916_nfca_status_str(St25rNfcaStatus s);
-
-/* ─────────────────── NFC-A card emulation (passive target) ────────────────
- * Phase 1 of the Flipper Share NFC port: put the ST25R3916 into NFC-A passive
- * target mode so a reader (phone or a second unit's poller) can activate an
- * emulated card and exchange frames. The chip auto-answers REQA/anticoll/SELECT
- * from Passive Target Memory (loaded from the identity below); the MCU only
- * services post-activation data frames over the (sped-up) I2C link.
- */
-typedef enum {
-    St25rListenIdle = 0, /* armed, no external reader field yet */
-    St25rListenField, /* a reader field is present */
-    St25rListenActive, /* reader completed anticollision + SELECT */
-    St25rListenRx, /* a data frame arrived (read it with _listen_rx) */
-} St25rListenState;
-
-/** Arm NFC-A passive-target emulation with the given card identity.
- *  @p uid_len must be 4, 7 or 10; @p atqa is sent LSB-first; @p sak is the SAK. */
-St25rNfcaStatus st25r3916_nfca_listen_start(
-    const uint8_t* uid,
-    uint8_t uid_len,
-    uint16_t atqa,
-    uint8_t sak);
-
-/** Poll the target once. Updates *state; *raw_status (optional) returns the raw
- *  PASSIVE_TARGET_STATUS byte for on-hardware diagnosis. */
-St25rNfcaStatus st25r3916_nfca_listen_poll(St25rListenState* state, uint8_t* raw_status);
-
-/** Read a received reader frame from the FIFO (after St25rListenRx). */
-St25rNfcaStatus st25r3916_nfca_listen_rx(uint8_t* buf, uint8_t cap, uint8_t* len);
-
-/** Transmit a response frame with CRC-A (passive load modulation). */
-St25rNfcaStatus st25r3916_nfca_listen_tx(const uint8_t* buf, uint8_t len);
-
-/** Stop emulation: field/receiver off, back to idle. */
-void st25r3916_nfca_listen_stop(void);
-
-/** State name for the test scene. */
-const char* st25r3916_nfca_listen_state_str(St25rListenState s);
 
 #ifdef __cplusplus
 }

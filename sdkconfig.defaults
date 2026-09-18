@@ -26,24 +26,6 @@ CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
 # Heap
 CONFIG_HEAP_TRACING_OFF=y
 
-# Power management: Dynamic Frequency Scaling (DFS) to cut battery drain when idle.
-# The CPU drops toward min_freq when no PM lock is held and scales up to max_freq
-# (the per-board 240 MHz default) under load. RF/timing-critical paths hold an
-# ESP_PM_CPU_FREQ_MAX lock (furi_hal_power_perf_lock_*) so their timing is unchanged.
-# On ESP32-S3 the APB clock is fixed at 80 MHz independent of CPU DFS, so SPI, RMT,
-# I2C and the LEDC backlight PWM are unaffected — screen brightness does NOT change.
-# LIGHT SLEEP / TICKLESS IDLE stays OFF on purpose: it would break USB-CDC (qFlipper/
-# CLI) and RF edge timing. We only scale CPU frequency, we never sleep the SoC.
-# DFS ENABLED (2026-07-28). De-risked by the idle-only design: the CPU is pinned at
-# max (240) by an always-on boot lock and drops to min ONLY on the bare idle desktop
-# (no app, not locked, no Mesh, BT off, USB off, >=3s no input); any keypress re-raises
-# instantly via the always-on input hook, and every app backgrounds the desktop so ALL
-# RF/timing code runs at 240. Per-RF perf locks (SubGHz/IR/nRF24) pin 240 as a second
-# layer. Light sleep / tickless idle stays OFF (would break USB-CDC + RF).
-CONFIG_PM_ENABLE=y
-CONFIG_PM_DFS_INIT_AUTO=n
-# CONFIG_FREERTOS_USE_TICKLESS_IDLE is not set
-
 # Log level
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3

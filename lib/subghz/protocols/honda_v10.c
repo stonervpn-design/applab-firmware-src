@@ -342,11 +342,6 @@ SubGhzProtocolStatus subghz_protocol_decoder_honda_v10_deserialize(
     if(ret != SubGhzProtocolStatusOk) return ret;
 
     hv10_unpack(inst->generic.data, &inst->frame);
-    // hv10_unpack restores only the 64-bit data; the 32-bit cipher Tail is stored
-    // in its own field and must be read back or it reloads as 0.
-    uint32_t hv10_tail = 0;
-    flipper_format_rewind(ff);
-    if(flipper_format_read_uint32(ff, "Tail", &hv10_tail, 1)) inst->frame.tail = hv10_tail;
     inst->frame_valid        = true;
     inst->generic.serial     = inst->frame.serial;
     inst->generic.btn        = inst->frame.button;
@@ -390,157 +385,6 @@ static SubGhzBlockGeneric* subghz_protocol_decoder_honda_v10_get_generic(void* c
     return &instance->generic;
 }
 
-// ============================================================================
-// ENCODER
-//
-// Rebuilds the 12-byte frame (counter bitwise-inverted on the wire), expands it
-// to native 2FSK Manchester half-bit cells (bit1 -> {0,1}, bit0 -> {1,0}), then
-// renders equal-adjacent cells into SHORT/LONG pulses. A short alternating
-// preamble ends on the value of the first payload half-bit so it merges into the
-// decoder's sync gap and the first Manchester pair lands correctly aligned.
-// Verified to round-trip fsk_try_decode() bit-for-bit.
-// ============================================================================
-
-#define HV10_ENC_PREAMBLE_CELLS 24
-#define HV10_ENC_UPLOAD_SIZE    (HV10_ENC_PREAMBLE_CELLS + HV10_FRAME_BITS * 2 + 2)
-
-static void hv10_frame_to_buf(const HondaV10Frame* f, uint8_t buf[HV10_FRAME_BYTES]) {
-    buf[0] = (uint8_t)(f->serial >> 16);
-    buf[1] = (uint8_t)(f->serial >> 8);
-    buf[2] = (uint8_t)(f->serial);
-    buf[3] = (uint8_t)(((f->button & 0x0Fu) << 4) | (f->flags & 0x0Fu));
-    uint32_t inv = 0x00FFFFFFu ^ (f->counter & 0x00FFFFFFu);
-    buf[4] = (uint8_t)(inv >> 16);
-    buf[5] = (uint8_t)(inv >> 8);
-    buf[6] = (uint8_t)(inv);
-    buf[7] = f->status;
-    buf[8]  = (uint8_t)(f->tail >> 24);
-    buf[9]  = (uint8_t)(f->tail >> 16);
-    buf[10] = (uint8_t)(f->tail >> 8);
-    buf[11] = (uint8_t)(f->tail);
-}
-
-static void subghz_protocol_encoder_honda_v10_get_upload(SubGhzProtocolEncoderHondaV10* inst) {
-    uint8_t buf[HV10_FRAME_BYTES];
-    hv10_frame_to_buf(&inst->frame, buf);
-
-    // Build the half-bit cell stream.
-    uint8_t cells[HV10_ENC_PREAMBLE_CELLS + HV10_FRAME_BITS * 2];
-    int n = 0;
-
-    // c0 = first payload half-bit = first frame bit? 1 -> cell 0, 0 -> cell 1.
-    uint8_t b0 = (buf[0] >> 7) & 1u;
-    uint8_t c0 = b0 ? 0u : 1u;
-
-    const int L = HV10_ENC_PREAMBLE_CELLS;
-    for(int i = 0; i < L; i++)
-        cells[n++] = (((L - 1 - i) % 2) == 0) ? c0 : (uint8_t)(1u - c0);
-
-    for(int by = 0; by < HV10_FRAME_BYTES; by++) {
-        for(int k = 0; k < 8; k++) {
-            uint8_t bit = (buf[by] >> (7 - k)) & 1u;
-            if(bit) {
-                cells[n++] = 0u;
-                cells[n++] = 1u;
-            } else {
-                cells[n++] = 1u;
-                cells[n++] = 0u;
-            }
-        }
-    }
-
-    // Render equal-adjacent cells (max run 2) into pulses; level = cell value.
-    size_t idx = 0;
-    const size_t enc_cap = HV10_ENC_UPLOAD_SIZE;
-    int i = 0;
-    while(i < n) {
-        int j = i + 1;
-        if(j < n && cells[j] == cells[i]) j++; // run of at most 2
-        int rl = j - i;
-        if(idx < enc_cap)
-            inst->encoder.upload[idx++] =
-                level_duration_make(cells[i] != 0, (uint32_t)(rl == 2 ? HV10_TE_LONG : HV10_TE_SHORT));
-        i = j;
-    }
-
-    // Guard gap (>= HV10_GUARD_TIME_US) flushes the decoder.
-    if(idx < enc_cap) inst->encoder.upload[idx++] = level_duration_make(false, (uint32_t)5000);
-    inst->encoder.size_upload = idx;
-}
-
-void* subghz_protocol_encoder_honda_v10_alloc(SubGhzEnvironment* env) {
-    UNUSED(env);
-    SubGhzProtocolEncoderHondaV10* inst = malloc(sizeof(SubGhzProtocolEncoderHondaV10));
-    furi_check(inst);
-    memset(inst, 0, sizeof(SubGhzProtocolEncoderHondaV10));
-    inst->base.protocol = &subghz_protocol_honda_v10;
-    inst->generic.protocol_name = inst->base.protocol->name;
-    inst->encoder.repeat = 4; // real fob emits ~4 reps per press
-    inst->encoder.size_upload = HV10_ENC_UPLOAD_SIZE;
-    inst->encoder.upload = malloc(inst->encoder.size_upload * sizeof(LevelDuration));
-    inst->encoder.is_running = false;
-    return inst;
-}
-
-void subghz_protocol_encoder_honda_v10_free(void* ctx) {
-    furi_assert(ctx);
-    SubGhzProtocolEncoderHondaV10* inst = ctx;
-    free(inst->encoder.upload);
-    free(inst);
-}
-
-SubGhzProtocolStatus subghz_protocol_encoder_honda_v10_deserialize(void* ctx, FlipperFormat* ff) {
-    furi_assert(ctx);
-    SubGhzProtocolEncoderHondaV10* inst = ctx;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        if(subghz_block_generic_deserialize_check_count_bit(
-               &inst->generic, ff, HV10_FRAME_BITS) != SubGhzProtocolStatusOk) {
-            break;
-        }
-        hv10_unpack(inst->generic.data, &inst->frame);
-        uint32_t tail = 0;
-        flipper_format_rewind(ff);
-        if(flipper_format_read_uint32(ff, "Tail", &tail, 1)) inst->frame.tail = tail;
-
-        flipper_format_read_uint32(ff, "Repeat", (uint32_t*)&inst->encoder.repeat, 1);
-
-        subghz_protocol_encoder_honda_v10_get_upload(inst);
-        inst->encoder.front = 0;
-        inst->encoder.is_running = true;
-        res = SubGhzProtocolStatusOk;
-    } while(false);
-    return res;
-}
-
-void subghz_protocol_encoder_honda_v10_stop(void* ctx) {
-    furi_assert(ctx);
-    SubGhzProtocolEncoderHondaV10* inst = ctx;
-    inst->encoder.is_running = false;
-}
-
-LevelDuration subghz_protocol_encoder_honda_v10_yield(void* ctx) {
-    SubGhzProtocolEncoderHondaV10* inst = ctx;
-    if(inst->encoder.repeat == 0 || !inst->encoder.is_running) {
-        inst->encoder.is_running = false;
-        return level_duration_reset();
-    }
-    LevelDuration ret = inst->encoder.upload[inst->encoder.front];
-    if(++inst->encoder.front == inst->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) inst->encoder.repeat--;
-        inst->encoder.front = 0;
-    }
-    return ret;
-}
-
-const SubGhzProtocolEncoder subghz_protocol_honda_v10_encoder = {
-    .alloc       = subghz_protocol_encoder_honda_v10_alloc,
-    .free        = subghz_protocol_encoder_honda_v10_free,
-    .deserialize = subghz_protocol_encoder_honda_v10_deserialize,
-    .stop        = subghz_protocol_encoder_honda_v10_stop,
-    .yield       = subghz_protocol_encoder_honda_v10_yield,
-};
-
 const SubGhzProtocolDecoder subghz_protocol_honda_v10_decoder = {
     .alloc         = subghz_protocol_decoder_honda_v10_alloc,
     .free          = subghz_protocol_decoder_honda_v10_free,
@@ -560,8 +404,7 @@ const SubGhzProtocol subghz_protocol_honda_v10 = {
                SubGhzProtocolFlag_FM  |
                SubGhzProtocolFlag_Decodable |
                SubGhzProtocolFlag_Load |
-               SubGhzProtocolFlag_Save |
-               SubGhzProtocolFlag_Send,
+               SubGhzProtocolFlag_Save,
     .decoder = &subghz_protocol_honda_v10_decoder,
-    .encoder = &subghz_protocol_honda_v10_encoder,
+    .encoder = NULL,
 };

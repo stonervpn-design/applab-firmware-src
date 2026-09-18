@@ -164,17 +164,14 @@ static void subghz_scene_receiver_config_set_timestamp_file_names(VariableItem* 
     subghz_last_settings_save(subghz->last_settings);
 }
 
-static const char* const car_mode_text[] = {"Off", "Cars 1", "Cars 2"};
-#define CAR_MODE_COUNT (sizeof(car_mode_text) / sizeof(car_mode_text[0]))
-
 static void subghz_scene_radio_settings_set_automotive(VariableItem* item) {
     SubGhz* subghz = variable_item_get_context(item);
     uint8_t index = variable_item_get_current_value_index(item);
-    variable_item_set_current_value_text(item, car_mode_text[index]);
-    // Selects the resident decoder set (general / Cars 1 / Cars 2) and rebuilds the
-    // receiver. The car set is split in two because this no-PSRAM board can't hold
-    // all of them resident at once; each half fits like the general set.
-    subghz_txrx_set_car_mode(subghz->txrx, index);
+    variable_item_set_current_value_text(item, on_off_text[index]);
+    // Swaps the resident decoder set (general <-> ProtoPirate automotive) and
+    // rebuilds the receiver. Kept off by default: this no-PSRAM board can't hold
+    // both sets at once, and automotive-mode drops the gate/garage/TPMS decoders.
+    subghz_txrx_set_automotive_mode(subghz->txrx, index == 1);
 }
 
 void subghz_scene_radio_settings_on_enter(void* context) {
@@ -188,12 +185,12 @@ void subghz_scene_radio_settings_on_enter(void* context) {
     item = variable_item_list_add(
         variable_item_list,
         "Automotive",
-        CAR_MODE_COUNT,
+        ON_OFF_COUNT,
         subghz_scene_radio_settings_set_automotive,
         subghz);
-    value_index = subghz_txrx_get_car_mode(subghz->txrx);
+    value_index = subghz_txrx_get_automotive_mode(subghz->txrx) ? 1 : 0;
     variable_item_set_current_value_index(item, value_index);
-    variable_item_set_current_value_text(item, car_mode_text[value_index]);
+    variable_item_set_current_value_text(item, on_off_text[value_index]);
 
     // Module selection removed — ESP32 port has no external CC1101 option
 

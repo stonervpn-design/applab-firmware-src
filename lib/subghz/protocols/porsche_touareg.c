@@ -139,7 +139,10 @@ static void porsche_cayenne_publish_frame(SubGhzProtocolDecoderPorscheCayenne* i
     instance->generic.data_count_bit = PORSCHE_CAYENNE_BIT_COUNT;
     porsche_cayenne_parse_data(instance);
 
-    if(instance->base.callback) {
+    // parse_data leaves cnt==0 when the counter brute-force failed to
+    // reproduce pkt[4..7]; only a real match sets cnt in 1..256. Suppress
+    // the callback on no-match so foreign 64-bit frames are not emitted.
+    if(instance->generic.cnt != 0 && instance->base.callback) {
         instance->base.callback(&instance->base, instance->base.context);
     }
 }

@@ -41,6 +41,7 @@ typedef struct {
     void* validator_callback_context;
     FuriString* validator_text;
     bool validator_message_visible;
+    bool physical_kb_used; /* a printable char arrived via the ADV physical keyboard */
 } TextInputModel;
 
 static const uint8_t keyboard_origin_x = 1;
@@ -401,6 +402,19 @@ static void text_input_handle_right(TextInput* text_input, TextInputModel* model
     }
 }
 
+/* Run the validator (if any) and fire the result callback — the "Save" action,
+ * shared by the on-screen Save glyph and the physical-keyboard hold-Enter path. */
+static void text_input_commit(TextInput* text_input, TextInputModel* model) {
+    if(model->validator_callback &&
+       (!model->validator_callback(
+           model->text_buffer, model->validator_text, model->validator_callback_context))) {
+        model->validator_message_visible = true;
+        furi_timer_start(text_input->timer, furi_kernel_get_tick_frequency() * 4);
+    } else if(model->callback != 0 && strlen(model->text_buffer) >= model->minimum_length) {
+        model->callback(model->callback_context);
+    }
+}
+
 static void text_input_handle_ok(TextInput* text_input, TextInputModel* model, InputType type) {
     if(model->cursor_select) {
         model->clear_default_text = !model->clear_default_text;
@@ -484,10 +498,21 @@ static bool text_input_view_input_callback(InputEvent* event, void* context) {
         char ch = (char)event->key;
         if(ch >= 0x20 && ch < 0x7F) {
             text_input_insert_char(model, ch);
+            model->physical_kb_used = true;
             consumed = true;
         }
         view_commit_model(text_input->view, consumed);
         return consumed;
+    }
+
+    /* Physical keyboard: holding Enter (long OK) commits the typed name, no matter
+     * where the on-screen cursor sits. Gated on physical_kb_used so encoder/button
+     * devices (no InputTypeText) keep long-OK = Shift/uppercase. On-screen Shift is
+     * not needed here because the ADV keyboard has its own Shift key. */
+    if(model->physical_kb_used && event->type == InputTypeLong && event->key == InputKeyOk) {
+        text_input_commit(text_input, model);
+        view_commit_model(text_input->view, true);
+        return true;
     }
 
     if((!(event->type == InputTypePress) && !(event->type == InputTypeRelease)) &&

@@ -459,27 +459,25 @@ void nfc_append_filename_string_when_present(NfcApp* instance, FuriString* strin
 }
 
 static bool nfc_is_hal_ready(void) {
-    /* nfc_app() calls furi_hal_nfc_rescan() at launch, so by here the detection already
-     * reflects the currently-plugged module (incl. a swap). Just report the result. */
-    if(furi_hal_nfc_is_hal_ready() == FuriHalNfcErrorNone) {
+    if(furi_hal_nfc_is_hal_ready() != FuriHalNfcErrorNone) {
+        // No connection to the chip, show an error screen
+        DialogsApp* dialogs = furi_record_open(RECORD_DIALOGS);
+        DialogMessage* message = dialog_message_alloc();
+        dialog_message_set_header(message, "NFC Not Available", 64, 8, AlignCenter, AlignTop);
+        dialog_message_set_text(
+            message,
+            "No NFC module detected.\nConnect an M5Unit NFC/RFID2\nmodule to the Grove port.",
+            64,
+            34,
+            AlignCenter,
+            AlignCenter);
+        dialog_message_show(dialogs, message);
+        dialog_message_free(message);
+        furi_record_close(RECORD_DIALOGS);
+        return false;
+    } else {
         return true;
     }
-
-    // Still no frontend — show an error screen
-    DialogsApp* dialogs = furi_record_open(RECORD_DIALOGS);
-    DialogMessage* message = dialog_message_alloc();
-    dialog_message_set_header(message, "NFC Not Available", 64, 8, AlignCenter, AlignTop);
-    dialog_message_set_text(
-        message,
-        "No NFC module detected.\nConnect a PN532 or M5Unit\nNFC/RFID2 to the Grove port.",
-        64,
-        34,
-        AlignCenter,
-        AlignCenter);
-    dialog_message_show(dialogs, message);
-    dialog_message_free(message);
-    furi_record_close(RECORD_DIALOGS);
-    return false;
 }
 
 static void nfc_show_initial_scene_for_device(NfcApp* nfc) {
@@ -518,9 +516,6 @@ void nfc_app_run_external(NfcApp* nfc, const char* app_path) {
 }
 
 int32_t nfc_app(void* p) {
-    /* Re-detect the frontend on every launch so a module swapped since boot (or since
-     * the last NFC session) is picked up without a reboot. */
-    furi_hal_nfc_rescan();
     if(!nfc_is_hal_ready()) return 0;
 
     NfcApp* nfc = nfc_app_alloc();

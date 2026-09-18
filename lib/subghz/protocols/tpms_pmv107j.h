@@ -28,10 +28,3 @@ SubGhzProtocolStatus
     tpms_protocol_decoder_pmv107j_deserialize(void* context, FlipperFormat* flipper_format);
 
 void tpms_protocol_decoder_pmv107j_get_string(void* context, FuriString* output);
-
-void* tpms_protocol_encoder_pmv107j_alloc(SubGhzEnvironment* environment);
-void tpms_protocol_encoder_pmv107j_free(void* context);
-void tpms_protocol_encoder_pmv107j_stop(void* context);
-LevelDuration tpms_protocol_encoder_pmv107j_yield(void* context);
-SubGhzProtocolStatus
-    tpms_protocol_encoder_pmv107j_deserialize(void* context, FlipperFormat* flipper_format);

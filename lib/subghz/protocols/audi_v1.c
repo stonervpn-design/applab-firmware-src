@@ -517,6 +517,16 @@ static void audi_v1_decoder_check_complete(SubGhzProtocolDecoderAudiV1* instance
     audi_v1_extract_fields(&instance->generic, instance->hop, instance->btn_byte);
 
     uint8_t btn_id = (instance->btn_byte >> 4) & 0x0F;
+
+    // Reject false positives: button must be Lock(0xE)/Unlock(0xB) and serial nonzero
+    if((btn_id != AUDI_V1_BTN_LOCK && btn_id != AUDI_V1_BTN_UNLOCK) ||
+       instance->generic.serial == 0) {
+        instance->decoder.decode_data = 0;
+        instance->decoder.decode_count_bit = 0;
+        instance->decoder.parser_step = AudiV1DecoderStepReset;
+        return;
+    }
+
     subghz_block_generic_global.current_btn = btn_id;
     subghz_block_generic_global.btn_length_bit = 4;
     FURI_LOG_I(
@@ -799,7 +809,6 @@ void subghz_protocol_encoder_audi_v1_free(void* context) {
 static void subghz_protocol_encoder_audi_v1_get_upload(SubGhzProtocolEncoderAudiV1* instance) {
     furi_assert(instance);
     size_t index = 0;
-    const size_t enc_cap = 256;
 
     // Button handling: global override first, then D-pad
     uint8_t original_btn_id = (instance->btn_byte >> 4) & 0x0F;
@@ -848,27 +857,22 @@ static void subghz_protocol_encoder_audi_v1_get_upload(SubGhzProtocolEncoderAudi
     // === BUILD UPLOAD ===
 
     // SYNC: LOW 3000us
-    if(index < enc_cap)
-        instance->encoder.upload[index++] = level_duration_make(false, (uint32_t)AUDI_V1_TE_SYNC);
+    instance->encoder.upload[index++] = level_duration_make(false, (uint32_t)AUDI_V1_TE_SYNC);
 
     // HEADER: HIGH 2000us
-    if(index < enc_cap)
-        instance->encoder.upload[index++] = level_duration_make(true, (uint32_t)AUDI_V1_TE_HEADER);
+    instance->encoder.upload[index++] = level_duration_make(true, (uint32_t)AUDI_V1_TE_HEADER);
 
     // PREAMBLE: 15 SHORT pairs (LOW-HIGH)
     for(int p = 0; p < 15; p++) {
-        if(index < enc_cap)
-            instance->encoder.upload[index++] =
-                level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_short);
-        if(index < enc_cap)
-            instance->encoder.upload[index++] =
-                level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_short);
+        instance->encoder.upload[index++] =
+            level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_short);
+        instance->encoder.upload[index++] =
+            level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_short);
     }
 
     // TRIGGER: LONG LOW (follows naturally after last preamble HIGH)
-    if(index < enc_cap)
-        instance->encoder.upload[index++] =
-            level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_long);
+    instance->encoder.upload[index++] =
+        level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_long);
 
     // MANCHESTER DATA: 88 bits
     // After trigger LONG LOW, start Mid1 so first emission is HIGH (no merge with trigger LOW)
@@ -887,33 +891,27 @@ static void subghz_protocol_encoder_audi_v1_get_upload(SubGhzProtocolEncoderAudi
         switch(manchester_state) {
         case ManchesterStateMid1:
             if(b == 0) {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_long);
+                instance->encoder.upload[index++] =
+                    level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_long);
                 manchester_state = ManchesterStateMid0;
             } else {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_short);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_short);
                 manchester_state = ManchesterStateMid1;
             }
             break;
         case ManchesterStateMid0:
             if(b == 0) {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_short);
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_short);
+                instance->encoder.upload[index++] =
+                    level_duration_make(true, (uint32_t)subghz_protocol_audi_v1_const.te_short);
                 manchester_state = ManchesterStateMid0;
             } else {
-                if(index < enc_cap)
-                    instance->encoder.upload[index++] =
-                        level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_long);
+                instance->encoder.upload[index++] =
+                    level_duration_make(false, (uint32_t)subghz_protocol_audi_v1_const.te_long);
                 manchester_state = ManchesterStateMid1;
             }
             break;
@@ -927,8 +925,7 @@ static void subghz_protocol_encoder_audi_v1_get_upload(SubGhzProtocolEncoderAudi
     // Mid0 → last emission was HIGH, so gap must be LOW
     // Mid1 → last emission was LOW, so gap must be HIGH
     bool end_level = (manchester_state == ManchesterStateMid1);
-    if(index < enc_cap)
-        instance->encoder.upload[index++] = level_duration_make(end_level, (uint32_t)6000);
+    instance->encoder.upload[index++] = level_duration_make(end_level, (uint32_t)6000);
 
     instance->encoder.size_upload = index;
 }

@@ -39,42 +39,12 @@
 typedef enum {
     NfcBackendPn532 = 0,
     NfcBackendSt25r3916,
-    NfcBackendRfid2, /* WS1850S / M5 RFID2 — MFRC522 register interface @0x28 */
 } NfcBackend;
 static NfcBackend nfc_backend = NfcBackendPn532;
 
-/* MFRC522 / WS1850S (RFID2) reader backend. Declared extern rather than via
- * #include "rfid2/rfid2.h" to avoid a component-dependency CYCLE: the rfid2
- * driver includes <boards/board.h> from furi_hal, so furi_hal can't REQUIRE
- * rfid2. These symbols resolve at final link (the rfid2 component is always
- * built for the standalone rfid2_reader app). NFC-A / MIFARE only; hardware
- * Crypto1 (MFAuthent) so auth goes through the PN532-style hardware path. */
-extern bool rfid2_init(void);
-extern uint8_t rfid2_version(void);
-extern int rfid2_transceive(
-    const uint8_t* tx, int tx_len, int tx_last_bits, uint8_t* rx, int rx_max);
-extern bool rfid2_classic_auth(
-    uint8_t block, const uint8_t key[6], bool keyB, const uint8_t* uid, size_t uid_len);
-extern bool rfid2_halt(void);
-extern void rfid2_field_off(void);
-
-/* Route an rfid2 transceive byte-count result through the shared staging path
- * (same pn532_rx_buf + event flags the ST25R3916 backend uses). n<=0 => no card. */
-static FuriHalNfcError st25r_stage_result_bits(St25rHalStatus s, const uint8_t* rx, uint16_t rx_bits);
-static inline FuriHalNfcError rfid2_stage(int n, const uint8_t* rx) {
-    return st25r_stage_result_bits(
-        (n > 0) ? St25rHalOk : St25rHalNoCard, rx, (n > 0) ? (uint16_t)(n * 8) : 0);
-}
-
 /* ──────────────────────────── PN532 Protocol Constants ──────────────────── */
 
-#define PN532_I2C_ADDR          0x24   /* standard PN532 breakout (Elechouse/Adafruit) */
-#define WS1850S_I2C_ADDR        0x28   /* M5 RFID2 / WS1850S — PN532-command compatible */
-
-/* Runtime I2C address for the PN532-protocol frontend, selected by the probe:
- * 0x24 = a plain PN532, 0x28 = a WS1850S / M5 RFID2 unit. Both speak the PN532
- * command set, just at different addresses, so one code path serves both. */
-static uint8_t pn532_addr = PN532_I2C_ADDR;
+#define PN532_I2C_ADDR          0x24
 
 #define PN532_PREAMBLE          0x00
 #define PN532_STARTCODE1        0x00
@@ -244,22 +214,14 @@ static esp_err_t pn532_i2c_init(void) {
     };
 
     esp_err_t err = i2c_driver_install(BOARD_NFC_I2C_PORT, conf.mode, 0, 0, 0);
-    if(err != ESP_OK) {
-        /* Already installed — most likely by the ST25R3916 probe that runs FIRST in
-         * furi_hal_nfc_init(), which brings the bus up at 200 kHz. The PN532 (esp. M5
-         * clones over the longer Grove cable) is only reliable at 100 kHz: the short
-         * GetFirmwareVersion still ACKs at 200 kHz (so the module "detects"), but the
-         * multi-byte InListPassiveTarget / InDataExchange card transactions are
-         * marginal and fail — the "PN532 detects but can't read" symptom. So do NOT
-         * reuse as-is; always force our timing below. */
-        FURI_LOG_I(TAG, "I2C bus %d already installed - forcing PN532 100kHz", BOARD_NFC_I2C_PORT);
+    if(err == ESP_OK) {
+        /* Fresh install — configure pins */
+        i2c_param_config(BOARD_NFC_I2C_PORT, &conf);
+    } else {
+        /* Already installed (by power or touch) — reuse as-is */
+        FURI_LOG_I(TAG, "I2C bus %d already initialized, reusing", BOARD_NFC_I2C_PORT);
         err = ESP_OK;
     }
-    /* Program the bus timing for the PN532 (100 kHz) whether we just installed the
-     * driver or are taking over one the ST25R3916 probe left at 200 kHz. i2c_param_config
-     * reprograms the SCL timing on an already-installed legacy-driver bus (same call the
-     * ST25R3916 backend uses to change its own clock). */
-    i2c_param_config(BOARD_NFC_I2C_PORT, &conf);
     return err;
 }
 
@@ -282,7 +244,7 @@ static bool pn532_wait_ready(uint32_t timeout_ms) {
     uint32_t start = furi_get_tick();
     while((furi_get_tick() - start) < timeout_ms) {
         esp_err_t err = i2c_master_read_from_device(
-            BOARD_NFC_I2C_PORT, pn532_addr, &status, 1, pdMS_TO_TICKS(10));
+            BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, &status, 1, pdMS_TO_TICKS(10));
         if(err == ESP_OK && (status & 0x01)) return true;
         furi_delay_ms(5);
     }
@@ -307,7 +269,7 @@ static FuriHalNfcError pn532_read_response(uint8_t* response, size_t* response_l
 
     uint8_t rx_buf[read_len];
     esp_err_t err = i2c_master_read_from_device(
-        BOARD_NFC_I2C_PORT, pn532_addr, rx_buf, read_len, pdMS_TO_TICKS(200));
+        BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, rx_buf, read_len, pdMS_TO_TICKS(200));
     if(err != ESP_OK) return FuriHalNfcErrorCommunication;
 
     /* Validate: [RDY=0x01] [00] [00] [FF] [LEN] [LCS] [TFI=0xD5] ... */
@@ -366,7 +328,7 @@ static FuriHalNfcError pn532_send_command(
     i2c_reset_rx_fifo(BOARD_NFC_I2C_PORT);
 
     esp_err_t err = i2c_master_write_to_device(
-        BOARD_NFC_I2C_PORT, pn532_addr, frame, idx, pdMS_TO_TICKS(1000));
+        BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, frame, idx, pdMS_TO_TICKS(1000));
     if(err != ESP_OK) {
         /* DEBUG: log which PN532 command failed (cmd[0] = opcode, e.g.
          * 0x8C TgInitAsTarget, 0x86 TgGetData, 0x4A InListPassiveTarget) so
@@ -384,7 +346,7 @@ static FuriHalNfcError pn532_send_command(
 
     uint8_t ack_buf[PN532_ACK_LENGTH];
     err = i2c_master_read_from_device(
-        BOARD_NFC_I2C_PORT, pn532_addr, ack_buf, sizeof(ack_buf), pdMS_TO_TICKS(200));
+        BOARD_NFC_I2C_PORT, PN532_I2C_ADDR, ack_buf, sizeof(ack_buf), pdMS_TO_TICKS(200));
     if(err != ESP_OK) return FuriHalNfcErrorCommunication;
 
     /* Verify ACK: [RDY=0x01] [00 00 FF 00 FF 00] */
@@ -464,16 +426,14 @@ static FuriHalNfcError st25r_stage_result_bits(St25rHalStatus s, const uint8_t* 
 FuriHalNfcError furi_hal_nfc_init(void) {
     FURI_LOG_I(TAG, "Initializing NFC HAL (PN532 I2C)");
 
-    /* Guarded so furi_hal_nfc_reprobe() can safely re-run init to re-detect a
-     * hot-plugged module without leaking these one-time objects. */
-    if(!nfc_mutex) nfc_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
-    if(!nfc_event_flags) nfc_event_flags = furi_event_flag_alloc();
+    nfc_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    nfc_event_flags = furi_event_flag_alloc();
 
-    /* Create software timers (once) */
+    /* Create software timers */
     const esp_timer_create_args_t fwt_args = { .callback = fwt_timer_cb, .name = "nfc_fwt" };
     const esp_timer_create_args_t btx_args = { .callback = block_tx_timer_cb, .name = "nfc_btx" };
-    if(!fwt_timer) esp_timer_create(&fwt_args, &fwt_timer);
-    if(!block_tx_timer) esp_timer_create(&btx_args, &block_tx_timer);
+    esp_timer_create(&fwt_args, &fwt_timer);
+    esp_timer_create(&btx_args, &block_tx_timer);
 
     /* Configure IRQ pin */
 #if defined(BOARD_PIN_NFC_IRQ) && (BOARD_PIN_NFC_IRQ != UINT16_MAX)
@@ -495,36 +455,6 @@ FuriHalNfcError furi_hal_nfc_init(void) {
     gpio_set_level(BOARD_PIN_NFC_RST, 1);
 #endif
 
-    /* Reclaim the Grove I2C pins from IR/RMT before probing. On the Cardputer ADV
-     * the Grove SCL (G1) is physically shared with the internal IR RX pin; if IR
-     * has claimed it, the I2C clock line is dead and BOTH the PN532 and the
-     * ST25R3916 fail to ACK — so the frontend reads as "not connected" even though
-     * the chip is on the bus. gpio_reset_pin() detaches any peripheral (RMT) so the
-     * I2C driver can drive the pins. Mirrors the working Grove I2C Scan diagnostic. */
-#if defined(BOARD_PIN_NFC_SCL) && (BOARD_PIN_NFC_SCL != UINT16_MAX) && \
-    defined(BOARD_PIN_NFC_SDA) && (BOARD_PIN_NFC_SDA != UINT16_MAX)
-    gpio_reset_pin((gpio_num_t)BOARD_PIN_NFC_SCL);
-    gpio_reset_pin((gpio_num_t)BOARD_PIN_NFC_SDA);
-#endif
-
-    /* Probe the ST25R3916 FIRST, with a settle delay and its OWN fresh 200 kHz I2C
-     * bring-up (st25r3916_probe -> st25r3916_i2c_init). This mirrors the working
-     * Grove I2C Scan exactly. The previous order ran pn532_i2c_init() at 100 kHz
-     * first and only reconfigured the bus afterward, and could probe before the
-     * just-powered module was ready — so the ST25R3916 went undetected even though
-     * the chip ACKs at 0x50. If it's here, use it and skip the PN532 path. */
-#if defined(BOARD_HAS_ST25R3916) && BOARD_HAS_ST25R3916
-    furi_delay_ms(150);
-    if(st25r3916_hal_present()) {
-        nfc_backend = NfcBackendSt25r3916;
-        nfc_hal_ready = true;
-        pn532_target_number = 0;
-        FURI_LOG_I(TAG, "ST25R3916 detected @0x50 (primary probe) — using ST25R3916 backend");
-        return FuriHalNfcErrorNone;
-    }
-    FURI_LOG_I(TAG, "ST25R3916 not present on primary probe; falling back to PN532");
-#endif
-
     /* Init I2C (bus likely already initialized by furi_hal_power) */
     esp_err_t err = pn532_i2c_init();
     if(err != ESP_OK) {
@@ -532,51 +462,13 @@ FuriHalNfcError furi_hal_nfc_init(void) {
         return FuriHalNfcErrorCommunication;
     }
 
-    /* Let the Grove 5V boost + the PN532's own power-on-reset settle before probing.
-     * On battery the PMIC boost ramps up slower and weaker than USB VBUS, so 150 ms was
-     * not enough — the PN532 read as "not found" on battery (but worked on USB). Longer
-     * settle + retries below fix that. */
-    furi_delay_ms(300);
+    furi_delay_ms(150);
 
-    /* Verify a PN532-protocol frontend with GetFirmwareVersion. Probe BOTH known
-     * addresses — 0x24 (a plain PN532 breakout) and 0x28 (WS1850S / M5 RFID2 unit) —
-     * and keep whichever answers, so either chip works with no config. Retry each so
-     * a module still powering up on battery gets another chance. */
+    /* Verify PN532 with GetFirmwareVersion */
     uint8_t cmd[] = {PN532_CMD_GETFIRMWAREVERSION};
     uint8_t resp[4];
-    FuriHalNfcError nfc_err = FuriHalNfcErrorCommunication;
-    static const uint8_t pn532_candidates[] = {PN532_I2C_ADDR, WS1850S_I2C_ADDR};
-    for(size_t ci = 0; ci < sizeof(pn532_candidates) && nfc_err != FuriHalNfcErrorNone; ci++) {
-        pn532_addr = pn532_candidates[ci];
-        int nack_streak = 0;
-        for(int attempt = 0; attempt < 4; attempt++) {
-            size_t resp_len = sizeof(resp);
-            nfc_err = pn532_send_command(cmd, sizeof(cmd), resp, &resp_len, 500);
-            if(nfc_err == FuriHalNfcErrorNone) break;
-            /* Fast-boot without weakening detection: a write-NACK (Communication) means
-             * nothing ACKed this address. After the 300ms settle a PRESENT module always
-             * ACKs its address (only its firmware response is slow -> Timeout, which we
-             * keep retrying). Two NACKs in a row = absent at THIS address -> move on to
-             * the next candidate instead of burning the remaining retry delays. */
-            if(nfc_err == FuriHalNfcErrorCommunication) {
-                if(++nack_streak >= 2) {
-                    FURI_LOG_I(TAG, "No PN532-family ACK @0x%02X (2x NACK) - absent", pn532_addr);
-                    break;
-                }
-            } else {
-                nack_streak = 0;
-            }
-            FURI_LOG_I(
-                TAG,
-                "PN532 GetFirmwareVersion @0x%02X attempt %d/4 failed; retrying",
-                pn532_addr,
-                attempt + 1);
-            furi_delay_ms(150);
-        }
-    }
-    if(nfc_err == FuriHalNfcErrorNone) {
-        FURI_LOG_I(TAG, "PN532-family frontend detected @0x%02X", pn532_addr);
-    }
+    size_t resp_len = sizeof(resp);
+    FuriHalNfcError nfc_err = pn532_send_command(cmd, sizeof(cmd), resp, &resp_len, 2000);
     if(nfc_err != FuriHalNfcErrorNone) {
         /* No PN532 on the bus — try the ST25R3916 (M5Stack NFC Universal Unit)
          * at 0x50 before giving up. */
@@ -589,24 +481,7 @@ FuriHalNfcError furi_hal_nfc_init(void) {
             return FuriHalNfcErrorNone;
         }
 #endif
-        /* Last resort: an MFRC522-register unit (WS1850S / M5 RFID2) @0x28. It
-         * does NOT speak the PN532 command set, so the PN532 probe above misses
-         * it — read its VersionReg directly (0x00/0xFF = no chip). */
-        uint8_t rfver = rfid2_version();
-        if(rfver != 0x00 && rfver != 0xFF && rfid2_init()) {
-            nfc_backend = NfcBackendRfid2;
-            nfc_hal_ready = true;
-            pn532_target_number = 0;
-            FURI_LOG_I(
-                TAG, "WS1850S/MFRC522 detected @0x28 (ver 0x%02X) - using RFID2 backend", rfver);
-            return FuriHalNfcErrorNone;
-        }
-        FURI_LOG_E(
-            TAG, "No NFC frontend found (PN532 @0x24/0x28, ST25R3916 @0x50, MFRC522 @0x28)");
-        /* Leave the Grove 5V boost ON. Cutting it here turned a slow/flaky battery
-         * power-up into a HARD failure (the PN532 then had no power at all and only a
-         * lucky reboot recovered it — it worked on USB VBUS but died on battery). The
-         * tiny idle-power saving is not worth breaking NFC; original always-on restored. */
+        FURI_LOG_E(TAG, "No NFC frontend found (PN532 @0x24, ST25R3916 @0x50)");
         return FuriHalNfcErrorCommunication;
     }
 
@@ -632,42 +507,6 @@ FuriHalNfcError furi_hal_nfc_init(void) {
     return FuriHalNfcErrorNone;
 }
 
-FuriHalNfcError furi_hal_nfc_reprobe(void) {
-    /* Re-detect a module that was plugged in after boot. No-op if one is already up
-     * (don't disturb a live session). init() is idempotent (guarded allocs), so re-
-     * running it just re-does the GPIO/probe. */
-    if(nfc_hal_ready) return FuriHalNfcErrorNone;
-    return furi_hal_nfc_init();
-}
-
-FuriHalNfcError furi_hal_nfc_rescan(void) {
-    /* Re-detect a frontend SWAPPED since boot (e.g. PN532 <-> ST25R3916), on NFC-app
-     * launch, without a reboot.
-     *
-     * FAST PATH (nothing swapped): if the ST25R3916 (built-in NFC2) is already the live
-     * backend and STILL ACKs its IC-ID at 0x50, keep it exactly as-is. Do NOT reset
-     * chip-ready. Forcing a full st25r3916_chip_init() on every open re-runs the
-     * oscillator/regulator/analog-RX/driver-timing bring-up, whose settling is marginal
-     * enough to leave the receiver slightly under-tuned — which the most demanding read
-     * (EMV/ISO-DEP, a long multi-APDU exchange) shows first as dropped records, i.e.
-     * "the card gives much less info than before". A working, initialized chip needs no
-     * re-init. st25r3916_hal_present() only reads the IC-ID register (no chip reset). */
-#if defined(BOARD_HAS_ST25R3916) && BOARD_HAS_ST25R3916
-    if(nfc_hal_ready && nfc_backend == NfcBackendSt25r3916 && st25r3916_hal_present()) {
-        return FuriHalNfcErrorNone;
-    }
-#endif
-    /* Slow path: no live backend, or the previously-live module stopped responding
-     * (genuine hot-swap / removal / power-cycle). Force a fresh detection; reset the
-     * ST25R3916 chip-ready so a replugged unit fully re-initializes on its next
-     * field_on. */
-    nfc_hal_ready = false;
-#if defined(BOARD_HAS_ST25R3916) && BOARD_HAS_ST25R3916
-    st25r3916_hal_reset_ready();
-#endif
-    return furi_hal_nfc_init();
-}
-
 FuriHalNfcError furi_hal_nfc_is_hal_ready(void) {
     return nfc_hal_ready ? FuriHalNfcErrorNone : FuriHalNfcErrorCommunication;
 }
@@ -683,21 +522,8 @@ FuriHalNfcError furi_hal_nfc_release(void) {
     return FuriHalNfcErrorNone;
 }
 
-bool furi_hal_nfc_supports_raw_crypto1(void) {
-    if(!nfc_hal_ready) return false;
-    /* ST25R3916 sends raw Crypto1 via st25r3916_hal_transceive_custom_parity
-     * (the same path MIFARE Classic read/write already uses). PN532's
-     * InDataExchange abstracts frames and cannot emit raw Crypto1, so the
-     * nested/darkside key-recovery attacks are ST25R3916-only. */
-    return (nfc_backend == NfcBackendSt25r3916);
-}
-
 FuriHalNfcError furi_hal_nfc_low_power_mode_start(void) {
     if(!nfc_hal_ready) return FuriHalNfcErrorNone;
-    if(nfc_backend == NfcBackendRfid2) {
-        rfid2_field_off();
-        return FuriHalNfcErrorNone;
-    }
     if(nfc_backend == NfcBackendSt25r3916) {
         st25r3916_hal_field_off();
         return FuriHalNfcErrorNone;
@@ -711,10 +537,6 @@ FuriHalNfcError furi_hal_nfc_low_power_mode_start(void) {
 
 FuriHalNfcError furi_hal_nfc_low_power_mode_stop(void) {
     if(!nfc_hal_ready) return FuriHalNfcErrorNone;
-    if(nfc_backend == NfcBackendRfid2) {
-        rfid2_init(); /* re-configure + antenna back on */
-        return FuriHalNfcErrorNone;
-    }
     if(nfc_backend == NfcBackendSt25r3916) {
         /* Field is (re)configured in poller_field_on; nothing to wake here. */
         return FuriHalNfcErrorNone;
@@ -726,13 +548,6 @@ FuriHalNfcError furi_hal_nfc_low_power_mode_stop(void) {
 
 FuriHalNfcError furi_hal_nfc_set_mode(FuriHalNfcMode mode, FuriHalNfcTech tech) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
-    if(nfc_backend == NfcBackendRfid2) {
-        /* MFRC522 is NFC-A / MIFARE only; the upper stack drives activation.
-         * Just record mode/tech (other techs simply won't activate). */
-        nfc_current_mode = mode;
-        nfc_current_tech = tech;
-        return FuriHalNfcErrorNone;
-    }
     if(nfc_backend == NfcBackendSt25r3916) {
         /* ST25R3916 drives real RF; the upper stack runs activation itself.
          * Record mode/tech and select the RF technology — the front end is
@@ -825,9 +640,6 @@ bool furi_hal_nfc_field_is_present(void) {
 
 FuriHalNfcError furi_hal_nfc_poller_field_on(void) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
-    if(nfc_backend == NfcBackendRfid2) {
-        return FuriHalNfcErrorNone; /* antenna already on from init; no per-cycle re-arm */
-    }
     if(nfc_backend == NfcBackendSt25r3916) {
         return (st25r3916_hal_field_on() == St25rHalOk) ? FuriHalNfcErrorNone :
                                                           FuriHalNfcErrorOscillator;
@@ -1558,15 +1370,6 @@ FuriHalNfcError furi_hal_nfc_poller_tx(const uint8_t* tx_data, size_t tx_bits) {
     size_t tx_bytes = (tx_bits + 7) / 8;
     pn532_rx_bits = 0;
 
-    if(nfc_backend == NfcBackendRfid2) {
-        /* MFRC522 raw transceive: software already appended CRC-A, we send it raw
-         * and keep the card's CRC for the stack. tx_bits%8 carries the valid-bit
-         * count for sub-byte frames (e.g. a 7-bit magic wakeup). */
-        static uint8_t rx[64];
-        int n = rfid2_transceive(tx_data, (int)tx_bytes, (int)(tx_bits % 8), rx, sizeof(rx));
-        return rfid2_stage(n, rx);
-    }
-
     if(nfc_backend == NfcBackendSt25r3916) {
         if(nfc_current_tech == FuriHalNfcTechIso15693) {
             /* NFC-V: 1-out-of-4 encode the frame, transceive the OOK stream, then
@@ -1588,21 +1391,6 @@ FuriHalNfcError furi_hal_nfc_poller_tx(const uint8_t* tx_data, size_t tx_bits) {
                 return st25r_stage_result_bits(St25rHalNoCard, vdec, 0);
             }
             return st25r_stage_result_bits(St25rHalOk, vdec, (uint16_t)vdec_bits);
-        }
-        /* Sub-byte short frame (bit count not a multiple of 8), e.g. the Gen1a 7-bit
-         * 0x40 magic wakeup. The byte-count transceive below rounds 7 bits up to a full
-         * 8-bit byte, so the wakeup is malformed and the magic card never answers. The
-         * custom-parity transceive already transmits the EXACT bit count with hardware
-         * parity off (it writes the raw bits and programs the chip's NTX "bits in last
-         * byte" field) — which is precisely a short frame — and reports the exact RX bit
-         * count (the Gen1a wakeup replies with a 4-bit 0x0A ACK). Byte-aligned frames
-         * (every normal read/write/auth) skip this and are unaffected. */
-        if((tx_bits % 8) != 0) {
-            static uint8_t rx_sb[64];
-            uint16_t rx_sb_bits = 0;
-            St25rHalStatus s_sb = st25r3916_hal_transceive_custom_parity(
-                tx_data, (uint16_t)tx_bits, rx_sb, sizeof(rx_sb), &rx_sb_bits, 20);
-            return st25r_stage_result_bits(s_sb, rx_sb, (s_sb == St25rHalOk) ? rx_sb_bits : 0);
         }
         /* Standard data frame. Software has already appended CRC-A; transmit it
          * raw and keep the received CRC for the stack to verify. Buffer/timeout
@@ -2115,12 +1903,6 @@ FuriHalNfcError furi_hal_nfc_listener_enable_rx(void) {
  */
 FuriHalNfcError furi_hal_nfc_iso14443a_poller_trx_short_frame(FuriHalNfcaShortFrame frame) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
-    if(nfc_backend == NfcBackendRfid2) {
-        uint8_t req = (frame == FuriHalNfcaShortFrameAllReq) ? 0x52 : 0x26; /* WUPA / REQA */
-        uint8_t rx[8];
-        int n = rfid2_transceive(&req, 1, 7, rx, sizeof(rx)); /* 7-bit short frame */
-        return rfid2_stage(n, rx);
-    }
     if(nfc_backend == NfcBackendSt25r3916) {
         bool wupa = (frame == FuriHalNfcaShortFrameAllReq);
         uint8_t rx[8];
@@ -2243,13 +2025,6 @@ FuriHalNfcError furi_hal_nfc_iso14443a_poller_trx_short_frame(FuriHalNfcaShortFr
 FuriHalNfcError furi_hal_nfc_iso14443a_tx_sdd_frame(const uint8_t* tx_data, size_t tx_bits) {
     if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
 
-    if(nfc_backend == NfcBackendRfid2) {
-        /* Anticollision frame ([SEL][NVB]) — no CRC either direction. */
-        size_t tx_bytes = (tx_bits + 7) / 8;
-        uint8_t rx[16];
-        int n = rfid2_transceive(tx_data, (int)tx_bytes, (int)(tx_bits % 8), rx, sizeof(rx));
-        return rfid2_stage(n, rx);
-    }
     if(nfc_backend == NfcBackendSt25r3916) {
         /* Anticollision frame ([SEL][NVB]) — no CRC either direction. */
         size_t tx_bytes = (tx_bits + 7) / 8;
@@ -2559,14 +2334,6 @@ FuriHalNfcError furi_hal_nfc_pn532_mf_auth(
     /* ST25R3916 does real Crypto1 via custom-parity frames — decline native auth
      * so the mf_classic poller falls through to the standard Crypto1 handshake. */
     if(nfc_backend == NfcBackendSt25r3916) return FuriHalNfcErrorCommunication;
-    if(nfc_backend == NfcBackendRfid2) {
-        /* MFRC522 does Crypto1 in HARDWARE (MFAuthent) — the win over ST25R3916.
-         * The card is already selected by the upper stack; authenticate directly.
-         * Stays in crypto until the next HALT so the following block READ decrypts. */
-        if(!nfc_hal_ready) return FuriHalNfcErrorCommunication;
-        bool ok = rfid2_classic_auth(block_num, key, (key_type == 1), uid, uid_len);
-        return ok ? FuriHalNfcErrorNone : FuriHalNfcErrorCommunication;
-    }
     if(!nfc_hal_ready || pn532_target_number == 0) return FuriHalNfcErrorCommunication;
 
     /* PN532 InDataExchange Mifare auth format:

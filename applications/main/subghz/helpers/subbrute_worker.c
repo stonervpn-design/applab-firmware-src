@@ -7,15 +7,10 @@
 #include <lib/subghz/subghz_protocol_registry.h>
 // use to clear custom_btn
 #include <lib/subghz/blocks/custom_btn.h>
-#include <toolbox/level_duration.h>
-#include "subbrute_debruijn.h"
 
 #define TAG                               "SubBruteWorker"
 #define SUBBRUTE_TX_TIMEOUT               6
 #define SUBBRUTE_MANUAL_TRANSMIT_INTERVAL 250
-
-// Defined lower down; forward-declared so the manual-transmit path can call it.
-static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance);
 
 SubBruteWorker* subbrute_worker_alloc(const SubGhzDevice* radio_device) {
     SubBruteWorker* instance = malloc(sizeof(SubBruteWorker));
@@ -140,12 +135,6 @@ bool subbrute_worker_init_default_attack(
     instance->te = protocol->te;
     instance->opencode = protocol->opencode;
     instance->repeat = repeats;
-
-    // For De Bruijn the per-row menu value is n (bits per code), not a repeat
-    // count. Carry it into `bits`, clamped to the TX-safe range.
-    if(attack_type == SubBruteAttackDeBruijn) {
-        instance->bits = CLAMP(repeats, SUBBRUTE_DEBRUIJN_MAX_TX_N, SUBBRUTE_DEBRUIJN_MIN_TX_N);
-    }
     instance->load_index = 0;
     instance->file_key = 0;
     instance->two_bytes = false;
@@ -287,11 +276,6 @@ bool subbrute_worker_transmit_current_key(SubBruteWorker* instance, uint64_t ste
     instance->last_time_tx_data = ticks;
     instance->step = step;
 
-    if(instance->attack == SubBruteAttackDeBruijn) {
-        subbrute_worker_debruijn_transmit(instance);
-        return true;
-    }
-
     bool result;
     instance->protocol_name = subbrute_protocol_file(instance->file);
     FlipperFormat* flipper_format = flipper_format_string_alloc();
@@ -356,77 +340,6 @@ void subbrute_worker_set_callback(
 
     instance->callback = callback;
     instance->context = context;
-}
-
-// De Bruijn TX: the stock RAW encoder streams from a .sub file on disk, so we
-// can't feed it an in-memory string. Instead we drive start_async_tx directly
-// with our own yield over the 0/1 sequence, run-length merged into OOK durations.
-typedef struct {
-    const uint8_t* seq;
-    size_t len;
-    size_t pos;
-    uint32_t te;
-} SubBruteDebruijnTx;
-
-static LevelDuration subbrute_worker_debruijn_yield(void* context) {
-    SubBruteDebruijnTx* ctx = context;
-    if(ctx->pos >= ctx->len) {
-        return level_duration_reset();
-    }
-    uint8_t bit = ctx->seq[ctx->pos] & 1u;
-    size_t run = 1;
-    while(ctx->pos + run < ctx->len && (ctx->seq[ctx->pos + run] & 1u) == bit) {
-        run++;
-    }
-    ctx->pos += run;
-    return level_duration_make((bool)bit, (uint32_t)(run * ctx->te));
-}
-
-static void subbrute_worker_debruijn_transmit(SubBruteWorker* instance) {
-    const uint8_t timeout = instance->tx_timeout_ms;
-    while(instance->transmit_mode) {
-        furi_delay_ms(timeout);
-    }
-    instance->transmit_mode = true;
-
-    size_t seq_len = 0;
-    uint8_t* seq = subbrute_debruijn_generate(instance->bits, &seq_len);
-    if(seq == NULL) {
-        FURI_LOG_E(TAG, "De Bruijn generate failed (n=%d)", instance->bits);
-        instance->transmit_mode = false;
-        return;
-    }
-
-    SubBruteDebruijnTx ctx = {
-        .seq = seq,
-        .len = seq_len,
-        .pos = 0,
-        .te = instance->te ? instance->te : 250,
-    };
-
-    subghz_devices_reset(instance->radio_device);
-    subghz_devices_idle(instance->radio_device);
-    subghz_devices_load_preset(instance->radio_device, instance->preset, NULL);
-    subghz_devices_set_frequency(instance->radio_device, instance->frequency);
-
-    bool tx_started = subghz_devices_start_async_tx(
-        instance->radio_device, subbrute_worker_debruijn_yield, &ctx);
-    if(tx_started) {
-        while(!subghz_devices_is_async_complete_tx(instance->radio_device)) {
-            furi_delay_ms(timeout);
-        }
-        subghz_devices_stop_async_tx(instance->radio_device);
-    } else {
-        FURI_LOG_E(
-            TAG,
-            "De Bruijn start_async_tx failed (freq=%lu preset=%d)",
-            (unsigned long)instance->frequency,
-            instance->preset);
-    }
-
-    subghz_devices_idle(instance->radio_device);
-    free(seq);
-    instance->transmit_mode = false;
 }
 
 void subbrute_worker_subghz_transmit(SubBruteWorker* instance, FlipperFormat* flipper_format) {
@@ -538,12 +451,6 @@ int32_t subbrute_worker_thread(void* context) {
     Stream* stream = flipper_format_get_raw_stream(flipper_format);
 
     while(instance->worker_running) {
-        if(instance->attack == SubBruteAttackDeBruijn) {
-            // One continuous burst covers every code; transmit once and finish.
-            subbrute_worker_debruijn_transmit(instance);
-            local_state = SubBruteWorkerStateFinished;
-            break;
-        }
         stream_clean(stream);
         if(instance->attack == SubBruteAttackLoadFile) {
             subbrute_protocol_file_payload(

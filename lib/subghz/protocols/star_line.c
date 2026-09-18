@@ -460,7 +460,9 @@ void subghz_protocol_decoder_star_line_feed(void* context, bool level, uint32_t 
                     subghz_protocol_star_line_const.min_count_bit_for_found) &&
                    (instance->decoder.decode_count_bit <=
                     subghz_protocol_star_line_const.min_count_bit_for_found + 2)) {
-                    if(instance->generic.data != instance->decoder.decode_data) {
+                    if((instance->generic.data != instance->decoder.decode_data) &&
+                       (instance->decoder.decode_data != 0) &&
+                       (instance->decoder.decode_data != 0xFFFFFFFFFFFFFFFFULL)) {
                         instance->generic.data = instance->decoder.decode_data;
                         instance->generic.data_count_bit =
                             subghz_protocol_star_line_const.min_count_bit_for_found;

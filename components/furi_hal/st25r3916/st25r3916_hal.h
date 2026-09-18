@@ -48,9 +48,6 @@ void st25r3916_hal_set_tech(St25rTech tech);
 /** Non-destructive probe of the chip-identity register at 0x50. */
 bool st25r3916_hal_present(void);
 
-/** Force a full chip re-init on the next field_on (call after a possible replug). */
-void st25r3916_hal_reset_ready(void);
-
 /** Exact bit count of the most recent st25r3916_hal_transceive() RX frame
  *  (the last byte may be partial, e.g. a 4-bit WRITE/AUTH ACK). */
 uint16_t st25r3916_hal_last_rx_bits(void);

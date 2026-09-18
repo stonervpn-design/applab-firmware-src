@@ -45,7 +45,6 @@ APPS = [
     "passport",
     "nfc",
     "infrared",
-    "tagtinker",
     "lfrfid",
     "wlan",
     "nrf24",
@@ -57,8 +56,6 @@ APPS = [
     "device_name",
     "defender",
     "lan_attack",
-    "camera_hunter",
-    "doorbell_brute",
     "js_app",
     "js_event_loop",
     "js_gui",
@@ -110,17 +107,6 @@ APPS = [
     # ones are enabled — blackjack/dice/tamagotchi/t_embed_snake/flipper_xremote
     # duplicate globals/icons of other apps when compiled into one image (they are
     # designed as standalone .faps) and are left off.
-    "esubghz_chat",
-    "grove_i2c_scan",
-    "st25r_nfc_diag",
-    # Flipper Share NFC (ISO14443-3A device-to-device file transfer over the
-    # ST25R3916 backend, same HAL as st25r_nfc_diag/bus_tools above). Phase 4,
-    # 2026-07-31 — send+receive engine complete; on-device acceptance pending.
-    # NOTE: this appid was missing from APPS entirely until this point, so it
-    # had never actually been compiled into any firmware build (Tasks 1-4's
-    # "SENTINEL_OK / clean grep" results only proved the file list; the app
-    # source itself was never part of the build).
-    "nfc_share",
     "asteroids",
     "game15",
     "flipper_pong",
@@ -139,23 +125,26 @@ APPS = [
     # Offline SubGhz BinRAW classifier (github.com/maxwalks/subhound): reads
     # /ext/subghz/*.sub, 17-stage heuristic classifier; no live radio. src in flipper-app/.
     "subhound",
+    # De Bruijn fixed-code brute forcer (OpenSesame): one continuous OOK sweep covers
+    # all 2^N codes (Princeton/CAME/NICE/Holtek). applications_user/subghz_debruijn/.
+    "subghz_debruijn",
+    # RollBack / Rolling-PWN: capture a consecutive rolling-code sequence -> replay it
+    # to resync the receiver's counter. applications_user/subghz_rollback/.
+    "subghz_rollback",
 ]
 
 # Boards without NFC / IR hardware – exclude the corresponding apps
 _board = os.environ.get("FLIPPER_BOARD", "")
-# Build variant: "private" (default, everything) | "public" (car stuff stripped)
-# | "hardened" (full features + RE-friction compile flags via
-# sdkconfig.defaults.hardened). ONLY "public" strips the car stuff; hardened keeps
-# all features. Set by the build_m5stick_s3[_public|_hardened].bat scripts; also
-# mirrored into a PUBLIC_BUILD compile-def in the root CMakeLists.txt (strips the
-# Automotive registries for public). Here it drops the vehicle apps themselves
-# (see end of file), again for public only.
+# Build variant: "private" (default, everything) | "public" (car stuff stripped for
+# the applab public build service). Only "public" strips: it drops the car apps below
+# and the root CMakeLists.txt mirrors it into a PUBLIC_BUILD compile-def that compiles
+# out the Sub-GHz Automotive car-key decoder registry (lib/subghz/protocols/
+# protocol_items.c). Unset/"private" => unchanged, so normal momentum builds are the
+# same as before.
 _variant = os.environ.get("FLIPPER_VARIANT", "private").strip().lower()
 _is_public = _variant == "public"
-# StickS3 NFC = external M5Stack NFC Unit (ST25R3916 @0x50 on Grove/QWIIC), backend
-# verified working — so the core `nfc` app IS kept (matches Cardputer ADV).
-# T-Embed CC1101 phase 1 keeps NFC (PN532) off.
-_boards_without_nfc = {"lilygo_t_embed_cc1101"}
+# M5Stack StickS3 has no onboard NFC. T-Embed CC1101 phase 1 keeps NFC (PN532) off.
+_boards_without_nfc = {"m5stick_s3", "lilygo_t_embed_cc1101"}
 _boards_without_ir = set()
 # Neither Cardputer has an RDM6300/RFID front-end (BOARD_HAS_RFID=0); StickS3 has none
 # either; the T-Embed CC1101 has no 125 kHz front-end.
@@ -195,25 +184,40 @@ if _board in _boards_without_subghz:
 if _board in _boards_without_nrf24:
     APPS = [a for a in APPS if a not in ("nrf24",)]
 
-# M5Stack StickS3: no LoRa / GPS. Strip apps needing hardware this board lacks;
-# core services + WiFi/BLE + IR + SubGHz + nRF24 + RFID2 + games/tools + JS +
-# pocketlab/subhound remain.
+# ---------------------------------------------------------------------------
+# M5Stack StickS3 — STRIPPED build (user request 2026-09-03): keep ONLY the
+# user's SubGHz stuff, the nRF24 tool (better jammer, drives the RF-Pack "2in1"),
+# and the WiFi attack suite. Everything else (NFC/IR/BLE-spam/LoRa/RFID/games/
+# JS/tools) is dropped. Whitelist (not drop-list) so the intent is explicit and
+# the set can't silently grow. Board-gated → the Cardputer build is untouched.
+# ---------------------------------------------------------------------------
 if _board == "m5stick_s3":
-    _stick_drop = {
-        # NFC suite (nfc/mifare_fuzzer/nfc_magic/key_copier) KEPT on the StickS3:
-        # its external M5Stack NFC Unit (ST25R3916 @0x50 via Grove) backend is
-        # verified working, matching the Cardputer ADV. rfid2_reader (WS1850S)
-        # also kept. (2026-07-27 — public build now has the full NFC suite.)
-        # LoRa / GPS / mesh (Cap-LoRa-1262 addon)
-        "lora_monitor", "meshtastic_sniffer", "wardriver",
-        # external-HW / heavy
-        "wiegand", "doom", "wolf3d",
+    _stick_keep = {
+        # --- core services / OS: required to boot + link (started by the loader
+        #     or referenced by desktop/settings). Not user-facing "features". ---
+        "input", "notification", "gui", "dialogs", "locale", "cli", "cli_vcp",
+        "storage", "storage_start", "power", "power_start", "power_settings",
+        "loader", "loader_start", "notification_settings", "desktop", "archive",
+        "about", "bt_settings", "passport",
+        # --- SubGHz: the main app carries the user's automotive decoder registry
+        #     (lib/subghz/protocols) + all Sub-GHz protocols. ---
+        "subghz", "cli_subghz", "subghz_load_dangerous_settings",
+        # De Bruijn fixed-code brute forcer (OpenSesame-style OOK sweep).
+        "subghz_debruijn",
+        # RollBack / Rolling-PWN sequence capture + replay.
+        "subghz_rollback",
+        # --- WiFi attacks ---
+        "wlan",
+        # --- nRF24: jammer + MouseJack + spectrum, on the RF-Pack S3 (SPI3). ---
+        "nrf24",
+        # --- BadUSB + BadBLE: one app, two transports. USB HID rides the S3's
+        #     native USB (USB-C is on the S3 D+/D-, console is USB-Serial-JTAG,
+        #     so it can switch to a TinyUSB HID device like the Cardputer does);
+        #     BLE HID rides NimBLE (peripheral role already on for this board).
+        #     Pulls in ble_hid/ble_profile/assets as fap_libs. ---
+        "bad_usb",
     }
-    # CC1101 (RF Pack S3 on SPI3) is enabled and HW-verified, so the SubGHz-
-    # dependent apps link and run: radio_scanner, can_commander, and defender
-    # (its RF-jammer scene needs the subghz library) are all kept. (proto_pirate
-    # removed globally — car decoders are in the main SubGhz Automotive registry.)
-    APPS = [a for a in APPS if a not in _stick_drop]
+    APPS = [a for a in APPS if a in _stick_keep]
 
 # LilyGO T-Embed CC1101 (phase 1): real CC1101 + nRF24 + IR + SD + WiFi/BLE + games/
 # tools/JS all kept. Dropped: NFC/RFID apps (PN532 deferred to phase 2, no 125 kHz or
@@ -240,47 +244,23 @@ if _board in _boards_without_wolf3d:
     APPS = [a for a in APPS if a != "wolf3d"]
 
 # --- Build-variant filtering: ONLY public strips the "car stuff" ---
-# The Sub-GHz Automotive car-key decoder registries are compiled out via
-# PUBLIC_BUILD (root CMakeLists.txt + lib/subghz/protocols/protocol_items.c) for
-# the public variant. Here we also drop the vehicle app itself: CAN Commander
-# (OBD/CAN bus). Defender is NOT car-related (it's a general WiFi/BLE/SubGHz/nRF24/
-# drone RF attack detector) so it stays in the public build. Private and hardened
-# both keep everything.
+# The Sub-GHz Automotive car-key decoder registry is compiled out via PUBLIC_BUILD
+# (root CMakeLists.txt + lib/subghz/protocols/protocol_items.c) for the public variant.
+# Here we also drop the vehicle app itself: CAN Commander (OBD/CAN bus). Defender is
+# NOT car-related (general WiFi/BLE/SubGHz/nRF24/drone RF detector) so it stays. The
+# extra names are private-only tools kept out of public bins defensively even if they
+# aren't in this tree today. Private/hardened keep everything.
 if _is_public:
-    _car_apps = {"can_commander"}
+    _car_apps = {"can_commander", "tagtinker", "camera_hunter", "doorbell_brute"}
     APPS = [a for a in APPS if a not in _car_apps]
-    # TagTinker (IR ESL / e-ink shelf-label tool) is PRIVATE-only per the owner's
-    # scope; never ship it in public webflasher builds.
-    APPS = [a for a in APPS if a != "tagtinker"]
-    # Camera Hunter (Wi-Fi IP-camera discovery + default-credential testing) is
-    # PRIVATE-only: an aggressive authorized-audit tool kept out of public bins.
-    APPS = [a for a in APPS if a != "camera_hunter"]
-    # Doorbell Brute (Sub-GHz doorbell chime brute-forcer) is PRIVATE-only.
-    APPS = [a for a in APPS if a != "doorbell_brute"]
-    # Public build is meant to ship the community-published ProtoPirate app (its
-    # OWN decoders, from github.com/RocketGod-git/ProtoPirate) as a standalone
-    # MENUEXTERNAL app — none of the private in-tree SubGhz Automotive decoders.
-    # ProtoPirate is ported to a static protocol registry for this port (its
-    # plugin_manager is a stub / no FAP loader): the five RX registry plugins are
-    # compiled in and wired statically, TX/emulate disabled. See the app's
-    # application.fam + helpers/protopirate_protocol_plugin_host.c.
-    # Selection-only (owner directive 2026-08-10): add the upstream RocketGod
-    # ProtoPirate to a PUBLIC build ONLY when the applab request explicitly selects
-    # it (FLIPPER_APPS lists it) — never baked into the default full public bins.
-    _pp_sel = {a.strip() for a in os.environ.get("FLIPPER_APPS", "").split(",") if a.strip()}
-    if "proto_pirate" in _pp_sel and "proto_pirate" not in APPS:
-        APPS.append("proto_pirate")
 
-# ── On-demand build service: custom app subset ───────────────────────────────
+# -- On-demand build service (applab): custom app subset ----------------------------
 # FLIPPER_APPS = comma-separated appids to KEEP. Applied AFTER all board/variant
-# filtering, so a request can only NARROW the safe set — it can never re-enable an
-# app the board can't run or the variant strips (e.g. car apps in a public build).
-# Empty/unset keeps the full board+variant set, so normal builds are unaffected.
-# Core/system apps are not in APPS, so the firmware always boots regardless.
-# Only these user-selectable apps may be dropped by a custom build. Everything else
-# in APPS is a service / settings / system app that non-app code links against
-# (e.g. Settings -> power_reboot from the `power` service), so it's ALWAYS compiled —
-# dropping it breaks the link. This set mirrors the applab catalog.
+# filtering, so a request can only NARROW the safe set -- it can never re-enable an app
+# the board can't run or the variant strips. Empty/unset keeps the full board+variant
+# set, so normal builds are unaffected. Only these user-selectable apps may be dropped;
+# everything else in APPS is a service/settings/system app that other code links
+# against, so it is ALWAYS compiled. Mirrors the shared applab catalog.
 OPTIONAL_APPS = {
     "subghz", "subghz_remote", "esubghz_chat", "lora_monitor", "meshtastic_sniffer",
     "nfc", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
@@ -290,35 +270,17 @@ OPTIONAL_APPS = {
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
     "clock", "qrcode", "pocketlab", "defender",
 }
-# ── Hidden inter-app link dependencies ───────────────────────────────────────
-# A handful of apps' C sources call functions that are DEFINED in ANOTHER app's
-# translation unit (each app dir is its own compile target, so a symbol only exists
-# when its owning app is in the build). If a custom build keeps the dependent but
-# drops its provider, the firmware fails to LINK ("undefined reference"). So when a
-# selection names a dependent, transitively pull in the providers it needs BEFORE
-# narrowing — every custom subset then stays linkable no matter what the user picks.
-# A provider already removed by the board/variant filters above stays absent (adding
-# an absent appid to the wanted-set is a harmless no-op). Verified vs origin/main:
-#   defender  -> ble_spam : scenes/scene_ble_spam.c + scene_ble_tracker.c call
-#                           ble_walk_hal_*/ble_tracker_hal_* (ble_spam/ble_walk_hal.c,
-#                           ble_tracker_hal.c, tracker_follow.c).
-#   defender  -> subghz   : scenes/scene_jammer.c calls subghz_threshold_rssi_*
-#                           (subghz/helpers/subghz_threshold_rssi.c).
-#   defender  -> wlan     : defender_wifi_tap.c calls wlan_hal_* (wlan_app/wlan_hal.c).
-#   flippergotchi -> wlan : fg_attack.c/fg_capture.c/flippergotchi.c call
-#                           pmkid_*/wlan_hs_*/wlan_pcap_*/wlan_hal_* (wlan_app/).
-# NOTE: wiegand also needs gpio_catalog_* (gpio/gpio_pin_catalog.c) but the `gpio`
-# app is not in APPS on any board, so it cannot be auto-included here — see the
-# catalog notes; wiegand is handled separately.
+# Hidden inter-app link deps: a selected app whose C sources call functions DEFINED in
+# another app's translation unit needs that provider co-included or the link fails
+# ("undefined reference"). Pull providers in before narrowing. An absent provider is a
+# harmless no-op (adding an absent appid to the wanted-set changes nothing).
 APP_REQUIRES = {
     "defender": {"ble_spam", "subghz", "wlan"},
     "flippergotchi": {"wlan"},
 }
-
 _apps_env = os.environ.get("FLIPPER_APPS", "").strip()
 if _apps_env:
     _want = {a.strip() for a in _apps_env.split(",") if a.strip()}
-    # Transitively add each selected app's required providers so the link succeeds.
     _stack = list(_want)
     while _stack:
         _dep = _stack.pop()
@@ -326,8 +288,6 @@ if _apps_env:
             if _prov not in _want:
                 _want.add(_prov)
                 _stack.append(_prov)
-    # Keep every core app; among OPTIONAL apps keep only the requested ones
-    # (plus any providers pulled in just above).
     APPS = [a for a in APPS if a not in OPTIONAL_APPS or a in _want]
 
 EXTRA_EXT_APPS = []

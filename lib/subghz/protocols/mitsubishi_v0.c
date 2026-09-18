@@ -92,9 +92,14 @@ static void mitsubishi_publish_frame(SubGhzProtocolDecoderMitsubishi* instance) 
     memcpy(payload, instance->decode_data, sizeof(payload));
     mitsubishi_unscramble_payload(payload);
 
+    uint32_t serial = ((uint32_t)payload[0] << 24) | ((uint32_t)payload[1] << 16) |
+                      ((uint32_t)payload[2] << 8) | payload[3];
+    // Plausibility gate (no CRC exists): a real remote never has serial 0, so a
+    // zero serial is a framing artefact — drop it instead of publishing.
+    if(serial == 0) return;
+
     instance->generic.data_count_bit = instance->bit_count;
-    instance->generic.serial = ((uint32_t)payload[0] << 24) | ((uint32_t)payload[1] << 16) |
-                               ((uint32_t)payload[2] << 8) | payload[3];
+    instance->generic.serial = serial;
     instance->generic.cnt = ((uint16_t)payload[4] << 8) | payload[5];
     instance->generic.btn = payload[6];
 
@@ -169,7 +174,13 @@ void subghz_protocol_decoder_mitsubishi_feed(void* context, bool level, uint32_t
 
     switch(instance->decoder_state) {
     case MitsubishiDecoderStepReset:
-        if(level) {
+        // Sync hardening: only start on a plausible bit-pulse (te_short or
+        // te_long), never on an arbitrary high pulse. A genuine Mitsubishi frame
+        // — and the encoder's own output — always opens with a valid te high
+        // pulse, so noise bursts of arbitrary width are dropped at the first edge.
+        if(level &&
+           (pp_is_short(duration, &subghz_protocol_mitsubishi_const) ||
+            pp_is_long(duration, &subghz_protocol_mitsubishi_const))) {
             instance->decoder.te_last = duration;
             instance->decoder_state = MitsubishiDecoderStepDataCheck;
         }
@@ -232,6 +243,10 @@ SubGhzProtocolStatus subghz_protocol_decoder_mitsubishi_serialize(
             instance->generic.btn,
             instance->generic.cnt,
             0);
+        // Preserve the full on-air frame (incl. the 40-bit rolling hop in
+        // bytes 7-11) so the saved capture is not lossy; fields alone drop it.
+        flipper_format_write_hex(
+            flipper_format, "Data", instance->decode_data, MITSUBISHI_DATA_BYTES);
     }
     return ret;
 }
@@ -280,6 +295,8 @@ typedef struct SubGhzProtocolEncoderMitsubishi {
     SubGhzProtocolEncoderBase base;
     SubGhzProtocolBlockEncoder encoder;
     SubGhzBlockGeneric generic;
+    uint8_t raw[MITSUBISHI_DATA_BYTES];
+    bool has_raw;
 } SubGhzProtocolEncoderMitsubishi;
 
 // Inverse of mitsubishi_unscramble_payload(): turn the clear fields
@@ -324,16 +341,20 @@ static void
     const uint32_t te_short = subghz_protocol_mitsubishi_const.te_short;
     const uint32_t te_long = subghz_protocol_mitsubishi_const.te_long;
 
-    uint8_t payload[MITSUBISHI_DATA_BYTES] = {0};
-    payload[0] = (uint8_t)(instance->generic.serial >> 24);
-    payload[1] = (uint8_t)(instance->generic.serial >> 16);
-    payload[2] = (uint8_t)(instance->generic.serial >> 8);
-    payload[3] = (uint8_t)(instance->generic.serial);
-    payload[4] = (uint8_t)(instance->generic.cnt >> 8);
-    payload[5] = (uint8_t)(instance->generic.cnt);
-    payload[6] = instance->generic.btn;
-
-    mitsubishi_scramble_payload(payload);
+    uint8_t payload[MITSUBISHI_DATA_BYTES];
+    if(instance->has_raw) {
+        memcpy(payload, instance->raw, MITSUBISHI_DATA_BYTES);
+    } else {
+        memset(payload, 0, sizeof(payload));
+        payload[0] = (uint8_t)(instance->generic.serial >> 24);
+        payload[1] = (uint8_t)(instance->generic.serial >> 16);
+        payload[2] = (uint8_t)(instance->generic.serial >> 8);
+        payload[3] = (uint8_t)(instance->generic.serial);
+        payload[4] = (uint8_t)(instance->generic.cnt >> 8);
+        payload[5] = (uint8_t)(instance->generic.cnt);
+        payload[6] = instance->generic.btn;
+        mitsubishi_scramble_payload(payload);
+    }
 
     LevelDuration* up = instance->encoder.upload;
     const size_t cap = MITSUBISHI_UPLOAD_CAPACITY;
@@ -379,6 +400,12 @@ SubGhzProtocolStatus
     instance->generic.btn = (uint8_t)btn;
 
     instance->encoder.repeat = pp_encoder_read_repeat(flipper_format, 10);
+
+    flipper_format_rewind(flipper_format);
+
+    instance->has_raw =
+
+        flipper_format_read_hex(flipper_format, "Data", instance->raw, MITSUBISHI_DATA_BYTES);
 
     pp_encoder_buffer_ensure(instance, MITSUBISHI_UPLOAD_CAPACITY);
     subghz_protocol_encoder_mitsubishi_get_upload(instance);

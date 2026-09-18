@@ -8,16 +8,15 @@
 
 #define NRF24_JAM_CFG_PATH    INT_PATH(".nrf24jam.cfg")
 #define NRF24_JAM_CFG_MAGIC   (0x4E) /* 'N' — unused by other settings */
-#define NRF24_JAM_CFG_VERSION (8) /* v8: concentrated channel maps to match standalone WS app (BT/Zigbee/WiFi narrowed, Full/Drone→ISM 0-83); v7 clean defaults */
+#define NRF24_JAM_CFG_VERSION (7) /* v7: added BT Classic 2 preset (FAP replica) → preset count changed */
 
 /* Persisted blob: WiFi/Activity get one slot each, while the Protocol source
- * keeps a separate slot per preset. force_flood is a global override (Turbo for
- * everything). Append-only — bump NRF24_JAM_CFG_VERSION on any layout change. */
+ * keeps a separate slot per preset (each protocol has its own optimal strategy:
+ * BLE-Adv wants a parked CW carrier, Drone wants Turbo + random hop, ...). */
 typedef struct {
     Nrf24JamConfig protocol[Nrf24JamPresetCount];
     Nrf24JamConfig wifi;
     Nrf24JamConfig activity;
-    uint8_t force_flood; /* 0 = per-preset strategy, 1 = force Turbo everywhere */
 } Nrf24JamSettings;
 
 static Nrf24JamSettings g_settings;
@@ -25,10 +24,6 @@ static uint32_t g_generation = 0;
 
 /* Apply common defaults (PA max / 2 Mbps / burst 6) plus the given strategy,
  * hop and dwell to a single config slot. */
-/* Max-power flood default: PA MAX, 2 Mbps (widest per-packet channel occupancy),
- * burst 12 (longer back-to-back TX per channel = higher on-air duty cycle). */
-#define NRF24_JAM_DEFAULT_BURST 12
-
 static void nrf24_jam_config_fill(
     Nrf24JamConfig* c,
     uint8_t strategy,
@@ -37,7 +32,7 @@ static void nrf24_jam_config_fill(
     c->pa_level = Nrf24Pa_Max;
     c->data_rate = Nrf24Rate_2M;
     c->strategy = strategy;
-    c->burst_count = NRF24_JAM_DEFAULT_BURST;
+    c->burst_count = 6;
     c->random_hop = random_hop;
     c->dwell_us = dwell_us;
 }
@@ -54,10 +49,8 @@ static void nrf24_jam_config_defaults(void) {
             nrf24_jam_preset_default_hop((Nrf24JamPreset)p),
             nrf24_jam_preset_default_dwell_us((Nrf24JamPreset)p));
     }
-    /* WiFi + Activity both flood by default now (max jamming power). */
-    nrf24_jam_config_fill(&g_settings.wifi, Nrf24StrategyTurbo, 1, 200);
+    nrf24_jam_config_fill(&g_settings.wifi, Nrf24StrategyCw, 0, 200);
     nrf24_jam_config_fill(&g_settings.activity, Nrf24StrategyTurbo, 1, 200);
-    g_settings.force_flood = 0; /* presets already flood; override off by default */
 }
 
 static void nrf24_jam_config_clamp(Nrf24JamConfig* c) {
@@ -127,15 +120,6 @@ uint32_t nrf24_jam_config_generation(void) {
 }
 
 void nrf24_jam_config_touch(void) {
-    g_generation++;
-}
-
-uint8_t nrf24_jam_config_force_flood_get(void) {
-    return g_settings.force_flood ? 1 : 0;
-}
-
-void nrf24_jam_config_force_flood_set(uint8_t on) {
-    g_settings.force_flood = on ? 1 : 0;
     g_generation++;
 }
 

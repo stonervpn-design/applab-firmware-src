@@ -1,5 +1,4 @@
 #include "subbrute_protocols.h"
-#include "subbrute_debruijn.h"
 // floor() not available due to math.h shadowing - use integer division instead
 #define subbrute_floor_uint64(x) ((uint64_t)(x))
 
@@ -486,18 +485,6 @@ const SubBruteProtocol subbrute_protocol_holtek_12bit_am_915 = {
 const SubBruteProtocol subbrute_protocol_load_file =
     {0, 0, 0, 3, 0, FuriHalSubGhzPresetOok650Async, UnknownFileProtocol};
 
-// De Bruijn: single continuous OOK burst. `bits` is the default n (overridden
-// by the menu n-selector via worker init); `repeat` doubles as the menu row's
-// default/min n. `te` is the per-bit duration. Transmitted RAW, so file = RAW.
-const SubBruteProtocol subbrute_protocol_debruijn = {
-    433920000,
-    SUBBRUTE_DEBRUIJN_MIN_TX_N,
-    250,
-    SUBBRUTE_DEBRUIJN_MIN_TX_N,
-    0,
-    FuriHalSubGhzPresetOok650Async,
-    RAWFileProtocol};
-
 static const char* subbrute_protocol_names[] = {
     [SubBruteAttackCAME12bit303] = "CAME 12bit 303MHz",
     [SubBruteAttackCAME12bit307] = "CAME 12bit 307MHz",
@@ -542,7 +529,6 @@ static const char* subbrute_protocol_names[] = {
     [SubBruteAttackPT226224bit430] = "PT2262 24bit 430MHz",
     [SubBruteAttackPT226224bit4305] = "PT2262 24bit 430.5MHz",
     [SubBruteAttackPT226224bit433] = "PT2262 24bit 433MHz",
-    [SubBruteAttackDeBruijn] = "De Bruijn OOK",
     [SubBruteAttackLoadFile] = "BF existing dump",
     [SubBruteAttackTotalCount] = "Total Count",
 };
@@ -602,7 +588,6 @@ const SubBruteProtocol* subbrute_protocol_registry[] = {
     [SubBruteAttackPT226224bit430] = &subbrute_protocol_pt2262_24bit_430,
     [SubBruteAttackPT226224bit4305] = &subbrute_protocol_pt2262_24bit_430_5,
     [SubBruteAttackPT226224bit433] = &subbrute_protocol_pt2262_24bit_433,
-    [SubBruteAttackDeBruijn] = &subbrute_protocol_debruijn,
     [SubBruteAttackLoadFile] = &subbrute_protocol_load_file};
 
 static const char* subbrute_protocol_file_types[] = {
@@ -1009,9 +994,6 @@ uint64_t
     uint64_t max_value;
     if(attack_type == SubBruteAttackLoadFile) {
         max_value = two_bytes ? 0xFFFF : 0xFF;
-    } else if(attack_type == SubBruteAttackDeBruijn) {
-        // Single continuous burst covers every code; no per-code stepping.
-        max_value = 1;
     } else if(
         attack_type == SubBruteAttackSMC532624bit330 ||
         attack_type == SubBruteAttackSMC532624bit433 ||

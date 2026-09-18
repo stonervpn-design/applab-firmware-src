@@ -39,8 +39,6 @@
 
 #include "mitsubishi_v1.h"
 
-#include <lib/toolbox/manchester_encoder.h>
-
 #include "../blocks/const.h"
 #include "../blocks/decoder.h"
 #include "../blocks/encoder.h"
@@ -89,8 +87,6 @@ struct SubGhzProtocolEncoderMitsubishiV1 {
     SubGhzProtocolEncoderBase base;
     SubGhzProtocolBlockEncoder encoder;
     SubGhzBlockGeneric generic;
-
-    uint64_t hop_40;
 };
 
 // ============================================================================
@@ -197,32 +193,19 @@ const SubGhzProtocolDecoder subghz_protocol_mitsubishi_v1_decoder = {
     .get_generic = subghz_protocol_decoder_mitsubishi_v1_get_generic,
 };
 
-// Encoder (replay). 2-FSK Manchester (G.E. Thomas), te_short=200, te_long=400.
-// The stateless decoder reads each cell's LEVEL, which is the COMPLEMENT of the
-// standard Flipper Manchester encoder's convention, so the frame bits are
-// inverted before encoding (validated by round-trip). One leading bit absorbs
-// the encoder's leading half-bit. Reproduces the exact 96-bit frame
-// [Sync:32][Fix:8][Btn:4][Cnt:10][Hop:42] the decoder's sync search locks onto.
-static void* subghz_protocol_encoder_mitsubishi_v1_alloc(SubGhzEnvironment* environment);
-static void subghz_protocol_encoder_mitsubishi_v1_free(void* context);
-static SubGhzProtocolStatus
-    subghz_protocol_encoder_mitsubishi_v1_deserialize(void* context, FlipperFormat* flipper_format);
-static void subghz_protocol_encoder_mitsubishi_v1_stop(void* context);
-static LevelDuration subghz_protocol_encoder_mitsubishi_v1_yield(void* context);
-
 const SubGhzProtocolEncoder subghz_protocol_mitsubishi_v1_encoder = {
-    .alloc = subghz_protocol_encoder_mitsubishi_v1_alloc,
-    .free = subghz_protocol_encoder_mitsubishi_v1_free,
-    .deserialize = subghz_protocol_encoder_mitsubishi_v1_deserialize,
-    .stop = subghz_protocol_encoder_mitsubishi_v1_stop,
-    .yield = subghz_protocol_encoder_mitsubishi_v1_yield,
+    .alloc = NULL,
+    .free = NULL,
+    .deserialize = NULL,
+    .stop = NULL,
+    .yield = NULL,
 };
 
 const SubGhzProtocol subghz_protocol_mitsubishi_v1 = {
     .name = SUBGHZ_PROTOCOL_MITSUBISHI_V1_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save,
     .decoder = &subghz_protocol_mitsubishi_v1_decoder,
     .encoder = &subghz_protocol_mitsubishi_v1_encoder,
 };
@@ -405,157 +388,4 @@ void subghz_protocol_decoder_mitsubishi_v1_get_string(void* context, FuriString*
         mitsubishi_v1_btn_name(instance->generic.btn),
         (unsigned long)instance->generic.cnt,
         (unsigned long long)instance->hop_40);
-}
-
-// ============================================================================
-// ENCODER (replay)
-// ============================================================================
-
-// [1 lead][ (1,0)x8 preamble ][ 96 data bits ] Manchester, +2/bit worst case,
-// +finish, +trailing gap. 113 source bits -> < 240 entries.
-#define MITSUBISHI_V1_ENCODER_UPLOAD_MAX 256
-#define MITSUBISHI_V1_PREAMBLE_PAIRS     8
-
-static LevelDuration mitsubishi_v1_manchester_to_ld(ManchesterEncoderResult result) {
-    uint32_t te_short = subghz_protocol_mitsubishi_v1_const.te_short;
-    uint32_t te_long = subghz_protocol_mitsubishi_v1_const.te_long;
-    switch(result) {
-    case ManchesterEncoderResultShortLow:
-        return level_duration_make(false, te_short);
-    case ManchesterEncoderResultLongLow:
-        return level_duration_make(false, te_long);
-    case ManchesterEncoderResultLongHigh:
-        return level_duration_make(true, te_long);
-    case ManchesterEncoderResultShortHigh:
-    default:
-        return level_duration_make(true, te_short);
-    }
-}
-
-static void* subghz_protocol_encoder_mitsubishi_v1_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    SubGhzProtocolEncoderMitsubishiV1* instance =
-        malloc(sizeof(SubGhzProtocolEncoderMitsubishiV1));
-    instance->base.protocol = &subghz_protocol_mitsubishi_v1;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 3;
-    instance->encoder.size_upload = MITSUBISHI_V1_ENCODER_UPLOAD_MAX;
-    instance->encoder.upload =
-        malloc(MITSUBISHI_V1_ENCODER_UPLOAD_MAX * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    instance->hop_40 = 0;
-    return instance;
-}
-
-static void subghz_protocol_encoder_mitsubishi_v1_free(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderMitsubishiV1* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-// Emit one INVERTED Manchester bit (decoder reads level = complement of encoder).
-static void mitsubishi_v1_emit_bit(
-    SubGhzProtocolEncoderMitsubishiV1* instance,
-    ManchesterEncoderState* enc,
-    size_t* index,
-    bool bit) {
-    ManchesterEncoderResult result;
-    bool inv = !bit;
-    if(!manchester_encoder_advance(enc, inv, &result)) {
-        if(*index < MITSUBISHI_V1_ENCODER_UPLOAD_MAX)
-            instance->encoder.upload[(*index)++] = mitsubishi_v1_manchester_to_ld(result);
-        manchester_encoder_advance(enc, inv, &result);
-    }
-    if(*index < MITSUBISHI_V1_ENCODER_UPLOAD_MAX)
-        instance->encoder.upload[(*index)++] = mitsubishi_v1_manchester_to_ld(result);
-}
-
-static void subghz_protocol_encoder_mitsubishi_v1_get_upload(
-    SubGhzProtocolEncoderMitsubishiV1* instance) {
-    furi_assert(instance);
-    size_t index = 0;
-
-    ManchesterEncoderState enc;
-    manchester_encoder_reset(&enc);
-
-    // Leading bit (absorbs the encoder's first half-bit so the frame aligns).
-    mitsubishi_v1_emit_bit(instance, &enc, &index, false);
-
-    // Preamble: alternating 1,0 pairs establish 2-FSK Manchester phase.
-    for(int i = 0; i < MITSUBISHI_V1_PREAMBLE_PAIRS; i++) {
-        mitsubishi_v1_emit_bit(instance, &enc, &index, true);
-        mitsubishi_v1_emit_bit(instance, &enc, &index, false);
-    }
-
-    // 96-bit frame: bits[0:63]=generic.data, bits[64:95]=hop_40 low 32 bits.
-    for(int i = 63; i >= 0; i--) {
-        mitsubishi_v1_emit_bit(instance, &enc, &index, (instance->generic.data >> i) & 1);
-    }
-    uint32_t hop_lo32 = (uint32_t)(instance->hop_40 & 0xFFFFFFFF);
-    for(int i = 31; i >= 0; i--) {
-        mitsubishi_v1_emit_bit(instance, &enc, &index, (hop_lo32 >> i) & 1);
-    }
-
-    if(index < MITSUBISHI_V1_ENCODER_UPLOAD_MAX)
-        instance->encoder.upload[index++] =
-            mitsubishi_v1_manchester_to_ld(manchester_encoder_finish(&enc));
-
-    // Inter-frame gap (> te_long + te_delta) so the decoder ends the frame.
-    if(index < MITSUBISHI_V1_ENCODER_UPLOAD_MAX)
-        instance->encoder.upload[index++] = level_duration_make(false, 3000);
-
-    instance->encoder.size_upload = index;
-}
-
-static SubGhzProtocolStatus subghz_protocol_encoder_mitsubishi_v1_deserialize(
-    void* context,
-    FlipperFormat* flipper_format) {
-    furi_assert(context);
-    SubGhzProtocolEncoderMitsubishiV1* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        res = subghz_block_generic_deserialize_check_count_bit(
-            &instance->generic,
-            flipper_format,
-            subghz_protocol_mitsubishi_v1_const.min_count_bit_for_found);
-        if(res != SubGhzProtocolStatusOk) break;
-
-        uint32_t hop_hi = 0, hop_lo = 0;
-        flipper_format_read_uint32(flipper_format, "Hop_Hi", &hop_hi, 1);
-        flipper_format_read_uint32(flipper_format, "Hop_Lo", &hop_lo, 1);
-        instance->hop_40 = ((uint64_t)hop_hi << 16) | hop_lo;
-
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        subghz_protocol_encoder_mitsubishi_v1_get_upload(instance);
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-        res = SubGhzProtocolStatusOk;
-    } while(false);
-    return res;
-}
-
-static void subghz_protocol_encoder_mitsubishi_v1_stop(void* context) {
-    SubGhzProtocolEncoderMitsubishiV1* instance = context;
-    instance->encoder.is_running = false;
-}
-
-static LevelDuration subghz_protocol_encoder_mitsubishi_v1_yield(void* context) {
-    SubGhzProtocolEncoderMitsubishiV1* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
 }

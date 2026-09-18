@@ -165,7 +165,6 @@ uint8_t cc1101_read_fifo(const FuriHalSpiBusHandle* handle, uint8_t* data, uint8
     uint8_t buff_trx[2];
     buff_trx[0] = CC1101_FIFO | CC1101_READ | CC1101_BURST;
 
-    // First access reads the status byte + the packet length (first FIFO byte).
     cc1101_spi_trx(handle, buff_trx, buff_trx, 2);
 
     // Check that the packet is placed in the receive buffer
@@ -174,17 +173,7 @@ uint8_t cc1101_read_fifo(const FuriHalSpiBusHandle* handle, uint8_t* data, uint8
     } else {
         *size = buff_trx[1];
     }
-
-    /* ESP32 port fix: furi_hal_spi toggles CS per transfer, so the FIFO burst is
-     * NOT held open across the length read above and the payload read. The payload
-     * read must therefore re-send the FIFO burst-read address in its own transfer;
-     * otherwise (as upstream does with a bare bus_trx) the CC1101 returns its
-     * status byte (0x0F) for every byte instead of the FIFO contents. */
-    uint8_t fifo_buff[1 + 64];
-    fifo_buff[0] = CC1101_FIFO | CC1101_READ | CC1101_BURST;
-    memset(&fifo_buff[1], 0, *size);
-    cc1101_spi_trx(handle, fifo_buff, fifo_buff, (uint8_t)(1 + *size));
-    memcpy(data, &fifo_buff[1], *size);
+    furi_hal_spi_bus_trx(handle, NULL, data, *size, CC1101_TIMEOUT);
 
     return *size;
 }

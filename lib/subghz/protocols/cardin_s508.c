@@ -1,7 +1,6 @@
 #include "cardin_s508.h"
 
 #include <lib/toolbox/manchester_decoder.h>
-#include <lib/toolbox/manchester_encoder.h>
 #include "../blocks/const.h"
 #include "../blocks/decoder.h"
 #include "../blocks/encoder.h"
@@ -82,31 +81,20 @@ const SubGhzProtocolDecoder subghz_protocol_cardin_s508_decoder = {
     .get_string_brief = NULL,
 };
 
-/* Encoder (replay). The rolling AES-128 payload cannot be predicted, so this is
- * a faithful REPLAY of a captured 140-bit frame (12-bit sync + 128-bit payload):
- * it will not roll a receiver forward, but it reproduces the exact 2-FSK
- * Manchester waveform the decoder accepts, so encode->decode is a bit-exact
- * round-trip of the stored 128-bit codeword (data_2:hi + data:lo). */
-static void* subghz_protocol_encoder_cardin_s508_alloc(SubGhzEnvironment* environment);
-static void subghz_protocol_encoder_cardin_s508_free(void* context);
-static SubGhzProtocolStatus
-    subghz_protocol_encoder_cardin_s508_deserialize(void* context, FlipperFormat* flipper_format);
-static void subghz_protocol_encoder_cardin_s508_stop(void* context);
-static LevelDuration subghz_protocol_encoder_cardin_s508_yield(void* context);
-
+/* Decode-only: no encoder. Mirrors the iDo 117/111 decode-only protocol. */
 const SubGhzProtocolEncoder subghz_protocol_cardin_s508_encoder = {
-    .alloc = subghz_protocol_encoder_cardin_s508_alloc,
-    .free = subghz_protocol_encoder_cardin_s508_free,
-    .deserialize = subghz_protocol_encoder_cardin_s508_deserialize,
-    .stop = subghz_protocol_encoder_cardin_s508_stop,
-    .yield = subghz_protocol_encoder_cardin_s508_yield,
+    .alloc = NULL,
+    .free = NULL,
+    .deserialize = NULL,
+    .stop = NULL,
+    .yield = NULL,
 };
 
 const SubGhzProtocol subghz_protocol_cardin_s508 = {
     .name = SUBGHZ_PROTOCOL_CARDIN_S508_NAME,
     .type = SubGhzProtocolTypeDynamic,
     .flag = SubGhzProtocolFlag_868 | SubGhzProtocolFlag_FM | SubGhzProtocolFlag_Decodable |
-            SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Save,
     .decoder = &subghz_protocol_cardin_s508_decoder,
     .encoder = &subghz_protocol_cardin_s508_encoder,
 };
@@ -317,169 +305,4 @@ void subghz_protocol_decoder_cardin_s508_get_string(void* context, FuriString* o
         (uint32_t)(instance->generic.data_2 & 0xFFFFFFFF),
         (uint32_t)(instance->generic.data >> 32),
         (uint32_t)(instance->generic.data & 0xFFFFFFFF));
-}
-
-/* ------------------------------- encoder -------------------------------- */
-
-/* [1 lead][ (1,0)x12 preamble ][ 12-bit sync ][ 128-bit payload ] Manchester at
- * te 100/200; worst case ~2 entries/bit over 165 source bits + finish + gap. */
-#define CARDIN_S508_ENCODER_UPLOAD_MAX 384
-#define CARDIN_S508_TE_SHORT           100u
-#define CARDIN_S508_TE_LONG            200u
-#define CARDIN_S508_PREAMBLE_PAIRS     12
-
-static LevelDuration cardin_s508_manchester_to_ld(ManchesterEncoderResult result) {
-    switch(result) {
-    case ManchesterEncoderResultShortLow:
-        return level_duration_make(false, CARDIN_S508_TE_SHORT);
-    case ManchesterEncoderResultLongLow:
-        return level_duration_make(false, CARDIN_S508_TE_LONG);
-    case ManchesterEncoderResultLongHigh:
-        return level_duration_make(true, CARDIN_S508_TE_LONG);
-    case ManchesterEncoderResultShortHigh:
-    default:
-        return level_duration_make(true, CARDIN_S508_TE_SHORT);
-    }
-}
-
-static void* subghz_protocol_encoder_cardin_s508_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    SubGhzProtocolEncoderCardinS508* instance =
-        malloc(sizeof(SubGhzProtocolEncoderCardinS508));
-    instance->base.protocol = &subghz_protocol_cardin_s508;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 3;
-    instance->encoder.size_upload = CARDIN_S508_ENCODER_UPLOAD_MAX;
-    instance->encoder.upload =
-        malloc(CARDIN_S508_ENCODER_UPLOAD_MAX * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    return instance;
-}
-
-static void subghz_protocol_encoder_cardin_s508_free(void* context) {
-    furi_assert(context);
-    SubGhzProtocolEncoderCardinS508* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-static void cardin_s508_emit_bit(
-    SubGhzProtocolEncoderCardinS508* instance,
-    ManchesterEncoderState* enc,
-    size_t* index,
-    bool bit) {
-    ManchesterEncoderResult result;
-    if(!manchester_encoder_advance(enc, bit, &result)) {
-        if(*index < CARDIN_S508_ENCODER_UPLOAD_MAX)
-            instance->encoder.upload[(*index)++] = cardin_s508_manchester_to_ld(result);
-        manchester_encoder_advance(enc, bit, &result);
-    }
-    if(*index < CARDIN_S508_ENCODER_UPLOAD_MAX)
-        instance->encoder.upload[(*index)++] = cardin_s508_manchester_to_ld(result);
-}
-
-static void
-    subghz_protocol_encoder_cardin_s508_get_upload(SubGhzProtocolEncoderCardinS508* instance) {
-    furi_assert(instance);
-    size_t index = 0;
-
-    ManchesterEncoderState enc;
-    manchester_encoder_reset(&enc);
-
-    /* Leading bit absorbs the encoder's first half-bit so the sync aligns. */
-    cardin_s508_emit_bit(instance, &enc, &index, true);
-
-    /* Preamble: alternating constant Manchester bits establish phase. */
-    for(int i = 0; i < CARDIN_S508_PREAMBLE_PAIRS; i++) {
-        cardin_s508_emit_bit(instance, &enc, &index, true);
-        cardin_s508_emit_bit(instance, &enc, &index, false);
-    }
-
-    /* 12-bit sync 110011110100 (0x0CF4), MSB first. */
-    for(int i = 11; i >= 0; i--) {
-        cardin_s508_emit_bit(instance, &enc, &index, (CARDIN_S508_SYNC >> i) & 1);
-    }
-
-    /* 128-bit payload, MSB first: high 64 bits (data_2) then low 64 bits (data),
-     * matching the decoder's shift order (first bit ends up as data_2 MSB). */
-    for(int i = 63; i >= 0; i--) {
-        cardin_s508_emit_bit(instance, &enc, &index, (instance->generic.data_2 >> i) & 1);
-    }
-    for(int i = 63; i >= 0; i--) {
-        cardin_s508_emit_bit(instance, &enc, &index, (instance->generic.data >> i) & 1);
-    }
-
-    if(index < CARDIN_S508_ENCODER_UPLOAD_MAX)
-        instance->encoder.upload[index++] =
-            cardin_s508_manchester_to_ld(manchester_encoder_finish(&enc));
-
-    /* Inter-frame gap: out-of-band so the decoder re-syncs for the next repeat. */
-    if(index < CARDIN_S508_ENCODER_UPLOAD_MAX)
-        instance->encoder.upload[index++] = level_duration_make(false, 5000);
-
-    instance->encoder.size_upload = index;
-}
-
-static SubGhzProtocolStatus subghz_protocol_encoder_cardin_s508_deserialize(
-    void* context,
-    FlipperFormat* flipper_format) {
-    furi_assert(context);
-    SubGhzProtocolEncoderCardinS508* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        res = subghz_block_generic_deserialize_check_count_bit(
-            &instance->generic,
-            flipper_format,
-            subghz_protocol_cardin_s508_const.min_count_bit_for_found);
-        if(res != SubGhzProtocolStatusOk) break;
-
-        /* High 64 payload bits live in the extra "Data" field (see serialize). */
-        if(!flipper_format_rewind(flipper_format)) {
-            FURI_LOG_E(TAG, "Rewind error");
-            res = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-        uint8_t key_data[sizeof(uint64_t)] = {0};
-        if(!flipper_format_read_hex(flipper_format, "Data", key_data, sizeof(uint64_t))) {
-            FURI_LOG_E(TAG, "Missing Data");
-            res = SubGhzProtocolStatusErrorParserOthers;
-            break;
-        }
-        instance->generic.data_2 = 0;
-        for(uint8_t i = 0; i < sizeof(uint64_t); i++) {
-            instance->generic.data_2 = instance->generic.data_2 << 8 | key_data[i];
-        }
-
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        subghz_protocol_encoder_cardin_s508_get_upload(instance);
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-        res = SubGhzProtocolStatusOk;
-    } while(false);
-    return res;
-}
-
-static void subghz_protocol_encoder_cardin_s508_stop(void* context) {
-    SubGhzProtocolEncoderCardinS508* instance = context;
-    instance->encoder.is_running = false;
-}
-
-static LevelDuration subghz_protocol_encoder_cardin_s508_yield(void* context) {
-    SubGhzProtocolEncoderCardinS508* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
 }

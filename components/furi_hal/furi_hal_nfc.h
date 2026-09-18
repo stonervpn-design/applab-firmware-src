@@ -104,38 +104,11 @@ typedef enum {
 FuriHalNfcError furi_hal_nfc_init(void);
 
 /**
- * @brief Re-run frontend detection to pick up a module hot-plugged after boot.
- *        No-op if a frontend is already active. Safe to call repeatedly.
- * @returns FuriHalNfcErrorNone if a frontend is now ready, else an error.
- */
-FuriHalNfcError furi_hal_nfc_reprobe(void);
-
-/**
- * @brief Force a fresh frontend detection even if one is already active. Used on NFC
- *        app launch so a module swapped since boot (PN532 <-> ST25R3916) is picked up
- *        without a reboot. Call only when no NFC operation is in progress.
- * @returns FuriHalNfcErrorNone if a frontend is now ready, else an error.
- */
-FuriHalNfcError furi_hal_nfc_rescan(void);
-
-/**
  * @brief Check whether the NFC HAL was properly initialised and is ready.
  *
  * @returns FuriHalNfcErrorNone if ready, any other error code if not ready.
  */
 FuriHalNfcError furi_hal_nfc_is_hal_ready(void);
-
-/**
- * @brief Whether the active NFC backend can transmit RAW Crypto1 frames.
- *
- * True iff the active backend can send encrypted-parity, no-CRC Crypto1 frames —
- * i.e. the ST25R3916 custom-parity path. Required for the nested/darkside MIFARE
- * Classic key-recovery attacks. False on PN532 (InDataExchange cannot emit raw
- * Crypto1) and when no frontend is up.
- *
- * @returns true if raw Crypto1 TX is available, false otherwise.
- */
-bool furi_hal_nfc_supports_raw_crypto1(void);
 
 /**
  * @brief Exclusively take over the NFC HAL and associated hardware.

@@ -8,17 +8,7 @@ App(
     stack_size=5 * 1024,
     order=30,
     resources="resources",
-    # supported-card parsers (plugins/supported_cards/*.c) are compiled IN here so
-    # they resolve via the static registry (helpers/nfc_supported_cards_static.c)
-    # instead of the runtime .fal loader, which no-PSRAM boards skip. They keep
-    # their PLUGIN .fal declarations below too (separate link unit, no conflict).
-    # ndef.c / saflok.c are multi-instantiated (need a protocol #define); they are
-    # compiled only via the generated per-instance wrappers in
-    # helpers/static_parser_variants/, so exclude the raw sources from the glob.
-    # api/{gallagher,mosgortrans}_util.c are shared helpers the compiled-in parsers
-    # link against directly (were never compiled on this port, so those parsers
-    # never worked even as .fal). Keep only the .fal-export table (.cpp) excluded.
-    sources=["*.c*", "!plugins/supported_cards/ndef.c", "!plugins/supported_cards/saflok.c", "!nfc_cli.c", "!cli", "!api/nfc_app_api_table.cpp", "!lib"],
+    sources=["*.c*", "!plugins", "!nfc_cli.c", "!cli", "!api", "!lib"],
     fap_private_libs=[
         Lib(
             name="crapto1",

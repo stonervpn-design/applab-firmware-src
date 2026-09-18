@@ -33,12 +33,12 @@ SubGhzTxRx* subghz_txrx_alloc(void);
  */
 void subghz_txrx_free(SubGhzTxRx* instance);
 
-/** Select the resident protocol set: 0=general, 1=Cars 1, 2=Cars 2 (the automotive
- *  ProtoPirate decoders, split in two halves). Rebuilds the receiver — call with RX
- *  stopped. The no-PSRAM board can't hold more than one set resident at once.
+/** Swap the resident protocol set between general and automotive (ProtoPirate
+ *  car decoders). Rebuilds the receiver — call with RX stopped. Needed because
+ *  the no-PSRAM board can't hold both decoder sets resident at once.
  */
-void subghz_txrx_set_car_mode(SubGhzTxRx* instance, uint8_t mode);
-uint8_t subghz_txrx_get_car_mode(SubGhzTxRx* instance);
+void subghz_txrx_set_automotive_mode(SubGhzTxRx* instance, bool enabled);
+bool subghz_txrx_get_automotive_mode(SubGhzTxRx* instance);
 
 /**
  * Check if the database is loaded

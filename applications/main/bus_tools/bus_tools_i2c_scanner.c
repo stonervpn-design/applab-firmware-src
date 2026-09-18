@@ -15,15 +15,14 @@ static const struct {
     {0x18, "ADXL345 Accelerometer"},
     {0x19, "ADXL345 Alt"},
     {0x20, "MCP23017 I/O Expander"},
-    {0x24, "PN532 NFC"}, /* PN532 breakout in I2C mode (NFC frontend) */
     {0x27, "PCF8574 I/O Expander"},
-    {0x28, "WS1850S NFC (M5 RFID2)"}, /* M5Stack RFID2 / WS1850S NFC frontend */
+    {0x28, "BMP280 Barometer"},
     {0x29, "TSL2561 Light Sensor"},
     {0x38, "APDS9960 Proximity"},
     {0x3C, "OLED SSD1306 128x64"},
     {0x3D, "OLED SSD1306 128x32"},
     {0x48, "ADS1115 ADC"},
-    {0x50, "ST25R3916 NFC / EEPROM"}, /* M5 NFC2 (ST25R3916) — also 24C32 EEPROM addr */
+    {0x50, "EEPROM 24C32"},
     {0x51, "EEPROM 24C32 Alt"},
     {0x52, "EEPROM 24C32 Alt2"},
     {0x53, "EEPROM 24C32 Alt3"},

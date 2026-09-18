@@ -4,7 +4,6 @@
 #include "furi_hal_display.h"
 #include "furi_hal_light.h"
 #include "furi_hal_bt.h"
-#include "furi_hal.h"
 #include "boards/board.h"
 
 #include <math.h>
@@ -16,8 +15,6 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_sleep.h>
-#include <esp_pm.h>
-#include <sdkconfig.h>
 #include <soc/soc_caps.h>
 #include <driver/i2c.h>
 #include <esp_system.h>
@@ -344,91 +341,6 @@ void furi_hal_power_init(void) {
     }
 }
 
-#ifdef CONFIG_PM_ENABLE
-/* CPU-max lock: held during RF/timing-critical work so DFS never drops those
- * sections below 240 MHz. When nothing holds it, the CPU scales down to the floor. */
-static esp_pm_lock_handle_t furi_hal_power_cpu_perf_lock = NULL;
-/* De-risk default: a SECOND, always-on hold on the same lock is taken at boot so the
- * CPU runs at max exactly like a non-PM build. It is released ONLY by the desktop
- * idle manager (foreground desktop, no app/RF, BT off, USB off) and re-taken the
- * instant that state ends — so nothing that runs during active use can be affected
- * by DFS. Guarded so we never double-release. */
-static bool furi_hal_power_perf_idle_dropped = false;
-#endif
-
-void furi_hal_power_pm_init(void) {
-#ifdef CONFIG_PM_ENABLE
-    /* Floor at 80 MHz (CPU). APB is fixed at 80 MHz on ESP32-S3 regardless, so
-     * peripherals/backlight are unaffected; only CPU compute + cycle-timed code
-     * slow down when idle, which the perf lock protects for RF. Light sleep OFF. */
-    const int max_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ; /* 240 on these boards */
-    esp_pm_config_t cfg = {
-        .max_freq_mhz = max_mhz,
-        .min_freq_mhz = 80,
-        .light_sleep_enable = false,
-    };
-    esp_err_t err = esp_pm_configure(&cfg);
-    if(err != ESP_OK) {
-        ESP_LOGW(TAG, "esp_pm_configure failed: %s (DFS disabled)", esp_err_to_name(err));
-        return;
-    }
-    err = esp_pm_lock_create(
-        ESP_PM_CPU_FREQ_MAX, 0, "furi_perf", &furi_hal_power_cpu_perf_lock);
-    if(err != ESP_OK) {
-        ESP_LOGW(TAG, "perf lock create failed: %s", esp_err_to_name(err));
-        furi_hal_power_cpu_perf_lock = NULL;
-        return;
-    }
-    /* Take the always-on hold immediately: boot at max, drop only when the desktop
-     * idle manager says it is safe (furi_hal_power_perf_idle_set). */
-    esp_pm_lock_acquire(furi_hal_power_cpu_perf_lock);
-    furi_hal_power_perf_idle_dropped = false;
-    ESP_LOGI(TAG, "DFS enabled: CPU %d..%d MHz, light sleep off (idle-drop only)", 80, max_mhz);
-#else
-    ESP_LOGI(TAG, "PM disabled at build time; CPU fixed at max");
-#endif
-}
-
-void furi_hal_power_perf_lock_acquire(void) {
-#ifdef CONFIG_PM_ENABLE
-    if(furi_hal_power_cpu_perf_lock) esp_pm_lock_acquire(furi_hal_power_cpu_perf_lock);
-#endif
-}
-
-void furi_hal_power_perf_lock_release(void) {
-#ifdef CONFIG_PM_ENABLE
-    if(furi_hal_power_cpu_perf_lock) esp_pm_lock_release(furi_hal_power_cpu_perf_lock);
-#endif
-}
-
-void furi_hal_power_perf_idle_set(bool idle) {
-#ifdef CONFIG_PM_ENABLE
-    /* Release/re-take the always-on boot hold. Called from two threads (the desktop
-     * idle tick AND the always-on input hook, which re-raises the instant any key is
-     * pressed so an app launched from an idle desktop never starts at min freq). The
-     * bool flip is done under a critical section so exactly one caller performs the
-     * matching esp_pm op; the op itself runs OUTSIDE the critical section (it may take
-     * an internal spinlock). Idle-dropping only lowers this boot hold — any RF perf
-     * lock still pins the CPU at max independently, so a stray call cannot slow an
-     * active radio. */
-    if(!furi_hal_power_cpu_perf_lock) return;
-    bool do_acquire = false, do_release = false;
-    FURI_CRITICAL_ENTER();
-    if(idle && !furi_hal_power_perf_idle_dropped) {
-        furi_hal_power_perf_idle_dropped = true;
-        do_release = true;
-    } else if(!idle && furi_hal_power_perf_idle_dropped) {
-        furi_hal_power_perf_idle_dropped = false;
-        do_acquire = true;
-    }
-    FURI_CRITICAL_EXIT();
-    if(do_release) esp_pm_lock_release(furi_hal_power_cpu_perf_lock);
-    if(do_acquire) esp_pm_lock_acquire(furi_hal_power_cpu_perf_lock);
-#else
-    (void)idle;
-#endif
-}
-
 bool furi_hal_power_gauge_is_ok(void) {
     if(furi_hal_bq27220_is_present()) return true;
     if(!furi_hal_power.adc_handle) return true;
@@ -537,20 +449,6 @@ bool furi_hal_power_light_sleep(void) {
 }
 
 uint8_t furi_hal_power_get_pct(void) {
-#ifdef BOARD_HAS_M5PM1
-    /* M5Stick S3: the battery sits behind the M5PM1 PMIC — there is no BQ fuel gauge
-     * and no ADC divider, so the paths below would fall through to a hard 100%. Read
-     * VBAT (mV) straight from the PMIC and map it through the LiPo curve. Cache the
-     * last good reading so a transient I2C NACK doesn't blip the gauge. */
-    {
-        static uint8_t m5pm1_last_pct = 100;
-        uint16_t mv = 0;
-        if(furi_hal_m5pm1_read_vbat_mv(&mv) && mv >= 2500 && mv <= 5000) {
-            m5pm1_last_pct = furi_hal_power_voltage_to_pct((float)mv / 1000.0f);
-        }
-        return m5pm1_last_pct;
-    }
-#endif
     /* BQ27220 fuel gauge (T-Embed CC1101) takes priority over ADC */
     if(furi_hal_bq27220_is_present()) {
         return furi_hal_bq27220_get_charge_pct();
@@ -574,12 +472,6 @@ uint8_t furi_hal_power_get_bat_health_pct(void) {
 }
 
 bool furi_hal_power_is_charging(void) {
-#ifdef BOARD_HAS_M5PM1
-    {
-        bool charging = false;
-        if(furi_hal_m5pm1_read_charging(&charging)) return charging;
-    }
-#endif
     /* Prefer BQ25896 charger status (like STM32), fallback to BQ27220 */
     if(furi_hal_bq25896_is_present()) {
         return furi_hal_bq25896_is_charging();
@@ -714,14 +606,6 @@ float furi_hal_power_get_battery_voltage(FuriHalPowerIC ic) {
         return (float)furi_hal_bq27220_get_voltage_mv() / 1000.0f;
     }
     /* Fallback: try whichever is available */
-#ifdef BOARD_HAS_M5PM1
-    {
-        uint16_t mv = 0;
-        if(furi_hal_m5pm1_read_vbat_mv(&mv) && mv >= 2500 && mv <= 5000) {
-            return (float)mv / 1000.0f;
-        }
-    }
-#endif
     if(furi_hal_bq27220_is_present()) {
         return (float)furi_hal_bq27220_get_voltage_mv() / 1000.0f;
     }

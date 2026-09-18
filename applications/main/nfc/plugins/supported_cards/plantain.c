@@ -9,7 +9,7 @@
 
 #define TAG "Plantain"
 
-static void from_minutes_to_datetime(uint32_t minutes, DateTime* datetime, uint16_t start_year) {
+void from_minutes_to_datetime(uint32_t minutes, DateTime* datetime, uint16_t start_year) {
     uint32_t timestamp = minutes * 60;
     DateTime start_datetime = {0};
     start_datetime.year = start_year - 1;
@@ -247,20 +247,7 @@ static bool plantain_parse(const NfcDevice* device, FuriString* parsed_data) {
         // Print card number with 4-digit groups. "3" in "3078" denotes a ticket type "3 - full ticket", will differ on discounted cards.
         furi_string_cat_printf(parsed_data, "Number: ");
         FuriString* card_number_s = furi_string_alloc();
-        /* ESP32 nano-printf has no 64-bit %lld; convert to decimal by hand (the card
-         * number is ~20 digits, well over 32 bits). */
-        {
-            uint64_t v = (uint64_t)card_number;
-            char dbuf[21];
-            int di = 20;
-            dbuf[20] = '\0';
-            if(v == 0) dbuf[--di] = '0';
-            while(v) {
-                dbuf[--di] = (char)('0' + (uint8_t)(v % 10));
-                v /= 10;
-            }
-            furi_string_cat_str(card_number_s, &dbuf[di]);
-        }
+        furi_string_cat_printf(card_number_s, "%lld", card_number);
         FuriString* tmp_s = furi_string_alloc_set_str("9643 3078 ");
         for(uint8_t i = 0; i < 24; i += 4) {
             for(uint8_t j = 0; j < 4; j++) {

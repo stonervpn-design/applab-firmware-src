@@ -1,7 +1,6 @@
 #include "nfc_supported_cards.h"
 
 #include "../plugins/supported_cards/nfc_supported_card_plugin.h"
-#include "nfc_supported_cards_static.h"
 
 #include <flipper_application/flipper_application.h>
 #include <flipper_application/plugins/plugin_manager.h>
@@ -109,14 +108,66 @@ static const NfcSupportedCardsPlugin* nfc_supported_cards_get_plugin(
     NfcSupportedCardsLoadContext* instance,
     const char* name,
     const ElfApiInterface* api_interface) {
-    UNUSED(instance);
-    UNUSED(api_interface);
+    furi_assert(instance);
     furi_assert(name);
-    /* Static registry: parsers are compiled into the firmware and resolved by
-     * calling their <name>_plugin_ep() directly (see nfc_supported_cards_static.c).
-     * No runtime .fal ELF loader, so this works on no-PSRAM boards, where the loader
-     * is skipped entirely (its code maps into RAM that only executes with PSRAM). */
-    return nfc_supported_cards_static_get_by_name(name);
+
+    const NfcSupportedCardsPlugin* plugin = NULL;
+    FuriString* plugin_path = furi_string_alloc_printf(
+        "%s/%s%s", NFC_SUPPORTED_CARDS_PLUGINS_PATH, name, NFC_SUPPORTED_CARDS_PLUGIN_SUFFIX);
+    do {
+        if(instance->app) flipper_application_free(instance->app);
+        instance->app = flipper_application_alloc(instance->storage, api_interface);
+
+        if(flipper_application_preload(instance->app, furi_string_get_cstr(plugin_path)) !=
+           FlipperApplicationPreloadStatusSuccess)
+            break;
+        if(!flipper_application_is_plugin(instance->app)) break;
+        if(flipper_application_map_to_memory(instance->app) != FlipperApplicationLoadStatusSuccess)
+            break;
+        const FlipperAppPluginDescriptor* descriptor =
+            flipper_application_plugin_get_descriptor(instance->app);
+
+        if(descriptor == NULL) break;
+
+        if(strcmp(descriptor->appid, NFC_SUPPORTED_CARD_PLUGIN_APP_ID) != 0) break;
+        if(descriptor->ep_api_version != NFC_SUPPORTED_CARD_PLUGIN_API_VERSION) break;
+
+        plugin = descriptor->entry_point;
+    } while(false);
+    furi_string_free(plugin_path);
+
+    return plugin;
+}
+
+static const NfcSupportedCardsPlugin* nfc_supported_cards_get_next_plugin(
+    NfcSupportedCardsLoadContext* instance,
+    const ElfApiInterface* api_interface) {
+    const NfcSupportedCardsPlugin* plugin = NULL;
+
+    do {
+        if(!storage_file_is_open(instance->directory)) break;
+        if(!storage_dir_read(
+               instance->directory, NULL, instance->file_name, sizeof(instance->file_name)))
+            break;
+
+        const size_t suffix_len = strlen(NFC_SUPPORTED_CARDS_PLUGIN_SUFFIX);
+        const size_t file_name_len = strlen(instance->file_name);
+        if(file_name_len <= suffix_len) break;
+
+        size_t suffix_start_pos = file_name_len - suffix_len;
+        if(memcmp(
+               &instance->file_name[suffix_start_pos],
+               NFC_SUPPORTED_CARDS_PLUGIN_SUFFIX,
+               suffix_len) != 0) //-V1051
+            break;
+
+        // Trim suffix from file_name to save memory. The suffix will be concatenated on plugin load.
+        instance->file_name[suffix_start_pos] = '\0';
+
+        plugin = nfc_supported_cards_get_plugin(instance, instance->file_name, api_interface);
+    } while(plugin == NULL); //-V654
+
+    return plugin;
 }
 
 void nfc_supported_cards_load_cache(NfcSupportedCards* instance) {
@@ -127,24 +178,32 @@ void nfc_supported_cards_load_cache(NfcSupportedCards* instance) {
            (instance->load_state == NfcSupportedCardsLoadStateFail))
             break;
 
-        /* Static registry: the parsers are compiled into the firmware, so we just
-         * enumerate them (no runtime .fal ELF loader). This works on every board,
-         * including no-PSRAM ones (Cardputer-ADV) where the loader was skipped
-         * entirely — previously leaving those boards with ZERO card parsers. */
-        const size_t count = nfc_supported_cards_static_count();
-        for(size_t i = 0; i < count; i++) {
-            const char* name = NULL;
+#ifdef ESP_PLATFORM
+        /* Runtime .fal parser plugins can't execute on a no-PSRAM board (their
+         * code loads into internal RAM, which faults on execution — see
+         * flipper_application_map_to_memory). Loading + relocating ~30 of them
+         * only to skip each adds ~2s to every NFC scan and injects latency that
+         * breaks marginal ISO-DEP/EMV timing. Skip the whole cache: EMV and the
+         * other built-in protocols still read and render; only the optional
+         * supported-card labels (MiZip/Troika/etc.) are unavailable. */
+        if(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
+            FURI_LOG_I(TAG, "No PSRAM: skipping supported-card parser plugins");
+            instance->load_state = NfcSupportedCardsLoadStateFail;
+            break;
+        }
+#endif
+
+        instance->load_context = nfc_supported_cards_load_context_alloc();
+
+        while(true) {
+            const ElfApiInterface* api_interface =
+                composite_api_resolver_get(instance->api_resolver);
             const NfcSupportedCardsPlugin* plugin =
-                nfc_supported_cards_static_get_by_index(i, &name);
-            if(plugin == NULL) {
-                /* Descriptor mismatch / null entry point — the parser won't work.
-                 * Surface it loudly instead of silently dropping coverage. */
-                FURI_LOG_E(TAG, "card parser '%s' (#%zu) failed to resolve", name ? name : "?", i);
-                continue;
-            }
+                nfc_supported_cards_get_next_plugin(instance->load_context, api_interface);
+            if(plugin == NULL) break; //-V547
 
             NfcSupportedCardsPluginCache plugin_cache = {}; //-V779
-            plugin_cache.name = furi_string_alloc_set(name);
+            plugin_cache.name = furi_string_alloc_set(instance->load_context->file_name);
             plugin_cache.protocol = plugin->protocol;
             if(plugin->verify) {
                 plugin_cache.feature |= NfcSupportedCardsPluginFeatureHasVerify;
@@ -158,12 +217,14 @@ void nfc_supported_cards_load_cache(NfcSupportedCards* instance) {
             NfcSupportedCardsPluginCache_push_back(instance->plugins_cache_arr, plugin_cache);
         }
 
+        nfc_supported_cards_load_context_free(instance->load_context);
+
         size_t plugins_loaded = NfcSupportedCardsPluginCache_size(instance->plugins_cache_arr);
         if(plugins_loaded == 0) {
             FURI_LOG_D(TAG, "Plugins not found");
             instance->load_state = NfcSupportedCardsLoadStateFail;
         } else {
-            FURI_LOG_I(TAG, "Loaded %zu static card parsers", plugins_loaded);
+            FURI_LOG_D(TAG, "Loaded %zu plugins", plugins_loaded);
             instance->load_state = NfcSupportedCardsLoadStateSuccess;
         }
 

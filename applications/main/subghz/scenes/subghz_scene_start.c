@@ -87,6 +87,12 @@ void subghz_scene_start_on_enter(void* context) {
         subghz);
     submenu_add_item(
         subghz->submenu,
+        "Fob Analyzer",
+        SubmenuIndexFobAnalyzer,
+        subghz_scene_start_submenu_callback,
+        subghz);
+    submenu_add_item(
+        subghz->submenu,
         "Radio Settings",
         SubmenuIndexExtSettings,
         subghz_scene_start_submenu_callback,
@@ -151,6 +157,12 @@ bool subghz_scene_start_on_event(void* context, SceneManagerEvent event) {
             scene_manager_set_scene_state(
                 subghz->scene_manager, SubGhzSceneStart, SubmenuIndexFrequencyAnalyzer);
             scene_manager_next_scene(subghz->scene_manager, SubGhzSceneFrequencyAnalyzer);
+            dolphin_deed(DolphinDeedSubGhzFrequencyAnalyzer);
+            return true;
+        } else if(event.event == SubmenuIndexFobAnalyzer) {
+            scene_manager_set_scene_state(
+                subghz->scene_manager, SubGhzSceneStart, SubmenuIndexFobAnalyzer);
+            scene_manager_next_scene(subghz->scene_manager, SubGhzSceneFobAnalyzer);
             dolphin_deed(DolphinDeedSubGhzFrequencyAnalyzer);
             return true;
         } else if(event.event == SubmenuIndexExtSettings) {

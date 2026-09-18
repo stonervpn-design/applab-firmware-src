@@ -44,20 +44,13 @@ endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # ---------------------------------------------------------------------------
-# Build variant: private (default, everything) | public (car stuff stripped) |
-# hardened (full features + RE-friction sdkconfig). ONLY the public variant
-# defines PUBLIC_BUILD, which compiles out the Sub-GHz Automotive (ProtoPirate
-# car-key) decoder registries in lib/subghz/protocols/protocol_items.c. Hardened
-# keeps ALL features (same as private) and only strips log/assert strings via
-# sdkconfig.defaults.hardened — it does NOT strip the car stuff.
-# Set HERE — after project.cmake is included (so idf_build_set_property is
-# defined) and before project() (so it lands in every component's compile).
-# It CANNOT live in main/CMakeLists.txt: a component CMakeLists is also evaluated
-# during ESP-IDF's early requirements-expansion pass, where idf_build_set_property
-# is not yet defined (that was the "Unknown CMake command" configure error).
-# Selected via -DFLIPPER_VARIANT=... or the FLIPPER_VARIANT env var (set by the
-# build_m5stick_s3[_public|_hardened].bat scripts); fam_config.py reads the same
-# var to drop the car apps (can_commander/defender) for public only.
+# Build variant: private (default, everything) | public (car stuff stripped).
+# ONLY the public variant defines PUBLIC_BUILD, which compiles out the Sub-GHz
+# Automotive (car-key) decoder registry in lib/subghz/protocols/protocol_items.c.
+# Used by the applab public build service (FLIPPER_VARIANT=public); fam_config.py
+# reads the same var to drop the car apps (can_commander) for public only.
+# Set HERE — after project.cmake is included (so idf_build_set_property is defined)
+# and before project() (so it lands in every component's compile).
 # ---------------------------------------------------------------------------
 if(NOT DEFINED FLIPPER_VARIANT AND DEFINED ENV{FLIPPER_VARIANT})
     set(FLIPPER_VARIANT "$ENV{FLIPPER_VARIANT}")

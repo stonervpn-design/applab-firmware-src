@@ -1,5 +1,4 @@
 #include "tpms_ford.h"
-#include "../blocks/generic.h"
 #include <lib/toolbox/manchester_decoder.h>
 
 #define TAG "TPMSFord"
@@ -45,12 +44,6 @@ typedef struct {
     uint16_t header_shift;
 } TPMSProtocolDecoderFord;
 
-typedef struct {
-    SubGhzProtocolEncoderBase base;
-    SubGhzProtocolBlockEncoder encoder;
-    TPMSBlockGeneric generic;
-} TPMSProtocolEncoderFord;
-
 const SubGhzProtocolDecoder tpms_protocol_ford_decoder = {
     .alloc = tpms_protocol_decoder_ford_alloc,
     .free = tpms_protocol_decoder_ford_free,
@@ -63,11 +56,11 @@ const SubGhzProtocolDecoder tpms_protocol_ford_decoder = {
 };
 
 const SubGhzProtocolEncoder tpms_protocol_ford_encoder = {
-    .alloc = tpms_protocol_encoder_ford_alloc,
-    .free = tpms_protocol_encoder_ford_free,
-    .deserialize = tpms_protocol_encoder_ford_deserialize,
-    .stop = tpms_protocol_encoder_ford_stop,
-    .yield = tpms_protocol_encoder_ford_yield,
+    .alloc = NULL,
+    .free = NULL,
+    .deserialize = NULL,
+    .stop = NULL,
+    .yield = NULL,
 };
 
 const SubGhzProtocol tpms_protocol_ford = {
@@ -75,7 +68,7 @@ const SubGhzProtocol tpms_protocol_ford = {
     .type = SubGhzProtocolTypeTpms,
     .flag = SubGhzProtocolFlag_433 | SubGhzProtocolFlag_315 | SubGhzProtocolFlag_FM |
             SubGhzProtocolFlag_Decodable | SubGhzProtocolFlag_Sensors |
-            SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load | SubGhzProtocolFlag_Send,
+            SubGhzProtocolFlag_Save | SubGhzProtocolFlag_Load,
 
     .decoder = &tpms_protocol_ford_decoder,
     .encoder = &tpms_protocol_ford_encoder,
@@ -83,10 +76,9 @@ const SubGhzProtocol tpms_protocol_ford = {
 
 void* tpms_protocol_decoder_ford_alloc(SubGhzEnvironment* environment) {
     UNUSED(environment);
-    TPMSProtocolDecoderFord* instance = calloc(1, sizeof(TPMSProtocolDecoderFord));
+    TPMSProtocolDecoderFord* instance = malloc(sizeof(TPMSProtocolDecoderFord));
     instance->base.protocol = &tpms_protocol_ford;
     instance->generic.protocol_name = instance->base.protocol->name;
-    instance->manchester_saved_state = ManchesterStateStart1;
     return instance;
 }
 
@@ -103,7 +95,6 @@ void tpms_protocol_decoder_ford_reset(void* context) {
     instance->decoder.decode_data = 0;
     instance->decoder.decode_count_bit = 0;
     instance->header_shift = 0;
-    instance->manchester_saved_state = ManchesterStateStart1;
 }
 
 static ManchesterEvent ford_level_and_duration_to_event(bool level, uint32_t duration) {
@@ -245,152 +236,4 @@ void tpms_protocol_decoder_ford_get_string(void* context, FuriString* output) {
         instance->generic.id,
         (double)instance->generic.temperature,
         (double)instance->generic.pressure);
-}
-
-// -----------------------------------------------------------------------------
-// Encoder
-// -----------------------------------------------------------------------------
-//
-// FSK Manchester, reproduces exactly the waveform accepted by the decoder:
-//   inter-frame gap (reset), 32-bit preamble 0x55 0x55 0x55 0x56, then 64 data
-//   bits Manchester-encoded. The decoder is Manchester-II non-inverting, so:
-//     bit 1 -> first half LOW,  second half HIGH
-//     bit 0 -> first half HIGH, second half LOW
-//   Adjacent equal half-symbols are run-length merged (te_short -> te_long).
-//
-// All 64 payload bits (including the trailing checksum) live in generic.data, so
-// this is a bit-exact reproduction of the captured frame.
-//
-// Worst-case entries: 1 gap + 2*(32 preamble + 64 data) + 1 flush = 194.
-#define TPMS_FORD_ENCODER_UPLOAD_SIZE 208
-
-void* tpms_protocol_encoder_ford_alloc(SubGhzEnvironment* environment) {
-    UNUSED(environment);
-    TPMSProtocolEncoderFord* instance = malloc(sizeof(TPMSProtocolEncoderFord));
-    instance->base.protocol = &tpms_protocol_ford;
-    instance->generic.protocol_name = instance->base.protocol->name;
-    instance->encoder.repeat = 10;
-    instance->encoder.size_upload = TPMS_FORD_ENCODER_UPLOAD_SIZE;
-    instance->encoder.upload = malloc(instance->encoder.size_upload * sizeof(LevelDuration));
-    instance->encoder.is_running = false;
-    return instance;
-}
-
-void tpms_protocol_encoder_ford_free(void* context) {
-    furi_assert(context);
-    TPMSProtocolEncoderFord* instance = context;
-    free(instance->encoder.upload);
-    free(instance);
-}
-
-void tpms_protocol_encoder_ford_stop(void* context) {
-    TPMSProtocolEncoderFord* instance = context;
-    instance->encoder.is_running = false;
-}
-
-static bool tpms_protocol_encoder_ford_get_upload(TPMSProtocolEncoderFord* instance) {
-    furi_assert(instance);
-    const uint32_t te = tpms_protocol_ford_const.te_short;
-
-    size_t index = 0;
-    const size_t max = instance->encoder.size_upload;
-    bool last_level = false;
-    uint32_t last_duration = 0;
-
-#define EMIT(lvl, dur)                                                                \
-    do {                                                                              \
-        if(last_duration != 0 && last_level == (lvl)) {                               \
-            last_duration += (dur);                                                   \
-        } else {                                                                      \
-            if(last_duration != 0) {                                                  \
-                if(index >= max) return false;                                        \
-                instance->encoder.upload[index++] =                                   \
-                    level_duration_make(last_level, last_duration);                   \
-            }                                                                         \
-            last_level = (lvl);                                                       \
-            last_duration = (dur);                                                    \
-        }                                                                             \
-    } while(0)
-
-#define MAN_BIT(bit)                 \
-    do {                             \
-        if(bit) {                    \
-            EMIT(false, te);         \
-            EMIT(true, te);          \
-        } else {                     \
-            EMIT(true, te);          \
-            EMIT(false, te);         \
-        }                            \
-    } while(0)
-
-    // Inter-frame gap -> decoder ManchesterEventReset before the preamble
-    EMIT(false, te * 50);
-
-    // 32-bit preamble 0x55 0x55 0x55 0x56 (decoder hunts trailing 16 bits 0x5556)
-    static const uint8_t preamble[4] = {0x55, 0x55, 0x55, 0x56};
-    for(int i = 0; i < 4; i++) {
-        for(int b = 7; b >= 0; b--) {
-            MAN_BIT((preamble[i] >> b) & 0x1);
-        }
-    }
-
-    // 64 data bits, MSB first
-    for(int bit = instance->generic.data_count_bit - 1; bit >= 0; bit--) {
-        MAN_BIT((instance->generic.data >> bit) & 0x1);
-    }
-
-    if(last_duration != 0) {
-        if(index >= max) return false;
-        instance->encoder.upload[index++] = level_duration_make(last_level, last_duration);
-    }
-
-#undef MAN_BIT
-#undef EMIT
-
-    instance->encoder.size_upload = index;
-    return true;
-}
-
-SubGhzProtocolStatus
-    tpms_protocol_encoder_ford_deserialize(void* context, FlipperFormat* flipper_format) {
-    furi_assert(context);
-    TPMSProtocolEncoderFord* instance = context;
-    SubGhzProtocolStatus res = SubGhzProtocolStatusError;
-    do {
-        res = tpms_block_generic_deserialize_check_count_bit(
-            &instance->generic, flipper_format, tpms_protocol_ford_const.min_count_bit_for_found);
-        if(res != SubGhzProtocolStatusOk) {
-            FURI_LOG_E(TAG, "Deserialize error");
-            break;
-        }
-        flipper_format_read_uint32(
-            flipper_format, "Repeat", (uint32_t*)&instance->encoder.repeat, 1);
-
-        instance->encoder.size_upload = TPMS_FORD_ENCODER_UPLOAD_SIZE;
-        if(!tpms_protocol_encoder_ford_get_upload(instance)) {
-            res = SubGhzProtocolStatusErrorEncoderGetUpload;
-            break;
-        }
-        instance->encoder.front = 0;
-        instance->encoder.is_running = true;
-    } while(false);
-    return res;
-}
-
-LevelDuration tpms_protocol_encoder_ford_yield(void* context) {
-    TPMSProtocolEncoderFord* instance = context;
-
-    if(instance->encoder.repeat == 0 || !instance->encoder.is_running) {
-        instance->encoder.is_running = false;
-        return level_duration_reset();
-    }
-
-    LevelDuration ret = instance->encoder.upload[instance->encoder.front];
-
-    if(++instance->encoder.front == instance->encoder.size_upload) {
-        if(!subghz_block_generic_global.endless_tx) instance->encoder.repeat--;
-        instance->encoder.front = 0;
-    }
-
-    return ret;
 }

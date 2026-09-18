@@ -33,19 +33,6 @@ void furi_hal_init_early(void);
 void furi_hal_deinit_early(void);
 void furi_hal_init(void);
 
-/** Enable/disable the M5Stick Grove Port.A 5V boost (M5PM1 reg 0x06 bit3), which
- * powers an external Grove NFC unit. Off by default when no NFC frontend is found
- * at boot, to stop the boost converter idling. No-op on boards without the M5PM1. */
-void furi_hal_grove_5v_set(bool on);
-
-/** Read the M5PM1 PMIC battery voltage in millivolts (M5Stick S3). Returns true on
- * a successful I2C read. Always false on boards without the M5PM1. */
-bool furi_hal_m5pm1_read_vbat_mv(uint16_t* out_mv);
-
-/** Read the M5PM1 PMIC charging status (true = charging). Returns true on a
- * successful I2C read. Always false on boards without the M5PM1. */
-bool furi_hal_m5pm1_read_charging(bool* out_charging);
-
 #ifdef __cplusplus
 }
 #endif

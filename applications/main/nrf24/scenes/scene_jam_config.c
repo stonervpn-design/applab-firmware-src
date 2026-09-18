@@ -69,13 +69,6 @@ static void jam_config_set_hop(VariableItem* item) {
     nrf24_jam_config_touch();
 }
 
-/* Global override (not per-preset): force Turbo flood on every strategy. */
-static void jam_config_set_force_flood(VariableItem* item) {
-    uint8_t idx = variable_item_get_current_value_index(item);
-    nrf24_jam_config_force_flood_set(idx ? 1 : 0);
-    variable_item_set_current_value_text(item, idx ? "On" : "Off");
-}
-
 void nrf24_app_scene_jam_config_on_enter(void* context) {
     Nrf24App* app = context;
     VariableItemList* vil = app->var_item_list;
@@ -129,12 +122,6 @@ void nrf24_app_scene_jam_config_on_enter(void* context) {
     item = variable_item_list_add(vil, "Hop Order", 2, jam_config_set_hop, app);
     variable_item_set_current_value_index(item, cfg->random_hop ? 1 : 0);
     variable_item_set_current_value_text(item, nrf24_jam_hop_label(cfg->random_hop));
-
-    /* Global max-power switch: force Turbo flood on every strategy/preset. */
-    uint8_t ff = nrf24_jam_config_force_flood_get();
-    item = variable_item_list_add(vil, "Force Flood", 2, jam_config_set_force_flood, app);
-    variable_item_set_current_value_index(item, ff);
-    variable_item_set_current_value_text(item, ff ? "On" : "Off");
 
     view_dispatcher_switch_to_view(app->view_dispatcher, Nrf24ViewJamConfig);
 }
