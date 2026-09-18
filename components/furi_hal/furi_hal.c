@@ -1,4 +1,5 @@
 #include "furi_hal.h"
+#include "furi_hal_infrared.h"
 #include "boards/board.h"
 #include <furi_hal_gpio.h>
 #include <esp_log.h>
@@ -174,23 +175,32 @@ void furi_hal_m5pm1_set_speaker_amp(bool on) {
 
 bool furi_hal_m5pm1_get_vbat_mv(uint16_t* out_mv) {
 #ifdef BOARD_HAS_M5PM1
-    /* M5PM1 reports the battery voltage directly in millivolts across two registers:
-     * 0x22 = VBAT low byte, 0x23 = VBAT high nibble (12-bit total). The PMIC I2C
-     * driver was installed in furi_hal_m5pm1_init(); reuse it. This is the M5Stick's
-     * only battery-voltage source (it has no GPIO ADC divider). */
+    /* The M5PM1 is a PY32-based PMIC (M5Unified Power_Class pmic_m5pm1, addr 0x6E).
+     * It auto-measures and reports the battery voltage DIRECTLY in millivolts across two
+     * consecutive registers: 0x22 = BAT_L, 0x23 = BAT_H, value = (BAT_H << 8) | BAT_L
+     * (a FULL 16-bit mV word — NOT a 12-bit value). No ADC-enable write is needed; the
+     * PY32 firmware populates these regs on its own. Read both in one burst so the PY32
+     * can't update the value between the low- and high-byte fetch. This is the M5Stick's
+     * only battery-voltage source (it has no GPIO ADC divider).
+     * BUGFIX 2026-09-18: the old code masked BAT_H with & 0x0F ("12-bit" assumption), which
+     * zeroed the high byte for any voltage >= 4.096 V (BAT_H >= 0x10) — i.e. a charged or
+     * USB-powered stick — collapsing the reading to ~0 mV. The caller's ">500 mV" guard
+     * then failed and furi_hal_power_get_pct() returned its no-ADC "100" fallback, so the
+     * battery showed a permanent 100%. Matches M5Unified exactly now: full high byte. */
     if(!out_mv) return false;
-    uint8_t reg, lo = 0, hi = 0;
-    reg = 0x22;
+    uint8_t reg = 0x22, buf[2] = {0, 0};
     if(i2c_master_write_read_device(
-           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &lo, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
+           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, buf, 2, pdMS_TO_TICKS(50)) != ESP_OK) {
         return false;
     }
-    reg = 0x23;
-    if(i2c_master_write_read_device(
-           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &hi, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
-        return false;
+    *out_mv = (uint16_t)(((uint16_t)buf[1] << 8) | buf[0]);
+    /* One-time confirmation line so a single boot serial capture proves the fix (raw
+     * bytes + decoded mV). Throttled to the first read to avoid 1 Hz spam from the poll. */
+    static bool s_vbat_logged = false;
+    if(!s_vbat_logged) {
+        s_vbat_logged = true;
+        ESP_LOGI(TAG, "M5PM1 VBAT: BAT_H=0x%02X BAT_L=0x%02X -> %u mV", buf[1], buf[0], *out_mv);
     }
-    *out_mv = (uint16_t)(((uint16_t)(hi & 0x0F) << 8) | lo);
     return true;
 #else
     (void)out_mv;
