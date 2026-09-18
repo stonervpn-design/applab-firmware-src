@@ -36,6 +36,10 @@ on:
       build_id:
         description: "Unique id for this build (used as the output folder)"
         required: true
+      flavor:
+        description: "unleashed | momentum"
+        required: false
+        default: "unleashed"
   repository_dispatch:
     types: [custom-build]
 
@@ -60,6 +64,11 @@ jobs:
     steps:
       - name: Checkout firmware source
         uses: actions/checkout@v5
+        with:
+          # Momentum flavor builds from the `momentum` branch (a mirror of the
+          # momentum-mob tree, which carries the same FLIPPER_VARIANT=public +
+          # FLIPPER_APPS machinery). Empty ref => default branch = the Unleashed tree.
+          ref: ${{ (github.event.client_payload.flavor == 'momentum' || github.event.inputs.flavor == 'momentum') && 'momentum' || '' }}
 
       - name: Resolve & validate inputs
         id: cfg
@@ -69,11 +78,18 @@ jobs:
           BOARD="${{ github.event.client_payload.board || inputs.board }}"
           APPS="${{ github.event.client_payload.apps || inputs.apps }}"
           BID="${{ github.event.client_payload.build_id || inputs.build_id }}"
+          FLAVOR="${{ github.event.client_payload.flavor || inputs.flavor }}"
+          [ -n "$FLAVOR" ] || FLAVOR="unleashed"
 
           # board allowlist
           case "$BOARD" in
             m5stick_s3|m5stack_cardputer_adv|lilygo_t_embed_cc1101) ;;
             *) echo "::error::unknown board '$BOARD'"; exit 1 ;;
+          esac
+          # flavor allowlist
+          case "$FLAVOR" in
+            unleashed|momentum) ;;
+            *) echo "::error::unknown flavor '$FLAVOR'"; exit 1 ;;
           esac
           # build_id: keep only safe chars, cap length (no path traversal)
           BID="$(printf '%s' "$BID" | tr -cd 'a-zA-Z0-9-' | cut -c1-40)"
@@ -92,11 +108,14 @@ jobs:
               SDKDEF="sdkconfig.defaults;sdkconfig.defaults.m5stack_cardputer_adv"
               NAME="applab Cardputer ADV (custom)"; FLASHSIZE="8MB" ;;
           esac
+          # Momentum builds are labelled so the flasher UI shows which flavor it is.
+          if [ "$FLAVOR" = "momentum" ]; then NAME="$NAME [Momentum]"; fi
           {
             echo "board=$BOARD"; echo "apps=$APPS"; echo "bid=$BID"
             echo "sdkdef=$SDKDEF"; echo "name=$NAME"; echo "flashsize=$FLASHSIZE"
+            echo "flavor=$FLAVOR"
           } >> "$GITHUB_OUTPUT"
-          echo "Building $BOARD (public) id=$BID apps=[$APPS]"
+          echo "Building $BOARD (public, $FLAVOR) id=$BID apps=[$APPS]"
 
       - name: Cache compiled objects (ccache)
         uses: actions/cache@v4
