@@ -7,6 +7,11 @@
 #include <toolbox/saved_struct.h>
 #include <dolphin/dolphin.h>
 
+#include BOARD_INCLUDE
+#ifdef BOARD_HAS_TILT_NAV
+#include "target_input.h"
+#endif
+
 #define TAG "InfraredApp"
 
 #define INFRARED_TX_MIN_INTERVAL_MS (50U)
@@ -625,7 +630,15 @@ int32_t infrared_app(void* p) {
         }
     }
 
+#ifdef BOARD_HAS_TILT_NAV
+    /* Kill tilt -> Left/Right nav for the whole IR app: an accidental roll while
+     * aiming or pressing a remote button was hijacking the selection. Restored below. */
+    target_input_set_tilt_nav_suppressed(true);
+#endif
     view_dispatcher_run(infrared->view_dispatcher);
+#ifdef BOARD_HAS_TILT_NAV
+    target_input_set_tilt_nav_suppressed(false);
+#endif
 
     infrared_set_tx_pin(infrared, FuriHalInfraredTxPinInternal);
     infrared_enable_otg(infrared, false);
