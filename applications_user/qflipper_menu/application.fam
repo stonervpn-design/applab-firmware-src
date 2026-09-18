@@ -1,0 +1,24 @@
+# Menu order: MENUEXTERNAL apps sort by `order` ascending (tools/fam/generate.py
+# get_apps_of_type, stable sort). Default order is 0, so most apps tie at 0. PUBLIC
+# build: order=-1 sorts qFlipper STRICTLY ahead of the whole default-0 group, i.e. it
+# becomes the FIRST external app = top of the main-menu tool list, so public users find
+# it immediately (owner request 2026-09-18, "top of the main menu / easier to access").
+# order=0 only tied it into the 0-group (landed ~#6 by discovery-order tiebreak), hence -1.
+# PRIVATE/hardened keep order=96 (its long-standing near-bottom slot) so the owner's own
+# menu layout is unchanged. `os` is in the .fam exec namespace (tools/fam/appmanifest.py),
+# and the build sets FLIPPER_VARIANT (see fam_config.py); default "" -> 96, so any tool
+# that parses this manifest without the env gets the safe old order.
+import os as _os
+
+App(
+    appid="qflipper_menu",
+    name="qFlipper",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="qflipper_menu_app",
+    cdefines=["APP_QFLIPPER_MENU"],
+    requires=["gui"],
+    stack_size=2 * 1024,
+    order=(-1 if _os.environ.get("FLIPPER_VARIANT", "").strip().lower() == "public" else 96),
+    fap_category="Tools",
+    fap_description="Toggle the qFlipper USB bridge (desktop RPC over USB)",
+)
