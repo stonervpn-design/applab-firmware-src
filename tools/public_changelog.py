@@ -40,9 +40,35 @@ URL_FILE = os.path.join(HERE, ".public_webhook_url")  # git-ignored secret
 # "private" in a public commit are not swept into the private message.
 _PRIVATE_RE = re.compile(r"[\(\[]\s*private|private[-\s]only", re.IGNORECASE)
 
+# CAR MATERIAL in commit SUBJECTS must never reach the PUBLIC changelog feed — the
+# owner's "no car material on public" guardrail applies to every public output, not
+# just the firmware binary (this classifier is why the binary guardrail's cousin
+# lives here). Any subject matching a car cipher/feature/brand/decoder keyword is
+# routed to the PRIVATE message instead. Deliberately broad and fail-safe: it is
+# harmless to keep a borderline commit off the public feed, but a leak is not. If a
+# genuinely public commit is ever hidden by this, tag it in the future — do NOT
+# loosen these keywords. Word-boundaried so "car" won't match "card", etc.
+_CAR_RE = re.compile(
+    r"\b("
+    r"vag|aut[-_ ]?64|proto[-_ ]?pirate|proto_pirate|"
+    r"car|kia|hyundai|audi|bmw|ford|renault|nissan|toyota|mazda|fiat|peuge?ot|"
+    r"citro[e\xEB]n|chevrolet|chrysler|jeep|subaru|mitsubishi|opel|volvo|porsche|"
+    r"lexus|ldv|ducato|land[-_ ]?rover|scher[-_ ]?khan|star[-_ ]?line|starline|"
+    r"sheriff|fob|rke|immobil\w*|dst[-_ ]?40|dst[-_ ]?80|megamos|hitag\d*|tpms|"
+    r"keefob|maruti|volkswagen|skoda|seat"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_car_subject(subject):
+    return bool(_CAR_RE.search(subject))
+
 
 def is_private_subject(subject):
-    return bool(_PRIVATE_RE.search(subject))
+    # Private feed catches BOTH explicitly-private commits AND anything car-related,
+    # so car development can never be announced on the public channel.
+    return bool(_PRIVATE_RE.search(subject)) or is_car_subject(subject)
 
 
 BOARDS = {
@@ -105,8 +131,30 @@ def build_changelog(marker):
 
 
 def post(url, kind, board_tag, label, version, subject, changelog_lines, ts, test):
-    body = "\n".join(f"- {l}" for l in changelog_lines) if changelog_lines else "- (none)"
-    content = f"**{subject} {version}** — {label}\n{ts}\n{body}"
+    # Cap the message so a big backlog can't blow the webhook's content limit.
+    # A stale deploy marker let ~195 commits pile up -> a 14 KB body -> HTTP 400
+    # (a shorter 2.5 KB message went through, so the ceiling is a few KB; 1800 is a
+    # safe margin under the common 2000-char cap). Keep the NEWEST commits (git log is
+    # newest-first) and note how many older ones were omitted.
+    MAX_CONTENT = 1800
+    header = f"**{subject} {version}** — {label}\n{ts}\n"
+    lines = list(changelog_lines) if changelog_lines else ["(none)"]
+    kept, used, omitted = [], len(header), 0
+    for i, l in enumerate(lines):
+        item = f"- {l}\n"
+        if used + len(item) > MAX_CONTENT and kept:
+            omitted = len(lines) - i
+            break
+        kept.append(l)
+        used += len(item)
+    body = "\n".join(f"- {l}" for l in kept)
+    if omitted:
+        # Wording matters: this is the MESSAGE being trimmed to fit the webhook, NOT
+        # features dropped from the build. An earlier "(+N commits omitted)" phrasing
+        # read like N features were missing and caused a false alarm.
+        body += (f"\n- …(only the {len(kept)} newest commits shown to fit; "
+                 f"{omitted} older ones are still in the build — full list in git log)")
+    content = header + body
     payload = {
         "content": content,  # Discord-style webhooks read `content`
         "text": content,     # some webhooks read `text`
@@ -151,6 +199,16 @@ def main():
 
     ts = datetime.datetime.now().isoformat(timespec="seconds")
     ok = True
+
+    # HARD GUARD (defense in depth): never let a car-material commit reach the PUBLIC
+    # post, even if is_private_subject() is later weakened. A public output leaking car
+    # development is the exact failure this whole split exists to prevent.
+    _leaked = [l for l in public_lines if is_car_subject(l)]
+    if _leaked:
+        print(f"[{a.board}] GUARD: dropped {len(_leaked)} car commit(s) from the PUBLIC "
+              f"message (routing them private). Fix is_private_subject if this fires.")
+        public_lines = [l for l in public_lines if not is_car_subject(l)]
+        private_lines = private_lines + _leaked
 
     # 1) PUBLIC message first.
     if public_lines or a.test:

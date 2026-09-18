@@ -64,38 +64,61 @@ CAR_NAME_MARKERS = [
 ]
 
 
+def scan(data, check_keeloq=True):
+    """Return the list of car-material hits in a blob."""
+    hits = [d for m, d in KEY_MARKERS.items() if m in data]
+    if check_keeloq and KEELOQ_ENTRY.search(data):
+        hits.append("KeeLoq keystore key-entry line (HEX:type:Name)")
+    hits += [f"car RKE name {m!r}" for m in CAR_NAME_MARKERS if m in data]
+    return hits
+
+
+def _iter_paths(path):
+    """Yield each file to scan: a directory is walked recursively, a file yields itself."""
+    if os.path.isdir(path):
+        for dirpath, _, filenames in os.walk(path):
+            for fn in sorted(filenames):
+                yield os.path.join(dirpath, fn)
+    else:
+        yield path
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("usage: verify_public_no_car.py <bin> [<bin> ...]")
+    # Flags may precede/among the paths. --skip-keeloq drops the KeeLoq key-entry
+    # check: use it ONLY for the SD-content scan, where keeloq_mfcodes_user (gate /
+    # garage manufacturer codes, dual-use, legitimately public) would otherwise
+    # false-positive. The firmware-binary scan keeps the full check.
+    check_keeloq = "--skip-keeloq" not in sys.argv[1:]
+    paths = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if not paths:
+        print("usage: verify_public_no_car.py [--skip-keeloq] <bin|dir> [<bin|dir> ...]")
         return 2
     authorized = os.environ.get("PUBLIC_CAR_AUTH", "") == AUTH_PASSWORD
     if authorized:
         print("NOTE: PUBLIC_CAR_AUTH matches — owner-authorized car material on "
               "public. Findings are reported below but do NOT abort the deploy.")
     overall = 0
-    for path in sys.argv[1:]:
-        try:
-            with open(path, "rb") as f:
-                data = f.read()
-        except OSError as e:
-            print(f"ERROR: cannot read {path}: {e}")
-            overall = 1
-            continue
-
-        hits = [d for m, d in KEY_MARKERS.items() if m in data]
-        if KEELOQ_ENTRY.search(data):
-            hits.append("KeeLoq keystore key-entry line (HEX:type:Name)")
-        hits += [f"car RKE name {m!r}" for m in CAR_NAME_MARKERS if m in data]
-
-        if hits:
-            label = "CAR MATERIAL FOUND (authorized)" if authorized else "FAIL: CAR MATERIAL FOUND"
-            print(f"{label} in public bin: {path}")
-            for h in sorted(set(hits)):
-                print(f"  - {h}")
-            if not authorized:
+    scanned = 0
+    for arg in paths:
+        for path in _iter_paths(arg):
+            try:
+                with open(path, "rb") as f:
+                    data = f.read()
+            except OSError as e:
+                print(f"ERROR: cannot read {path}: {e}")
                 overall = 1
-        else:
-            print(f"PASS: no car material in {path}")
+                continue
+            scanned += 1
+            hits = scan(data, check_keeloq=check_keeloq)
+            if hits:
+                label = "CAR MATERIAL FOUND (authorized)" if authorized else "FAIL: CAR MATERIAL FOUND"
+                print(f"{label} in {path}:")
+                for h in sorted(set(hits)):
+                    print(f"  - {h}")
+                if not authorized:
+                    overall = 1
+    if scanned and not overall:
+        print(f"PASS: no car material ({scanned} file(s) scanned).")
     if overall:
         print("Public builds must be car-free (guardrail). Aborting deploy.")
     return overall

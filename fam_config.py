@@ -300,6 +300,14 @@ if _is_public:
     # make/model strings -> NO car material on public (owner guardrail). Stripped.
     _car_apps = {"can_commander", "vin_decoder", "fordradiocode"}
     APPS = [a for a in APPS if a not in _car_apps]
+    # Immo Keys — offline immobiliser-cipher key calculator (AUT64 for VAG/Mazda,
+    # DST80 for Toyota, Megamos for VW). Pure compute, but it ships the car-cipher
+    # name strings ("AUT64 (VAG/Mazda)", etc.) that the car-free guardrail
+    # (tools/verify_public_no_car.py CAR_NAME_MARKERS: b"AUT64") forbids in a public
+    # bin. It was added to APPS/OPTIONAL_APPS but never to this public drop list, so
+    # public builds leaked "AUT64" and verify_public_no_car aborted them. PRIVATE-only,
+    # like the rest of the car tooling. (2026-09-18)
+    APPS = [a for a in APPS if a != "immo_keys"]
     # TagTinker (IR ESL / e-ink shelf-label tool) is PRIVATE-only per the owner's
     # scope; never ship it in public webflasher builds.
     APPS = [a for a in APPS if a != "tagtinker"]

@@ -34,6 +34,13 @@ if errorlevel 1 (echo   Merged bin missing 'storage' - NOT staged. & goto :fail)
 echo [verify] car-key guard (private-only): bin must be car-free...
 python "%DIR%tools\verify_public_no_car.py" "%DIR%Flipper-m5stick_s3-public-merged.bin"
 if errorlevel 1 (echo   ABORT: car key material found in bin - NOT staged. & goto :fail)
+echo [verify] car-key guard: webflash\sd_content (SD download) must be car-free too...
+REM The bin guard above only scans the firmware image. sd_content\ is a SEPARATE public
+REM output (the microSD download) and once nearly leaked a stale VAG keystore there, so
+REM scan it as well. --skip-keeloq: keeloq_mfcodes_user is dual-use gate/garage codes and
+REM legitimately ships; the bin scan keeps the full keeloq check.
+python "%DIR%tools\verify_public_no_car.py" --skip-keeloq "%DIR%webflash\sd_content"
+if errorlevel 1 (echo   ABORT: car material found in webflash\sd_content - NOT staged. & goto :fail)
 copy /Y "%DIR%Flipper-m5stick_s3-public-merged.bin" "%DIR%webflash\Flipper-m5stick_s3-public-merged.bin" >nul
 
 echo [changelog] posting public-build changelog to webhook (best-effort)...
