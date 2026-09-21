@@ -8,7 +8,7 @@
 
 #define NRF24_JAM_CFG_PATH    INT_PATH(".nrf24jam.cfg")
 #define NRF24_JAM_CFG_MAGIC   (0x4E) /* 'N' — unused by other settings */
-#define NRF24_JAM_CFG_VERSION (9) /* v9: added BLE-Conn + RC/Drone-FHSS preset slots */
+#define NRF24_JAM_CFG_VERSION (10) /* v10: per-mode FHSS companion preset slots */
 
 /* Persisted blob: WiFi/Activity/Manual get one slot each, while the Protocol
  * source keeps a separate slot per preset (each protocol has its own optimal

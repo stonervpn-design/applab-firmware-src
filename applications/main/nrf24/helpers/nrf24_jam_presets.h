@@ -22,6 +22,20 @@ typedef enum {
     Nrf24JamPresetDrone, /* FHSS drone — random hop 0..124 */
     Nrf24JamPresetBleConn, /* curated BLE data-channel FHSS subset (19 ch, fast-hop) */
     Nrf24JamPresetRcFhss, /* curated 2.4G RC/drone FHSS subset (21 ch, fast-hop) */
+    /* Per-mode FHSS companions. Each fast-hops (zero-dwell CW + build-time shuffle)
+     * across the SAME channel set as its matching base preset above - the same
+     * lever as BT Classic 2 / BLE-Connection / RC-Drone, applied to every base
+     * band as its own selectable mode. The base presets stay unchanged; these are
+     * appended so existing preset indices don't shift. */
+    Nrf24JamPresetFullFhss, /* Full Spectrum, fast-hopped 0..124 */
+    Nrf24JamPresetWifiFhss, /* WiFi sub-channels, fast-hopped */
+    Nrf24JamPresetBleFhss, /* BLE data channels, fast-hopped */
+    Nrf24JamPresetBleAdvFhss, /* BLE advertising 37/38/39, fast-hopped */
+    Nrf24JamPresetBluetoothFhss, /* BT Classic 2..80, fast-hopped */
+    Nrf24JamPresetUsbFhss, /* USB dongles, fast-hopped */
+    Nrf24JamPresetVideoFhss, /* Video/FPV, fast-hopped */
+    Nrf24JamPresetRcCtrlFhss, /* RC controllers (low ch), fast-hopped */
+    Nrf24JamPresetZigbeeFhss, /* Zigbee 11..26, fast-hopped */
     Nrf24JamPresetCount,
 } Nrf24JamPreset;
 
