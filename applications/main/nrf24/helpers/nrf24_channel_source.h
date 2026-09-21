@@ -11,6 +11,7 @@ typedef enum {
     Nrf24SourceProtocol = 0, /* curated protocol preset (BLE/BT/WiFi-band/…) */
     Nrf24SourceWifi, /* range derived from a scanned WiFi AP */
     Nrf24SourceActivity, /* top-N channels from an RPD activity scan */
+    Nrf24SourceManual, /* single operator-chosen channel, parked at 100% duty */
     Nrf24SourceCount,
 } Nrf24JamSource;
 
@@ -29,8 +30,12 @@ typedef struct {
     bool activity_wide; /* Activity: false = Top-N, true = Wide sweep */
     bool activity_scanned; /* Activity scan cached this session */
     uint8_t activity_count; /* number of Top-N channels (0 = none → Wide) */
+    uint8_t activity_focus; /* 0 = jam all Top-N; else keep only the busiest K (1/2/4)
+                             * — concentrates the fixed power onto fewer channels for
+                             * +10*log10(N/K) dB average on each retained channel. */
     uint8_t activity_ch[NRF24_ACTIVITY_TARGETS];
     uint16_t activity_hits[NRF24_ACTIVITY_TARGETS];
+    uint8_t manual_ch; /* Manual source: the single parked channel (0..125) */
     bool resume_running; /* restore run-state after a scan/config sub-scene */
 } Nrf24JamState;
 
@@ -51,11 +56,17 @@ void nrf24_source_selection_label(Nrf24App* app, char* buf, size_t cap);
  * Returns the channel count (0 if nothing to jam, e.g. WiFi with no AP). */
 size_t nrf24_source_fill_channels(Nrf24App* app, uint8_t* out, size_t cap);
 
-/* Left/Right: change the selection within the current source (dir = +1/-1). */
+/* Left/Right (held encoder): change the sub-selection within the current source
+ * (dir = +1/-1) — pick a WiFi AP, toggle Activity Smart⇄Wide. For Protocol this
+ * still steps the preset, redundant with the plain-rotate walk below. */
 void nrf24_source_select(Nrf24App* app, int dir);
 
-/* Down: advance to the next source type (Protocol→Manual→WiFi→Activity→…). */
-void nrf24_source_cycle_type(Nrf24App* app);
+/* Up/Down (plain encoder rotation): walk a single flat list of every selectable
+ * target — each Protocol preset individually, then the WiFi and Activity scan
+ * sources, wrapping around. dir = +1 (next) / -1 (prev). This lets the user
+ * reach every preset (e.g. "BT Classic 2") just by turning the encoder, without
+ * the hold-and-turn gesture. */
+void nrf24_source_step(Nrf24App* app, int dir);
 
 /* True if the current source still needs a scan before it can produce
  * channels (WiFi without APs, Activity without a scan). */

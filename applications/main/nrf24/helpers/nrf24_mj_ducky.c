@@ -13,6 +13,9 @@
 
 #define MJ_DUCKY_INTER_KEY_MS 10
 
+/* Upper bound on REPEAT N so a bogus/huge count can't hang the device. */
+#define MJ_DUCKY_MAX_REPEAT 1000
+
 /* Count lines once at open time so the UI can show progress. */
 static size_t count_lines(Storage* storage, const char* path) {
     Stream* s = buffered_file_stream_alloc(storage);
@@ -48,6 +51,7 @@ MjScript* mj_script_open(Storage* storage, const char* path) {
     }
     s->stream = stream;
     s->line_buf = furi_string_alloc();
+    s->last_line = furi_string_alloc();
     s->default_delay_ms = 0;
 
     /* Extract basename for display. */
@@ -65,6 +69,7 @@ void mj_script_close(MjScript* s) {
         stream_free((Stream*)s->stream);
     }
     if(s->line_buf) furi_string_free((FuriString*)s->line_buf);
+    if(s->last_line) furi_string_free((FuriString*)s->last_line);
     free(s);
 }
 
@@ -158,6 +163,66 @@ static bool parse_combo(const char* line, uint8_t* mod_out, uint8_t* key_out) {
     return true;
 }
 
+/* Execute one already-trimmed, non-empty, non-comment, non-REPEAT line.
+ * Shared by the normal step path and by REPEAT (which re-feeds the buffered
+ * previous line). Never handles REPEAT itself, so it cannot recurse. */
+static void process_line(MjScript* s, const char* line, const MjTarget* target, volatile bool* abort) {
+    /* DEFAULTDELAY / DEFAULT_DELAY */
+    const char* arg;
+    if((arg = match_directive(line, "DEFAULT_DELAY")) ||
+       (arg = match_directive(line, "DEFAULTDELAY"))) {
+        int v = atoi(arg);
+        if(v < 0) v = 0;
+        if(v > 10000) v = 10000;
+        s->default_delay_ms = (uint16_t)v;
+        return;
+    }
+
+    /* DELAY */
+    if((arg = match_directive(line, "DELAY"))) {
+        int v = atoi(arg);
+        if(v < 1) v = 1;
+        if(v > 60000) v = 60000;
+        wait_with_abort((uint32_t)v, abort);
+        return;
+    }
+
+    /* STRINGLN */
+    if((arg = match_directive(line, "STRINGLN"))) {
+        mj_inject_string(target, arg, abort);
+        if(!(abort && *abort)) {
+            mj_inject_keystroke(target, MJ_MOD_NONE, MJ_KEY_ENTER);
+        }
+        if(s->default_delay_ms) wait_with_abort(s->default_delay_ms, abort);
+        return;
+    }
+
+    /* STRING */
+    if((arg = match_directive(line, "STRING"))) {
+        mj_inject_string(target, arg, abort);
+        if(s->default_delay_ms) wait_with_abort(s->default_delay_ms, abort);
+        return;
+    }
+
+    /* Combo / single key / chord */
+    uint8_t mod, key;
+    if(parse_combo(line, &mod, &key)) {
+        if(mod || key) {
+            mj_inject_keystroke(target, mod, key);
+            furi_delay_ms(MJ_DUCKY_INTER_KEY_MS);
+        }
+        if(s->default_delay_ms) wait_with_abort(s->default_delay_ms, abort);
+        return;
+    }
+
+    snprintf(
+        s->last_warning,
+        sizeof(s->last_warning),
+        "L%u: unknown '%.20s'",
+        (unsigned)s->current_line,
+        line);
+}
+
 bool mj_script_step(MjScript* s, const MjTarget* target, volatile bool* abort) {
     if(!s || s->eof || s->error) return false;
     if(abort && *abort) return false;
@@ -181,71 +246,35 @@ bool mj_script_step(MjScript* s, const MjTarget* target, volatile bool* abort) {
         return true;
     }
 
-    /* DEFAULTDELAY / DEFAULT_DELAY */
+    /* REPEAT N — BadUSB-style "re-run the previous executable line N times".
+     * REPEAT is never itself buffered, so it cannot repeat itself; the source
+     * line reference (s->last_line) is a distinct buffer from line_buf, so it
+     * stays stable while we re-feed it. */
     const char* arg;
-    if((arg = match_directive(line, "DEFAULT_DELAY")) ||
-       (arg = match_directive(line, "DEFAULTDELAY"))) {
-        int v = atoi(arg);
-        if(v < 0) v = 0;
-        if(v > 10000) v = 10000;
-        s->default_delay_ms = (uint16_t)v;
-        return true;
-    }
-
-    /* DELAY */
-    if((arg = match_directive(line, "DELAY"))) {
-        int v = atoi(arg);
-        if(v < 1) v = 1;
-        if(v > 60000) v = 60000;
-        wait_with_abort((uint32_t)v, abort);
-        return true;
-    }
-
-    /* STRINGLN */
-    if((arg = match_directive(line, "STRINGLN"))) {
-        mj_inject_string(target, arg, abort);
-        if(!(abort && *abort)) {
-            mj_inject_keystroke(target, MJ_MOD_NONE, MJ_KEY_ENTER);
+    if((arg = match_directive(line, "REPEAT"))) {
+        FuriString* prev = (FuriString*)s->last_line;
+        if(furi_string_size(prev) == 0) {
+            snprintf(
+                s->last_warning,
+                sizeof(s->last_warning),
+                "L%u: REPEAT with no prior line",
+                (unsigned)s->current_line);
+            return true;
         }
-        if(s->default_delay_ms) wait_with_abort(s->default_delay_ms, abort);
-        return true;
-    }
-
-    /* STRING */
-    if((arg = match_directive(line, "STRING"))) {
-        mj_inject_string(target, arg, abort);
-        if(s->default_delay_ms) wait_with_abort(s->default_delay_ms, abort);
-        return true;
-    }
-
-    /* REPEAT — BadUSB-style "repeat last line N times".
-     * We don't keep the last line buffered (cost not worth it for a fringe
-     * directive); skip with warning. */
-    if(starts_with_ci(line, "REPEAT")) {
-        snprintf(
-            s->last_warning,
-            sizeof(s->last_warning),
-            "L%u: REPEAT not supported",
-            (unsigned)s->current_line);
-        return true;
-    }
-
-    /* Combo / single key / chord */
-    uint8_t mod, key;
-    if(parse_combo(line, &mod, &key)) {
-        if(mod || key) {
-            mj_inject_keystroke(target, mod, key);
-            furi_delay_ms(MJ_DUCKY_INTER_KEY_MS);
+        int n = atoi(arg);
+        if(n < 1) n = 1;
+        if(n > MJ_DUCKY_MAX_REPEAT) n = MJ_DUCKY_MAX_REPEAT;
+        const char* prev_cstr = furi_string_get_cstr(prev);
+        for(int i = 0; i < n; i++) {
+            if(abort && *abort) break;
+            process_line(s, prev_cstr, target, abort);
         }
-        if(s->default_delay_ms) wait_with_abort(s->default_delay_ms, abort);
         return true;
     }
 
-    snprintf(
-        s->last_warning,
-        sizeof(s->last_warning),
-        "L%u: unknown '%.20s'",
-        (unsigned)s->current_line,
-        line);
+    /* Executable line: remember it so a following REPEAT can replay it, then
+     * run it. */
+    furi_string_set((FuriString*)s->last_line, fs);
+    process_line(s, line, target, abort);
     return true;
 }

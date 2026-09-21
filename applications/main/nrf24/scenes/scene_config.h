@@ -10,3 +10,15 @@ ADD_SCENE(nrf24_app, mj_target_list, MjTargetList)
 ADD_SCENE(nrf24_app, mj_script_select, MjScriptSelect)
 ADD_SCENE(nrf24_app, mj_attack, MjAttack)
 ADD_SCENE(nrf24_app, mj_auto, MjAuto)
+#ifndef PUBLIC_BUILD
+// Sniffer + Replay -- attack tooling (nrf24_capture store), private only.
+ADD_SCENE(nrf24_app, sniffer, Sniffer)
+// KeySniffer -- unencrypted-keyboard keystroke log, private only.
+ADD_SCENE(nrf24_app, keysniffer, KeySniffer)
+// Fuzzer -- mutated-frame TX blaster (nrf24_fuzz + nrf24_capture), private only.
+ADD_SCENE(nrf24_app, fuzz, Fuzz)
+// Drone (Bayang) -- toy-quadcopter bind/control (drone_bayang), private only.
+ADD_SCENE(nrf24_app, drone_bayang, DroneBayang)
+// Fusion Spectrum -- full-screen color takeover + nRF24 heat-waterfall, private only.
+ADD_SCENE(nrf24_app, fusion_spectrum, FusionSpectrum)
+#endif

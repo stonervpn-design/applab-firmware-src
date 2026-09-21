@@ -41,6 +41,7 @@ typedef struct {
     struct Storage* storage;
     void* stream;
     void* line_buf;
+    void* last_line; /* last executed line (for REPEAT); FuriString* */
     uint16_t default_delay_ms;
     bool eof;
     bool error;

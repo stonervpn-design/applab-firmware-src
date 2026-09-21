@@ -1,9 +1,10 @@
 #include "nrf24_app.h"
 #include "nrf24_hw.h"
-#include "helpers/nrf24_jam_config.h"
-#include "helpers/nrf24_channel_source.h"
 #include <furi_hal_power.h>
 #include <stdlib.h>
+#ifndef PUBLIC_BUILD
+#include "helpers/nrf24_capture.h" // on-demand capture ring, freed here (private only)
+#endif
 
 static bool nrf24_app_custom_event_callback(void* context, uint32_t event) {
     furi_assert(context);
@@ -25,6 +26,7 @@ static void nrf24_app_tick_event_callback(void* context) {
 
 static Nrf24App* nrf24_app_alloc(void) {
     Nrf24App* app = malloc(sizeof(Nrf24App));
+    furi_check(app); /* OOM: clean panic instead of a NULL-deref (port malloc can return NULL) */
     if(!app) return NULL;
 
     app->gui = furi_record_open(RECORD_GUI);
@@ -50,9 +52,7 @@ static Nrf24App* nrf24_app_alloc(void) {
 
     app->var_item_list = variable_item_list_alloc();
     view_dispatcher_add_view(
-        app->view_dispatcher,
-        Nrf24ViewJamConfig,
-        variable_item_list_get_view(app->var_item_list));
+        app->view_dispatcher, Nrf24ViewJamConfig, variable_item_list_get_view(app->var_item_list));
 
     app->spectrum_view = nrf24_spectrum_view_alloc();
     view_set_context(app->spectrum_view, app->view_dispatcher);
@@ -76,10 +76,6 @@ static Nrf24App* nrf24_app_alloc(void) {
 
     app->wifi_aps = NULL;
     app->wifi_ap_count = 0;
-    app->selected_wifi_ssid[0] = '\0';
-    app->selected_wifi_channel = 0;
-
-    nrf24_jam_state_init(&app->jam);
     nrf24_jam_config_load();
 
     app->mj_target_count = 0;
@@ -93,17 +89,17 @@ static Nrf24App* nrf24_app_alloc(void) {
 static void nrf24_app_free(Nrf24App* app) {
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewSubmenu);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewWidget);
-    view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewJamConfig);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewSpectrum);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewJam);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewScan);
+    view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewJamConfig);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewMjScan);
     view_dispatcher_remove_view(app->view_dispatcher, Nrf24ViewMjAttack);
 
     submenu_free(app->submenu);
     widget_free(app->widget);
-    variable_item_list_free(app->var_item_list);
     nrf24_spectrum_view_free(app->spectrum_view);
+    variable_item_list_free(app->var_item_list);
     nrf24_jam_view_free(app->jam_view);
     nrf24_scan_view_free(app->scan_view);
     nrf24_mj_scan_view_free(app->mj_scan_view);
@@ -121,6 +117,13 @@ static void nrf24_app_free(Nrf24App* app) {
 
     scene_manager_free(app->scene_manager);
     view_dispatcher_free(app->view_dispatcher);
+
+#ifndef PUBLIC_BUILD
+    /* Return the on-demand capture ring (~3 KB) to the heap. Safe here: every
+     * scene's on_exit (which stops its RX/promiscuous worker) has already run
+     * via scene_manager_free above, so no capture writer can race this. */
+    nrf24_capture_free();
+#endif
 
     furi_record_close(RECORD_STORAGE);
     app->storage = NULL;

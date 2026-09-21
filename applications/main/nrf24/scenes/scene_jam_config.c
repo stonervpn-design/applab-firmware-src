@@ -69,11 +69,17 @@ static void jam_config_set_hop(VariableItem* item) {
     nrf24_jam_config_touch();
 }
 
-/* Global override (not per-preset): force Turbo flood on every strategy. */
-static void jam_config_set_force_flood(VariableItem* item) {
+/* Manual source only: pick the single channel to park the carrier on (0..125).
+ * Stored in the live jam state (not the persisted RF-param slot); the worker
+ * rebuilds its 1-channel set when the jam scene re-enters. */
+static void jam_config_set_manual_ch(VariableItem* item) {
+    Nrf24App* app = variable_item_get_context(item);
     uint8_t idx = variable_item_get_current_value_index(item);
-    nrf24_jam_config_force_flood_set(idx ? 1 : 0);
-    variable_item_set_current_value_text(item, idx ? "On" : "Off");
+    app->jam.manual_ch = idx;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%u", idx);
+    variable_item_set_current_value_text(item, buf);
+    nrf24_jam_config_touch();
 }
 
 void nrf24_app_scene_jam_config_on_enter(void* context) {
@@ -96,6 +102,15 @@ void nrf24_app_scene_jam_config_on_enter(void* context) {
         variable_item_list_set_header(vil, header);
     } else {
         variable_item_list_set_header(vil, nrf24_source_type_label(app->jam.source));
+    }
+
+    /* Manual pin: a Channel picker (0..125) at the top. Also nudgeable with Right
+     * on the jam screen; here it is bidirectional for precise centering. */
+    if(app->jam.source == Nrf24SourceManual) {
+        item = variable_item_list_add(vil, "Channel", 126, jam_config_set_manual_ch, app);
+        variable_item_set_current_value_index(item, app->jam.manual_ch);
+        snprintf(buf, sizeof(buf), "%u", app->jam.manual_ch);
+        variable_item_set_current_value_text(item, buf);
     }
 
     item = variable_item_list_add(vil, "PA Level", Nrf24Pa_Count, jam_config_set_pa, app);
@@ -129,12 +144,6 @@ void nrf24_app_scene_jam_config_on_enter(void* context) {
     item = variable_item_list_add(vil, "Hop Order", 2, jam_config_set_hop, app);
     variable_item_set_current_value_index(item, cfg->random_hop ? 1 : 0);
     variable_item_set_current_value_text(item, nrf24_jam_hop_label(cfg->random_hop));
-
-    /* Global max-power switch: force Turbo flood on every strategy/preset. */
-    uint8_t ff = nrf24_jam_config_force_flood_get();
-    item = variable_item_list_add(vil, "Force Flood", 2, jam_config_set_force_flood, app);
-    variable_item_set_current_value_index(item, ff);
-    variable_item_set_current_value_text(item, ff ? "On" : "Off");
 
     view_dispatcher_switch_to_view(app->view_dispatcher, Nrf24ViewJamConfig);
 }

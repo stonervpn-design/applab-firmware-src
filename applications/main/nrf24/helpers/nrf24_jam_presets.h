@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 /* Protocol-targeted jammer presets, ported from Bruce's nrf_jammer.cpp.
  * Each preset maps to a curated NRF24 channel list (2400 + ch MHz) tuned to
@@ -13,11 +14,14 @@ typedef enum {
     Nrf24JamPresetBle, /* BLE data channels */
     Nrf24JamPresetBleAdv, /* BLE advertising ch 37/38/39 */
     Nrf24JamPresetBluetooth, /* BT classic FHSS 2..80 */
+    Nrf24JamPresetBluetooth2, /* BT classic — exact nRF24_jammer FAP replica (21-ch list, zero-dwell CW) */
     Nrf24JamPresetUsb, /* wireless USB dongles */
     Nrf24JamPresetVideo, /* video / FPV (upper ISM) */
     Nrf24JamPresetRc, /* RC controllers (low channels) */
     Nrf24JamPresetZigbee, /* Zigbee ch 11..26 */
     Nrf24JamPresetDrone, /* FHSS drone — random hop 0..124 */
+    Nrf24JamPresetBleConn, /* curated BLE data-channel FHSS subset (19 ch, fast-hop) */
+    Nrf24JamPresetRcFhss, /* curated 2.4G RC/drone FHSS subset (21 ch, fast-hop) */
     Nrf24JamPresetCount,
 } Nrf24JamPreset;
 
@@ -58,7 +62,13 @@ uint8_t nrf24_jam_preset_default_strategy(Nrf24JamPreset preset);
  * (shuffling 3 channels is pointless), random (1) for the wide Turbo sweeps. */
 uint8_t nrf24_jam_preset_default_hop(Nrf24JamPreset preset);
 
+/* True for presets driven by the zero-dwell / no-redraw fast-retune loop (the
+ * curated scattered FHSS subsets: BT Classic 2 plus the BLE-connection and
+ * RC/drone-FHSS subsets). These walk a small channel set at ~zero dwell so each
+ * retained channel is revisited far more often than a wide smear would allow. */
+bool nrf24_jam_preset_is_fast_hop(Nrf24JamPreset preset);
+
 /* Live-tuning bounds / step for the dwell time. */
-#define NRF24_JAM_DWELL_MIN_US 100
+#define NRF24_JAM_DWELL_MIN_US 20
 #define NRF24_JAM_DWELL_MAX_US 5000
 #define NRF24_JAM_DWELL_STEP_US 100

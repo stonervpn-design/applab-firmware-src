@@ -6,9 +6,9 @@
 #include <gui/view_dispatcher.h>
 #include <gui/modules/submenu.h>
 #include <gui/modules/widget.h>
-#include <gui/modules/variable_item_list.h>
 #include <dialogs/dialogs.h>
 #include <storage/storage.h>
+#include <gui/modules/variable_item_list.h>
 #include <esp_wifi.h>
 
 #include "views/nrf24_spectrum_view.h"
@@ -18,6 +18,7 @@
 #include "views/nrf24_mj_attack_view.h"
 #include "helpers/nrf24_mj_core.h"
 #include "helpers/nrf24_channel_source.h"
+#include "helpers/nrf24_jam_config.h"
 #include "scenes/scenes.h"
 
 typedef enum {
@@ -44,20 +45,18 @@ typedef struct Nrf24App {
     Storage* storage;
 
     View* spectrum_view;
-    View* jam_view; /* unified jam engine */
+    View* jam_view; /* unified jam engine (Sor3nt) */
     View* scan_view; /* activity-scan progress */
     View* mj_scan_view;
     View* mj_attack_view;
 
-    /* Unified jammer selection / scan-cache state */
+    /* Unified jammer selection / scan-cache state (Sor3nt jammer) */
     Nrf24JamState jam;
-
-    /* WiFi scan results — owned by the wifi-scan scene, consumed by the
-     * WiFi channel source. */
     wifi_ap_record_t* wifi_aps;
     uint16_t wifi_ap_count;
     char selected_wifi_ssid[33];
     uint8_t selected_wifi_channel;
+    bool wifi_was_paused;
 
     /* MouseJacker shared state (owned by the mj scenes) */
     MjTarget mj_targets[MJ_MAX_TARGETS];

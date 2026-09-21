@@ -1,4 +1,6 @@
 #include "nrf24_spectrum_view.h"
+#include "../helpers/nrf24_spectrum_calc.h"
+#include <stdint.h>
 
 #include <gui/canvas.h>
 #include <gui/elements.h>
@@ -50,6 +52,37 @@ static void nrf24_spectrum_draw_callback(Canvas* canvas, void* _model) {
         }
     }
 
+    /* Band markers: WiFi 1/6/11 (solid tick) + BLE adv 37/38/39 (dotted tick) */
+    for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) {
+        int x = BAR_X(i);
+        if(nrf24_channel_is_wifi_marker((uint8_t)i)) {
+            canvas_draw_line(canvas, x, BAR_TOP - 2, x, BAR_TOP - 6);
+        } else if(nrf24_channel_is_ble_marker((uint8_t)i)) {
+            canvas_draw_dot(canvas, x, BAR_TOP - 3);
+            canvas_draw_dot(canvas, x, BAR_TOP - 5);
+        }
+    }
+
+    /* Cursor readout (Task 5) */
+    if(model->cursor_on) {
+        int cx = BAR_X(model->cursor_ch);
+        canvas_draw_line(canvas, cx, BAR_TOP, cx, BAR_BOTTOM);
+        char rd[24];
+        snprintf(rd, sizeof(rd), "c%u %uMHz", model->cursor_ch, nrf24_channel_to_mhz(model->cursor_ch));
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str_aligned(canvas, 64, 6, AlignCenter, AlignTop, rd);
+    }
+
+    /* Max-hold overlay: a 1px cap at each peak */
+    if(model->max_hold) {
+        const int bar_h = BAR_BOTTOM - BAR_TOP;
+        for(int i = 0; i < NRF24_SPECTRUM_CHANNELS; i++) {
+            int ph = (model->peaks[i] * bar_h * 3) / (125 * 2);
+            if(ph > bar_h) ph = bar_h;
+            if(ph > 0) canvas_draw_dot(canvas, BAR_X(i), BAR_BOTTOM - ph);
+        }
+    }
+
     /* Channel scale labels — every 10 channels */
     canvas_set_font(canvas, FontSecondary);
     char tick[4];
@@ -63,8 +96,28 @@ static void nrf24_spectrum_draw_callback(Canvas* canvas, void* _model) {
 }
 
 static bool nrf24_spectrum_input_callback(InputEvent* event, void* context) {
-    UNUSED(context);
-    UNUSED(event);
+    ViewDispatcher* vd = context; /* context IS the ViewDispatcher */
+    if(event->type == InputTypeShort) {
+        switch(event->key) {
+        case InputKeyLeft:
+            view_dispatcher_send_custom_event(vd, Nrf24SpectrumEventCursorLeft);
+            return true;
+        case InputKeyRight:
+            view_dispatcher_send_custom_event(vd, Nrf24SpectrumEventCursorRight);
+            return true;
+        case InputKeyUp:
+            view_dispatcher_send_custom_event(vd, Nrf24SpectrumEventToggleMaxHold);
+            return true;
+        case InputKeyDown:
+            view_dispatcher_send_custom_event(vd, Nrf24SpectrumEventDwellCycle);
+            return true;
+        default:
+            return false; /* Back falls through to nav (pops scene) */
+        }
+    } else if(event->type == InputTypeLong && event->key == InputKeyOk) {
+        view_dispatcher_send_custom_event(vd, Nrf24SpectrumEventExport);
+        return true;
+    }
     return false;
 }
 
