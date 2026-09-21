@@ -69,6 +69,19 @@ static void jam_config_set_hop(VariableItem* item) {
     nrf24_jam_config_touch();
 }
 
+/* Manual source only: pick the single channel to park the carrier on (0..125).
+ * Stored in the live jam state (not the persisted RF-param slot); the worker
+ * rebuilds its 1-channel set when the jam scene re-enters. */
+static void jam_config_set_manual_ch(VariableItem* item) {
+    Nrf24App* app = variable_item_get_context(item);
+    uint8_t idx = variable_item_get_current_value_index(item);
+    app->jam.manual_ch = idx;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%u", idx);
+    variable_item_set_current_value_text(item, buf);
+    nrf24_jam_config_touch();
+}
+
 void nrf24_app_scene_jam_config_on_enter(void* context) {
     Nrf24App* app = context;
     VariableItemList* vil = app->var_item_list;
@@ -89,6 +102,15 @@ void nrf24_app_scene_jam_config_on_enter(void* context) {
         variable_item_list_set_header(vil, header);
     } else {
         variable_item_list_set_header(vil, nrf24_source_type_label(app->jam.source));
+    }
+
+    /* Manual pin: a Channel picker (0..125) at the top. Also nudgeable with Right
+     * on the jam screen; here it is bidirectional for precise centering. */
+    if(app->jam.source == Nrf24SourceManual) {
+        item = variable_item_list_add(vil, "Channel", 126, jam_config_set_manual_ch, app);
+        variable_item_set_current_value_index(item, app->jam.manual_ch);
+        snprintf(buf, sizeof(buf), "%u", app->jam.manual_ch);
+        variable_item_set_current_value_text(item, buf);
     }
 
     item = variable_item_list_add(vil, "PA Level", Nrf24Pa_Count, jam_config_set_pa, app);

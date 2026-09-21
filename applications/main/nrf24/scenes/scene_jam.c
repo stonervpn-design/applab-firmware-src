@@ -108,7 +108,6 @@ static int32_t jam_worker(void* context) {
         nrf24_hw_deinit();
         return 0;
     }
-    nrf24_hw_pa_unclamped(true);
 
     const uint32_t tick_hz = furi_kernel_get_tick_frequency();
 
@@ -163,17 +162,18 @@ static int32_t jam_worker(void* context) {
             jam_teardown(ctx);
         }
 
-        /* BT Classic 2 = exact replica of the nRF24_jammer FAP jam_bluetooth
+        /* Fast-hop curated subsets (BT Classic 2 / BLE Conn / RC-FHSS) = replica
+         * of the nRF24_jammer FAP jam_bluetooth
          * (LIST mode): continuous carrier (brought up above) + tight loop that
          * only retunes RF_CH across the curated 21-channel list, ZERO dwell and
          * a per-write bus acquire/release (no 30 ms batch hold → no long
          * un-jammed gaps). Fewer channels + zero dwell give a per-channel
          * revisit near the ~625 us BT hop slot, unlike our wide 79-ch smear. */
-        bool fap_bt = app->jam.source == Nrf24SourceProtocol &&
-                      app->jam.protocol == Nrf24JamPresetBluetooth2 &&
-                      cfg->strategy == Nrf24StrategyCw;
+        bool fast_hop = app->jam.source == Nrf24SourceProtocol &&
+                        nrf24_jam_preset_is_fast_hop((Nrf24JamPreset)app->jam.protocol) &&
+                        cfg->strategy == Nrf24StrategyCw;
 
-        if(ctx->active && fap_bt) {
+        if(ctx->active && fast_hop) {
             /* Exact replica of the FAP jam_bluetooth() loop AND its UI behaviour:
              * retune RF_CH across the curated list forever with ZERO dwell — and,
              * like the FAP (which never calls view_port_update while is_running),
@@ -215,10 +215,31 @@ static int32_t jam_worker(void* context) {
                 sweeps++;
             }
             uint32_t hold_ms = cfg->dwell_us;
-            uint32_t waited = 0;
-            while(waited < hold_ms && !ctx->stop && ctx->desired_running && !ctx->dirty) {
-                furi_delay_ms(25);
-                waited += 25;
+            int64_t afh_end = esp_timer_get_time() + (int64_t)hold_ms * 1000;
+            if(nrf24_hw_jammer_self_sustaining()) {
+                /* Genuine + : the CONT_WAVE+REUSE carrier transmits on its own
+                 * with CE HIGH, so simply park by waiting — the SPI bus is free
+                 * the whole dwell (LCD/SD/input stay responsive) and the +PA/LNA
+                 * stays keyed at full duty on this channel. */
+                while(esp_timer_get_time() < afh_end && !ctx->stop &&
+                      ctx->desired_running && !ctx->dirty) {
+                    furi_delay_ms(1);
+                }
+            } else {
+                /* Clone packet-flood carrier drains in ~430us, so hold a strong
+                 * carrier by pumping the FIFO in short bus-held chunks, yielding
+                 * the bus (LCD/SD/input) for ~1ms between chunks. */
+                while(esp_timer_get_time() < afh_end && !ctx->stop &&
+                      ctx->desired_running && !ctx->dirty) {
+                    nrf24_hw_acquire();
+                    int64_t chunk_end = esp_timer_get_time() + 5000; /* 5ms keyed */
+                    do {
+                        nrf24_hw_flood_pump();
+                    } while(esp_timer_get_time() < chunk_end && !ctx->stop &&
+                            ctx->desired_running && !ctx->dirty);
+                    nrf24_hw_release();
+                    furi_delay_ms(1); /* yield SD/LCD/input */
+                }
             }
         } else if(ctx->active) {
             uint16_t dwell = cfg->dwell_us;
@@ -231,8 +252,24 @@ static int32_t jam_worker(void* context) {
                   furi_get_tick() < batch_end) {
                 cur_ch = chbuf[hop_index % chcount];
                 if(strategy == Nrf24StrategyCw) {
+                    /* Retune the carrier onto this channel, then hold it here for
+                     * the dwell. */
                     nrf24_hw_jammer_set_channel(cur_ch);
-                    esp_rom_delay_us(dwell);
+                    int64_t cw_hop_end = esp_timer_get_time() + (int64_t)dwell;
+                    if(nrf24_hw_jammer_self_sustaining()) {
+                        /* Genuine + : CONT_WAVE+REUSE carrier keys the +PA/LNA on
+                         * its own with CE HIGH — no FIFO pumping, just dwell. */
+                        while(esp_timer_get_time() < cw_hop_end && !ctx->stop &&
+                              ctx->desired_running && !ctx->dirty) {
+                        }
+                    } else {
+                        /* Clone packet-flood carrier drains in ~430us — keep the
+                         * FIFO topped for the whole dwell so the PA stays keyed. */
+                        do {
+                            nrf24_hw_flood_pump();
+                        } while(esp_timer_get_time() < cw_hop_end && !ctx->stop &&
+                                ctx->desired_running && !ctx->dirty);
+                    }
                 } else {
                     /* Flood / Turbo: keep bursting on this channel until the
                      * dwell window (µs) elapses — at least one burst. Use the
@@ -298,7 +335,6 @@ static int32_t jam_worker(void* context) {
     }
 
     jam_teardown(ctx);
-    nrf24_hw_pa_unclamped(false);
     nrf24_hw_deinit();
     return 0;
 }

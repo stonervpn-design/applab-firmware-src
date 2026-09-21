@@ -80,6 +80,13 @@ void furi_hal_power_suppress_charge_exit(void);
 void furi_hal_power_info_get(PropertyValueCallback callback, char sep, void* context);
 void furi_hal_power_debug_get(PropertyValueCallback callback, void* context);
 
+/* CPU performance lock. This build has no DFS (CONFIG_PM_ENABLE is off), so the
+ * CPU always runs at its configured frequency and there is nothing to lock
+ * against; these are no-ops kept for API parity with the RF paths that raise a
+ * perf floor when dynamic frequency scaling is present. */
+void furi_hal_power_perf_lock_acquire(void);
+void furi_hal_power_perf_lock_release(void);
+
 #ifdef __cplusplus
 }
 #endif

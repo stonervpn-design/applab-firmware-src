@@ -106,8 +106,20 @@ void furi_hal_module_pins_read_nvs(
     uint8_t* ir_tx,
     uint8_t* ir_rx);
 
-/* Persist movable module pins to NVS (survives reboot) and apply immediately.
- * Called by the Pin Config app when a value changes. */
+/* Persist movable module pins to NVS ONLY (survives reboot). Does NOT touch the
+ * running GpioPin structs, so nothing is driven live — the pins take effect at the
+ * next boot. Used by the Pin Config app so editing a pin can never reconfigure a
+ * GPIO mid-session (e.g. the TCA8418 keyboard bus on GPIO 8/9). */
+void furi_hal_module_pins_save_nvs_only(
+    uint16_t cc1101_csn,
+    uint16_t cc1101_gdo0,
+    uint16_t nrf24_csn,
+    uint16_t nrf24_ce,
+    uint16_t ir_tx,
+    uint16_t ir_rx);
+
+/* Persist movable module pins to NVS (survives reboot) and apply immediately to
+ * the running structs (full effect on reboot). */
 void furi_hal_module_pins_save_nvs(
     uint16_t cc1101_csn,
     uint16_t cc1101_gdo0,

@@ -48,6 +48,24 @@ static const uint8_t CH_ZIGBEE[] = {4,  5,  6,  9,  10, 11, 14, 15, 16, 19, 20, 
                                     44, 45, 46, 49, 50, 51, 54, 55, 56, 59, 60, 61,
                                     64, 65, 66, 69, 70, 71, 74, 75, 76, 79, 80, 81};
 
+/* Curated FHSS subsets driven by the zero-dwell fast-hop loop (see scene_jam),
+ * the same lever as CH_BLUETOOTH2: a small scattered channel set is revisited
+ * far more often than a wide smear. Stored ascending; the worker's build-time
+ * Fisher-Yates (random_hop default) scatters each set once so the carrier never
+ * slews monotonically up-band. */
+
+/* BLE data-channel connection: every other BLE data channel on a uniform 4 MHz
+ * grid. nRF even 4..76 = BLE data ch (RF 1,3,..,37); none is an advertising
+ * channel (adv = nRF 2/26/80). 19 ch, max gap 4 MHz, no contiguous camp window. */
+static const uint8_t CH_BLE_CONN[] = {4,  8,  12, 16, 20, 24, 28, 32, 36, 40,
+                                      44, 48, 52, 56, 60, 64, 68, 72, 76};
+
+/* 2.4GHz RC / drone FHSS control links (FrSky, Spektrum, FlySky, Futaba, generic
+ * 2.4G): uniform 4 MHz decimation across the in-band region. nRF 2..82 =
+ * 2402..2482 MHz, all <= 83 (in-band). 21 ch, max gap 4 MHz. */
+static const uint8_t CH_RC_FHSS[] = {2,  6,  10, 14, 18, 22, 26, 30, 34, 38, 42,
+                                     46, 50, 54, 58, 62, 66, 70, 74, 78, 82};
+
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 
 const char* nrf24_jam_preset_name(Nrf24JamPreset preset) {
@@ -74,6 +92,10 @@ const char* nrf24_jam_preset_name(Nrf24JamPreset preset) {
         return "Zigbee";
     case Nrf24JamPresetDrone:
         return "Drone FHSS";
+    case Nrf24JamPresetBleConn:
+        return "BLE Connection";
+    case Nrf24JamPresetRcFhss:
+        return "RC/Drone FHSS";
     default:
         return "?";
     }
@@ -103,6 +125,10 @@ const char* nrf24_jam_preset_short(Nrf24JamPreset preset) {
         return "Zigbee";
     case Nrf24JamPresetDrone:
         return "Drone";
+    case Nrf24JamPresetBleConn:
+        return "BLE Conn";
+    case Nrf24JamPresetRcFhss:
+        return "RC FHSS";
     default:
         return "?";
     }
@@ -137,6 +163,12 @@ const uint8_t* nrf24_jam_preset_channels(Nrf24JamPreset preset, size_t* count) {
     case Nrf24JamPresetZigbee:
         *count = ARRAY_COUNT(CH_ZIGBEE);
         return CH_ZIGBEE;
+    case Nrf24JamPresetBleConn:
+        *count = ARRAY_COUNT(CH_BLE_CONN);
+        return CH_BLE_CONN;
+    case Nrf24JamPresetRcFhss:
+        *count = ARRAY_COUNT(CH_RC_FHSS);
+        return CH_RC_FHSS;
     case Nrf24JamPresetFull:
     case Nrf24JamPresetDrone:
     default:
@@ -157,6 +189,8 @@ uint16_t nrf24_jam_preset_default_dwell_us(Nrf24JamPreset preset) {
     case Nrf24JamPresetZigbee: /* fixed channels */
         return 300;
     case Nrf24JamPresetBluetooth2: /* FAP replica — engine runs it zero-dwell */
+    case Nrf24JamPresetBleConn: /* curated BLE-conn subset — same fast-hop loop */
+    case Nrf24JamPresetRcFhss: /* curated RC/drone FHSS subset — same fast-hop loop */
         return 20;
     case Nrf24JamPresetBluetooth:
     case Nrf24JamPresetBle:
@@ -193,14 +227,30 @@ uint8_t nrf24_jam_preset_default_hop(Nrf24JamPreset preset) {
     case Nrf24JamPresetBle:
     case Nrf24JamPresetFull:
     case Nrf24JamPresetDrone:
+    case Nrf24JamPresetBleConn:
+    case Nrf24JamPresetRcFhss:
         /* Wide smear presets: random hop spreads the chirp uniformly across the
          * band. Sequential-ascending would let the slewing PLL chronically lag
-         * and weight the energy toward the low end of the band. */
+         * and weight the energy toward the low end of the band. The curated FHSS
+         * subsets (BLE-Conn, RC-FHSS) share this: their ascending arrays are
+         * scattered once by the worker's build-time Fisher-Yates so the zero-dwell
+         * loop never walks them monotonically up-band. */
         return 1;
     default:
         /* Narrow fixed-channel presets walk their handful of channels
          * sequentially — nothing to gain from shuffling 3-4 channels. */
         return 0;
+    }
+}
+
+bool nrf24_jam_preset_is_fast_hop(Nrf24JamPreset preset) {
+    switch(preset) {
+    case Nrf24JamPresetBluetooth2:
+    case Nrf24JamPresetBleConn:
+    case Nrf24JamPresetRcFhss:
+        return true;
+    default:
+        return false;
     }
 }
 

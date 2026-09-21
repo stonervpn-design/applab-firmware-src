@@ -11,6 +11,7 @@ typedef enum {
     Nrf24SourceProtocol = 0, /* curated protocol preset (BLE/BT/WiFi-band/…) */
     Nrf24SourceWifi, /* range derived from a scanned WiFi AP */
     Nrf24SourceActivity, /* top-N channels from an RPD activity scan */
+    Nrf24SourceManual, /* single operator-chosen channel, parked at 100% duty */
     Nrf24SourceCount,
 } Nrf24JamSource;
 
@@ -29,8 +30,12 @@ typedef struct {
     bool activity_wide; /* Activity: false = Top-N, true = Wide sweep */
     bool activity_scanned; /* Activity scan cached this session */
     uint8_t activity_count; /* number of Top-N channels (0 = none → Wide) */
+    uint8_t activity_focus; /* 0 = jam all Top-N; else keep only the busiest K (1/2/4)
+                             * — concentrates the fixed power onto fewer channels for
+                             * +10*log10(N/K) dB average on each retained channel. */
     uint8_t activity_ch[NRF24_ACTIVITY_TARGETS];
     uint16_t activity_hits[NRF24_ACTIVITY_TARGETS];
+    uint8_t manual_ch; /* Manual source: the single parked channel (0..125) */
     bool resume_running; /* restore run-state after a scan/config sub-scene */
 } Nrf24JamState;
 

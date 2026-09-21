@@ -102,6 +102,15 @@ void furi_hal_module_pins_apply_nvs(void) {
     uint8_t ir_rx = modpins_get(h, "irrx", (uint8_t)BOARD_PIN_IR_RX);
     nvs_close(h);
 
+    /* Diagnostic + robust fix for the Cardputer IR-TX no-flicker bug: the internal IR
+     * LED is board-fixed hardware, so a stale saved "irtx"/"irrx" in NVS must never
+     * reroute it (that also made gpio_reset_pin reset the wrong pad). Log what was
+     * stored, then force the board pins. External IR uses the separate ExtPA7/Grove path. */
+    ESP_LOGI("IRBOOT", "nvs irtx=%d irrx=%d -> forcing board tx=%d rx=%d",
+             ir_tx, ir_rx, (int)BOARD_PIN_IR_TX, (int)BOARD_PIN_IR_RX);
+    ir_tx = (uint8_t)BOARD_PIN_IR_TX;
+    ir_rx = (uint8_t)BOARD_PIN_IR_RX;
+
     furi_hal_infrared_set_pins(ir_tx, ir_rx);
 }
 
@@ -137,13 +146,18 @@ void furi_hal_module_pins_read_nvs(
     nvs_close(h);
 }
 
-void furi_hal_module_pins_save_nvs(
+void furi_hal_module_pins_save_nvs_only(
     uint16_t cc1101_csn,
     uint16_t cc1101_gdo0,
     uint16_t nrf24_csn,
     uint16_t nrf24_ce,
     uint16_t ir_tx,
     uint16_t ir_rx) {
+    /* Persist to NVS ONLY. The running GpioPin structs are left untouched, so this
+     * never drives a GPIO live — the new pins take effect only at the next boot,
+     * when furi_hal_init reads NVS back. This is what lets the Pin Config app move a
+     * radio onto a pin without instantly reconfiguring it (e.g. clobbering the
+     * TCA8418 keyboard bus on GPIO 8/9). */
     nvs_handle_t h;
     esp_err_t oerr = nvs_open(MODPINS_NS, NVS_READWRITE, &h);
     if(oerr == ESP_OK) {
@@ -162,6 +176,17 @@ void furi_hal_module_pins_save_nvs(
          * behaviour that made pin edits look like they didn't persist). */
         ESP_LOGE("modpins", "nvs_open(RW) failed: %d (%s)", oerr, esp_err_to_name(oerr));
     }
+}
+
+void furi_hal_module_pins_save_nvs(
+    uint16_t cc1101_csn,
+    uint16_t cc1101_gdo0,
+    uint16_t nrf24_csn,
+    uint16_t nrf24_ce,
+    uint16_t ir_tx,
+    uint16_t ir_rx) {
+    furi_hal_module_pins_save_nvs_only(
+        cc1101_csn, cc1101_gdo0, nrf24_csn, nrf24_ce, ir_tx, ir_rx);
     /* apply to the running structs immediately (full effect on reboot) */
     furi_hal_resources_set_rf_pins(cc1101_csn, cc1101_gdo0, nrf24_csn, nrf24_ce);
     furi_hal_infrared_set_pins(ir_tx, ir_rx);

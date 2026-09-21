@@ -789,3 +789,12 @@ void furi_hal_power_debug_get(PropertyValueCallback out, void* context) {
     furi_string_free(key);
     furi_string_free(value);
 }
+
+/* No DFS on this build (CONFIG_PM_ENABLE off) -> the CPU is already at its
+ * configured frequency, so there is no power-management lock to take. Kept as
+ * no-ops for API parity with callers that raise a perf floor around RF work. */
+void furi_hal_power_perf_lock_acquire(void) {
+}
+
+void furi_hal_power_perf_lock_release(void) {
+}

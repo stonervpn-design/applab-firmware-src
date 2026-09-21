@@ -19,6 +19,11 @@ extern "C" {
 /** Override the internal IR TX/RX GPIOs (Pin Config app). No-op on boards without IR. */
 void furi_hal_infrared_set_pins(uint16_t tx_pin, uint16_t rx_pin);
 
+/** Raw 38 kHz square-wave on the active internal IR TX GPIO for `ms` ms (0 => 3000),
+ * bypassing the RMT/carrier/encoder path. Camera-verifiable diagnostic: isolates a
+ * dead pin/emitter from a broken TX data path. Runs in its own task; returns at once. */
+void furi_hal_infrared_led_selftest(uint32_t ms);
+
 typedef enum {
     FuriHalInfraredTxPinInternal,
     FuriHalInfraredTxPinExtPA7,

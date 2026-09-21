@@ -14,7 +14,9 @@ void nrf24_jam_state_init(Nrf24JamState* st) {
      * actually disrupts real devices. The narrow BLE-Adv preset (3 channels) is
      * still selectable but only covers 1/3 of each advertising channel over time. */
     st->protocol = Nrf24JamPresetBluetooth;
-    /* wifi/activity start unscanned; everything else zeroed. */
+    st->manual_ch = 45; /* Manual source default: mid-band (2445 MHz). */
+    /* activity_focus 0 = jam all Top-N (unchanged default). wifi/activity start
+     * unscanned; everything else zeroed. */
 }
 
 const char* nrf24_source_type_label(uint8_t source) {
@@ -25,6 +27,8 @@ const char* nrf24_source_type_label(uint8_t source) {
         return "WiFi";
     case Nrf24SourceActivity:
         return "Activity";
+    case Nrf24SourceManual:
+        return "Manual";
     default:
         return "?";
     }
@@ -67,9 +71,14 @@ void nrf24_source_selection_label(Nrf24App* app, char* buf, size_t cap) {
             if(cap) buf[0] = '\0';
         } else if(st->activity_wide || st->activity_count == 0) {
             snprintf(buf, cap, "Wide");
+        } else if(st->activity_focus > 0 && st->activity_focus < st->activity_count) {
+            snprintf(buf, cap, "Top %u", st->activity_focus);
         } else {
             snprintf(buf, cap, "Smart %uch", st->activity_count);
         }
+        break;
+    case Nrf24SourceManual:
+        snprintf(buf, cap, "CH %u", st->manual_ch);
         break;
     default:
         snprintf(buf, cap, "?");
@@ -110,11 +119,20 @@ size_t nrf24_source_fill_channels(Nrf24App* app, uint8_t* out, size_t cap) {
             }
             return n;
         } else {
+            /* activity_ch[] is ranked busiest-first by pick_top_targets(), so
+             * FOCUS is a pure truncation to the K busiest channels — no re-sort. */
             size_t n = st->activity_count;
+            if(st->activity_focus > 0 && st->activity_focus < n) n = st->activity_focus;
             if(n > cap) n = cap;
             memcpy(out, st->activity_ch, n);
             return n;
         }
+
+    case Nrf24SourceManual:
+        /* Single parked channel: 100% of the carrier's on-air time on one channel
+         * = maximum concentration for a fixed-frequency victim. */
+        out[0] = st->manual_ch;
+        return 1;
 
     default:
         return 0;
@@ -135,9 +153,50 @@ void nrf24_source_select(Nrf24App* app, int dir) {
         }
         break;
     case Nrf24SourceActivity:
-        /* Left/Right toggles Smart ⇄ Wide (only if we have Top-N targets). */
-        if(st->activity_count > 0) st->activity_wide = !st->activity_wide;
+        /* Cycle Wide → Smart(all Top-N) → Top-4 → Top-2 → Top-1 → Wide. Fewer of
+         * the busiest channels = higher average power on each retained channel
+         * (+10*log10(N/K) dB), i.e. a target-matched jam instead of a smear. */
+        if(st->activity_count > 0) {
+            if(dir > 0) {
+                if(st->activity_wide) {
+                    st->activity_wide = false;
+                    st->activity_focus = 0;
+                } else if(st->activity_focus == 0) {
+                    st->activity_focus = 4;
+                } else if(st->activity_focus == 4) {
+                    st->activity_focus = 2;
+                } else if(st->activity_focus == 2) {
+                    st->activity_focus = 1;
+                } else {
+                    st->activity_wide = true;
+                    st->activity_focus = 0;
+                }
+            } else {
+                if(st->activity_wide) {
+                    st->activity_wide = false;
+                    st->activity_focus = 1;
+                } else if(st->activity_focus == 1) {
+                    st->activity_focus = 2;
+                } else if(st->activity_focus == 2) {
+                    st->activity_focus = 4;
+                } else if(st->activity_focus == 4) {
+                    st->activity_focus = 0;
+                } else {
+                    st->activity_wide = true;
+                    st->activity_focus = 0;
+                }
+            }
+        }
         break;
+    case Nrf24SourceManual: {
+        /* Step the parked channel 0..125 (wraps). Fine-picking is also in the
+         * config editor's Channel item (bidirectional). */
+        int c = (int)st->manual_ch + (dir > 0 ? 1 : -1);
+        if(c < 0) c = 125;
+        if(c > 125) c = 0;
+        st->manual_ch = (uint8_t)c;
+        break;
+    }
     default:
         break;
     }
@@ -146,9 +205,10 @@ void nrf24_source_select(Nrf24App* app, int dir) {
 void nrf24_source_step(Nrf24App* app, int dir) {
     Nrf24JamState* st = &app->jam;
 
-    /* One flat list: [Protocol preset 0 .. N-1] → WiFi → Activity → wrap.
-     * Stepping past the last preset moves into the WiFi/Activity scan sources;
-     * stepping back before preset 0 wraps around to Activity. */
+    /* One flat list: [Protocol preset 0 .. N-1] → WiFi → Activity → Manual → wrap.
+     * Stepping past the last preset moves into the WiFi/Activity scan sources and
+     * then the Manual single-channel pin; stepping back before preset 0 wraps to
+     * Manual. */
     if(dir > 0) {
         switch(st->source) {
         case Nrf24SourceProtocol:
@@ -161,7 +221,10 @@ void nrf24_source_step(Nrf24App* app, int dir) {
         case Nrf24SourceWifi:
             st->source = Nrf24SourceActivity;
             break;
-        default: /* Activity → back to first preset */
+        case Nrf24SourceActivity:
+            st->source = Nrf24SourceManual;
+            break;
+        default: /* Manual → back to first preset */
             st->source = Nrf24SourceProtocol;
             st->protocol = 0;
             break;
@@ -172,8 +235,11 @@ void nrf24_source_step(Nrf24App* app, int dir) {
             if(st->protocol > 0) {
                 st->protocol--;
             } else {
-                st->source = Nrf24SourceActivity;
+                st->source = Nrf24SourceManual;
             }
+            break;
+        case Nrf24SourceManual:
+            st->source = Nrf24SourceActivity;
             break;
         case Nrf24SourceActivity:
             st->source = Nrf24SourceWifi;

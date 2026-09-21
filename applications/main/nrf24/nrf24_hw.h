@@ -58,6 +58,11 @@ void nrf24_hw_set_channel(uint8_t channel);
  * Must be wrapped in acquire/release. */
 uint8_t nrf24_hw_listen_rpd(uint8_t channel);
 
+/* As nrf24_hw_listen_rpd but with a caller-selectable dwell time (microseconds)
+ * instead of the fixed 140us. Lets the spectrum view trade sweep speed for
+ * per-channel sensitivity. Must be wrapped in acquire/release. */
+uint8_t nrf24_hw_listen_rpd_dwell(uint8_t channel, uint16_t dwell_us);
+
 /* Constant-carrier jammer: enable continuous wave on the given channel
  * at maximum PA power, 2 Mbps data rate, PLL locked.
  * Must be wrapped in acquire/release. CE is left HIGH on return. */
@@ -81,6 +86,26 @@ void nrf24_hw_jammer_set_channel(uint8_t channel);
 /* Stop the constant carrier and put the chip back into standby.
  * Must be wrapped in acquire/release. */
 void nrf24_hw_jammer_stop(void);
+
+/* True while jammer_start_ex has a self-sustaining CONT_WAVE+REUSE_TX_PL carrier
+ * up (genuine nRF24L01+ path): the carrier retransmits on its own with CE held
+ * HIGH, so the scene loop must NOT pump the FIFO and a hop is a single live
+ * RF_CH write. False when a clone fell back to the plain packet flood (which
+ * must be pumped) or when nothing is transmitting. */
+bool nrf24_hw_jammer_self_sustaining(void);
+
+/* --- RPD reactive jammer (listen on RPD, fire CW only when a carrier appears).
+ * All three run inside acquire()/release(). CE is the caller's responsibility.
+ * Typical loop: reactive_setup(ch); ce(true); wait 130us; poll RPD; on hit ->
+ * ce(false); react_to_tx(); ce(true); wait ~430us; ce(false); react_to_rx(next). */
+void nrf24_hw_reactive_setup(uint8_t channel);
+void nrf24_hw_react_to_tx(void);
+void nrf24_hw_react_to_rx(uint8_t channel);
+
+/* Raw RPD (received-power-detect) bit, for the reactive jammer's poll loop.
+ * Keeps the register address private to nrf24_hw.c. Must be wrapped in
+ * acquire/release. */
+uint8_t nrf24_hw_read_rpd_raw(void);
 
 /* ---- Data-flooding jammer ----
  * Alternative strategy to the constant carrier: instead of an unmodulated
@@ -158,6 +183,28 @@ void nrf24_hw_tx_setup(
     uint8_t addr_len,
     uint8_t channel,
     uint8_t payload_len);
+
+#ifndef PUBLIC_BUILD
+/* As nrf24_hw_tx_setup, but with an explicit data rate and CRC mode instead of
+ * the fixed 2 Mbps/CRC-off used by the public MouseJack path. For protocols
+ * that require a specific PHY (e.g. Bayang-protocol toy drones: 1 Mbps,
+ * 16-bit CRC on):
+ *   - data_rate: 0=1 Mbps, 1=2 Mbps, 2=250 kbps (same encoding as elsewhere
+ *     in this module).
+ *   - crc16: true enables CRC (EN_CRC) in 16-bit mode (CRCO=1); false leaves
+ *     CRC off entirely, matching nrf24_hw_tx_setup's default.
+ * PA is left at max, same as nrf24_hw_tx_setup. Everything else (address,
+ * RX_PW_P0, PWR_UP, PRIM_RX=0 for TX, CE handling) is identical.
+ * Must be wrapped in acquire/release. PRIVATE-only: not present in public
+ * builds. */
+void nrf24_hw_tx_setup_ex(
+    const uint8_t* addr,
+    uint8_t addr_len,
+    uint8_t channel,
+    uint8_t payload_len,
+    uint8_t data_rate,
+    bool crc16);
+#endif /* !PUBLIC_BUILD */
 
 /* Send a single payload (no ACK, no retransmit). Caller is responsible for
  * vendor-specific retransmit looping. Returns true if the TX FIFO accepted
