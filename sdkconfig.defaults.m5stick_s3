@@ -22,7 +22,16 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 CONFIG_SPIRAM_USE_MALLOC=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+# ALWAYSINTERNAL = the LARGEST alloc still forced into internal SRAM; anything
+# bigger spills to PSRAM. This was 16384, which forced ~every allocation (<16KB)
+# into the scarce 512KB internal SRAM while the 8MB PSRAM sat empty -> internal
+# exhausted to ~45KB free, starving RMT/IR TX, BLE TX buffers, etc. (reboots /
+# "out of RAM"). 1024 spills all the 1KB..16KB buffers (subghz/BLE/wifi/app) to
+# PSRAM as the header comment above intends, leaving internal for DMA/stacks/TCBs.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+# Keep 64KB internal reserved so PSRAM-eligible allocs can never starve the
+# internal-only needs (DMA descriptors, task stacks, TCBs, ISRs).
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 CONFIG_BOOTLOADER_VDDSDIO_BOOST_3_3V=y

@@ -1,5 +1,6 @@
 #include "pin_config_store.h"
 #include <string.h>
+#include "boards/board.h" /* per-board BOARD_PIN_* defaults (selected by build target) */
 
 // Display names + machine keys, indexed by PinFunc.
 static const char* const k_names[PinFuncCount] = {
@@ -30,22 +31,30 @@ static const char* const k_keys[PinFuncCount] = {
     "i2c_scl",
 };
 
-// Board defaults (mirror board_m5stack_cardputer_adv.h).
-static const uint8_t k_defaults[PinFuncCount] = {
-    44, // IR TX
-    1, // IR RX
-    40, // SPI SCK  (CC1101/NRF24)
-    39, // SPI MISO
-    14, // SPI MOSI
-    13, // CC1101 CSN
-    5, // CC1101 G0
-    4, // NRF24 CE
-    6, // NRF24 CSN
-    2, // I2C SDA  (Grove)
-    1, // I2C SCL  (Grove)
-};
+/* Board defaults, derived from the active board header (boards/board.h picks it
+ * per build target). These were previously hardcoded to the Cardputer-ADV pins,
+ * which put IR TX on GPIO44 and the radio/I2C pins on the Cardputer's GPIOs for
+ * EVERY board -- breaking IR (and "Reset to Defaults") on the M5Stick S3 (IR TX
+ * is GPIO46, RX 42) and the T-Embed. Order must match the PinFunc enum. The
+ * "SPI" rows are the shared CC1101/NRF24 SPI bus. */
+#define PIN_CONFIG_DEFAULTS                 \
+    {                                       \
+        (uint8_t)BOARD_PIN_IR_TX,       /* IR TX      */ \
+        (uint8_t)BOARD_PIN_IR_RX,       /* IR RX      */ \
+        (uint8_t)BOARD_PIN_CC1101_SCK,  /* SPI SCK    */ \
+        (uint8_t)BOARD_PIN_CC1101_MISO, /* SPI MISO   */ \
+        (uint8_t)BOARD_PIN_CC1101_MOSI, /* SPI MOSI   */ \
+        (uint8_t)BOARD_PIN_CC1101_CSN,  /* CC1101 CSN */ \
+        (uint8_t)BOARD_PIN_CC1101_GDO0, /* CC1101 G0  */ \
+        (uint8_t)BOARD_PIN_NRF24_CE,    /* NRF24 CE   */ \
+        (uint8_t)BOARD_PIN_NRF24_CSN,   /* NRF24 CSN  */ \
+        (uint8_t)BOARD_PIN_QWIIC_SDA,   /* I2C SDA    */ \
+        (uint8_t)BOARD_PIN_QWIIC_SCL,   /* I2C SCL    */ \
+    }
 
-static uint8_t s_current[PinFuncCount] = {44, 1, 40, 39, 14, 13, 5, 4, 6, 2, 1};
+static const uint8_t k_defaults[PinFuncCount] = PIN_CONFIG_DEFAULTS;
+
+static uint8_t s_current[PinFuncCount] = PIN_CONFIG_DEFAULTS;
 
 const uint8_t pin_config_choices[] = {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
                                       16, 17, 18, 21, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48};
