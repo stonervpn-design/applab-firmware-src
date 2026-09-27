@@ -51,7 +51,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container: espressif/idf:v5.4.1
-    timeout-minutes: 40
+    # A cold-cache full-app build (every app selected) can run well past 40 min,
+    # especially for the larger Momentum sets; 40 was killing those mid-compile.
+    timeout-minutes: 90
     env:
       # ccache: repeat custom builds share almost all object files (only the app
       # SET differs), so a warm cache turns a full recompile into an incremental one.
@@ -144,12 +146,14 @@ jobs:
           export FLIPPER_VARIANT="public"                      # forced — never private
           export FLIPPER_APPS="${{ steps.cfg.outputs.apps }}"  # narrows the public set
           rm -f sdkconfig
+          # Tee the whole build so a failure can be published for diagnosis
+          # (pipefail keeps idf.py's exit code even though tee succeeds).
           idf.py -B build \
             -DIDF_TARGET=esp32s3 \
             -DFLIPPER_BOARD="${{ steps.cfg.outputs.board }}" \
             -DFLIPPER_VARIANT=public \
             -DSDKCONFIG_DEFAULTS="${{ steps.cfg.outputs.sdkdef }}" \
-            build
+            build 2>&1 | tee "$GITHUB_WORKSPACE/build_output.log"
           echo "=== ccache stats (this build) ==="; ccache -s 2>/dev/null || true
 
       - name: Merge single-file image
@@ -248,3 +252,44 @@ jobs:
           done
           [ "$pushed" = 1 ] || { echo "::error::publish push failed after retries"; exit 1; }
           echo "Published: https://$(echo "$BUILDS_REPO" | cut -d/ -f1).github.io/$(echo "$BUILDS_REPO" | cut -d/ -f2)/builds/$BID/manifest.json"
+
+      - name: Publish build error on failure (diagnostics)
+        # A failed custom build otherwise publishes nothing, so the cause is
+        # invisible outside the private Actions log. Push a trimmed build log to
+        # the public builds repo at builds/<id>/error.log so failures are debuggable.
+        if: failure()
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.BUILDS_REPO_TOKEN }}
+          BUILDS_REPO: ${{ vars.BUILDS_REPO }}
+        run: |
+          set -uo pipefail
+          BID="${{ steps.cfg.outputs.bid }}"
+          BOARD="${{ steps.cfg.outputs.board }}"
+          [ -n "$BID" ] || { echo "no build_id resolved; skipping error publish"; exit 0; }
+          [ -n "${TOKEN:-}" ] && [ -n "${BUILDS_REPO:-}" ] || { echo "no publish creds; skipping"; exit 0; }
+          {
+            echo "applab custom build FAILED"
+            echo "build_id: $BID"
+            echo "board:    ${BOARD:-?}"
+            echo "run:      ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "===== build_output.log (tail) ====="
+            tail -c 24000 "$GITHUB_WORKSPACE/build_output.log" 2>/dev/null \
+              || echo "(no build output captured; failure was before or at the build step)"
+          } > "$RUNNER_TEMP/error.log"
+          git config --global user.email "ci@applab"
+          git config --global user.name "applab-ci"
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${BUILDS_REPO}.git" errout || exit 0
+          cd errout
+          for attempt in 1 2 3 4 5; do
+            git fetch -q --depth 1 origin main
+            git reset -q --hard origin/main
+            mkdir -p "builds/$BID"
+            cp "$RUNNER_TEMP/error.log" "builds/$BID/error.log"
+            git add -A
+            if git diff --cached --quiet; then echo "error.log already present"; break; fi
+            git commit -q -m "custom build $BID FAILED ($BOARD) - error log"
+            if git push -q origin HEAD:main; then echo "error log published"; break; fi
+            sleep $(( (RANDOM % 4) + 1 ))
+          done
+          echo "error log: https://$(echo "$BUILDS_REPO" | cut -d/ -f1).github.io/$(echo "$BUILDS_REPO" | cut -d/ -f2)/builds/$BID/error.log"
