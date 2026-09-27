@@ -4,6 +4,8 @@ idf_component_register(
         "canvas.c"
         "icon.c"
         "icon_animation.c"
+        "asset_packs.c"
+        "asset_packs_icon_paths.c"
         "elements.c"
         "view.c"
         "view_port.c"

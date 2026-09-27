@@ -14,7 +14,7 @@
 #include <m-array.h>
 #include <momentum/momentum.h>
 #include <momentum/settings_i.h> // momentum_settings_load() (T-Embed port)
-// asset_packs deferred on this port (SD-dependent, later scope) -- init stubbed below
+#include "../asset_packs.h" // asset_packs_init(): apply selected icon/font pack
 #include <m-string.h>
 
 struct Menu {
@@ -669,7 +669,9 @@ Menu* menu_alloc(void) {
     static bool momentum_settings_loaded = false;
     if(!momentum_settings_loaded) {
         momentum_settings_load();
-        // asset_packs_init() deferred on this port (SD-dependent, later scope).
+        // Apply the selected asset pack (icons/fonts) now that settings are
+        // loaded. No-op if no pack is set or the SD/pack is missing.
+        asset_packs_init();
         momentum_settings_loaded = true;
     }
 

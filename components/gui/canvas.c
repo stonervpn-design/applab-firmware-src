@@ -1,5 +1,6 @@
 #include "canvas_i.h"
 #include "icon_animation_i.h"
+#include "asset_packs_i.h" // asset pack icon/font override
 
 #include <furi.h>
 #include <furi_hal.h>
@@ -142,6 +143,10 @@ size_t canvas_current_font_width(const Canvas* canvas) {
 const CanvasFontParameters* canvas_get_font_params(const Canvas* canvas, Font font) {
     furi_check(canvas);
     furi_check(font < FontTotalNumber);
+    // asset pack font override: report the SD-loaded font's metrics if present
+    if(asset_packs && asset_packs->font_params[font]) {
+        return asset_packs->font_params[font];
+    }
     return &canvas_font_params[font];
 }
 
@@ -167,6 +172,11 @@ void canvas_invert_color(Canvas* canvas) {
 void canvas_set_font(Canvas* canvas, Font font) {
     furi_check(canvas);
     u8g2_SetFontMode(&canvas->fb, 1);
+    // asset pack font override: use the SD-loaded font for this slot if present
+    if(font < FontTotalNumber && asset_packs && asset_packs->fonts[font]) {
+        u8g2_SetFont(&canvas->fb, asset_packs->fonts[font]);
+        return;
+    }
     if(font == FontPrimary) {
         u8g2_SetFont(&canvas->fb, u8g2_font_helvB08_tr);
     } else if(font == FontSecondary) {
@@ -400,6 +410,7 @@ void canvas_draw_icon_ex(
     IconRotation rotation) {
     furi_check(canvas);
     furi_check(icon);
+    icon = asset_packs_swap_icon(icon); // asset pack override
 
     x += canvas->offset_x;
     y += canvas->offset_y;
@@ -412,6 +423,7 @@ void canvas_draw_icon_ex(
 void canvas_draw_icon(Canvas* canvas, int32_t x, int32_t y, const Icon* icon) {
     furi_check(canvas);
     furi_check(icon);
+    icon = asset_packs_swap_icon(icon); // asset pack override
 
     x += canvas->offset_x;
     y += canvas->offset_y;
