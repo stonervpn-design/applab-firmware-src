@@ -14,7 +14,6 @@ typedef enum {
     DesktopSettingsClockDisplay,
     DesktopSettingsChangeName,
     DesktopSettingsHappyMode,
-    DesktopSettingsAssetPack,
     DesktopSettingsFavoriteLeftShort,
     DesktopSettingsFavoriteLeftLong,
     DesktopSettingsFavoriteRightShort,
@@ -180,8 +179,6 @@ void desktop_settings_scene_start_on_enter(void* context) {
 
     variable_item_list_add(variable_item_list, "Happy Mode", 1, NULL, NULL);
 
-    variable_item_list_add(variable_item_list, "Asset Pack", 1, NULL, NULL);
-
     variable_item_list_add(variable_item_list, "Favorite App - Left Short", 1, NULL, NULL);
     variable_item_list_add(variable_item_list, "Favorite App - Left Long", 1, NULL, NULL);
     variable_item_list_add(variable_item_list, "Favorite App - Right Short", 1, NULL, NULL);
@@ -325,10 +322,6 @@ bool desktop_settings_scene_start_on_event(void* context, SceneManagerEvent even
 
         case DesktopSettingsHappyMode:
             scene_manager_next_scene(app->scene_manager, DesktopSettingsAppSceneHappyMode);
-            break;
-
-        case DesktopSettingsAssetPack:
-            scene_manager_next_scene(app->scene_manager, DesktopSettingsAppSceneAssetPack);
             break;
 
         default:

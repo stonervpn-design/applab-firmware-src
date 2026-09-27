@@ -16,9 +16,9 @@ Momentum flavor on the Cardputer ADV, M5Stick S3 and LilyGo T-Embed CC1101+.
    ```
 
 2. Insert the card and, on the device, go to
-   **Settings → Desktop → Asset Pack** and pick your pack.
-   The change applies immediately — no reboot. Pick **Default (built-in)** to
-   turn it back off.
+   **Settings → Sound & Display → Asset Pack** and pick your pack. It applies
+   when you leave the settings screen — no reboot. Pick **Default** to turn it
+   back off.
 
 ## What's in a pack
 

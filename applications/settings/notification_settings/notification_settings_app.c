@@ -15,6 +15,45 @@
 #include <lib/toolbox/value_index.h>
 #include <stdio.h>
 #include "notification_settings_color_picker.h"
+#include <momentum/momentum.h> // momentum_settings.asset_pack + save
+#include <gui/asset_packs.h> // asset_packs_free/init + ASSET_PACKS_PATH
+#include <storage/storage.h> // scan /asset_packs for installed packs
+
+/* --- Asset Pack picker (custom themes: SD-loaded icons/fonts). Lives here,
+ * next to the UI colours, because this is a core SETTINGS app that is always
+ * built; the Desktop settings app (EXTSETTINGS) is dropped from public builds. */
+#define ASSET_PACK_LIST_MAX 32
+static char ap_names[ASSET_PACK_LIST_MAX][ASSET_PACKS_NAME_LEN];
+static size_t ap_count;
+static char ap_original[ASSET_PACKS_NAME_LEN];
+
+static void asset_pack_scan(void) {
+    ap_count = 0;
+    Storage* storage = furi_record_open(RECORD_STORAGE);
+    File* dir = storage_file_alloc(storage);
+    if(storage_dir_open(dir, ASSET_PACKS_PATH)) {
+        FileInfo info;
+        char name[256];
+        while(ap_count < ASSET_PACK_LIST_MAX &&
+              storage_dir_read(dir, &info, name, sizeof(name))) {
+            if(!(info.flags & FSF_DIRECTORY)) continue;
+            if(strlen(name) >= ASSET_PACKS_NAME_LEN) continue; // must round-trip to the setting
+            strlcpy(ap_names[ap_count++], name, ASSET_PACKS_NAME_LEN);
+        }
+    }
+    storage_dir_close(dir);
+    storage_file_free(dir);
+    furi_record_close(RECORD_STORAGE);
+}
+
+static void asset_pack_changed(VariableItem* item) {
+    uint8_t idx = variable_item_get_current_value_index(item);
+    const char* sel = (idx == 0) ? "" : ap_names[idx - 1];
+    variable_item_set_current_value_text(item, (idx == 0) ? "Default" : ap_names[idx - 1]);
+    /* Only stage the choice here; applying (reload icons/fonts) is deferred to
+     * app exit so scrolling through packs doesn't reload on every step. */
+    strlcpy(momentum_settings.asset_pack, sel, ASSET_PACKS_NAME_LEN);
+}
 
 /* View IDs in this app's dispatcher. */
 #define NOTIFICATION_SETTINGS_VIEW_LIST   0
@@ -484,6 +523,23 @@ static NotificationAppSettings* alloc_settings(void) {
     variable_item_set_current_value_index(item, value_index);
     variable_item_set_current_value_text(item, ui_color_text[value_index]);
 
+    /* Asset Pack — swap the built-in icons/fonts for a pack on the microSD
+     * (/asset_packs/<name>/). Cycles Default + each installed pack; the choice
+     * is applied on exit (see notification_settings_app). */
+    asset_pack_scan();
+    strlcpy(ap_original, momentum_settings.asset_pack, ASSET_PACKS_NAME_LEN);
+    item = variable_item_list_add(
+        app->variable_item_list, "Asset Pack", ap_count + 1, asset_pack_changed, app);
+    uint8_t ap_idx = 0;
+    for(size_t i = 0; i < ap_count; i++) {
+        if(strcmp(ap_names[i], momentum_settings.asset_pack) == 0) {
+            ap_idx = i + 1;
+            break;
+        }
+    }
+    variable_item_set_current_value_index(item, ap_idx);
+    variable_item_set_current_value_text(item, ap_idx == 0 ? "Default" : ap_names[ap_idx - 1]);
+
     /* WS2812 ring controls — only added when the board actually has a ring
      * (furi_hal_light_pixel_count() > 0). Boards without a ring (Waveshare
      * C6 1.9, C6 1.47) get a clean menu with no inert sliders. */
@@ -629,6 +685,12 @@ int32_t notification_settings_app(void* p) {
     NotificationAppSettings* app = alloc_settings();
     view_dispatcher_run(app->view_dispatcher);
     notification_message_save_settings(app->notification);
+    /* If the asset pack changed, persist it and reload icons/fonts now. */
+    if(strncmp(ap_original, momentum_settings.asset_pack, ASSET_PACKS_NAME_LEN) != 0) {
+        asset_packs_free();
+        momentum_settings_save();
+        asset_packs_init();
+    }
     free_settings(app);
     return 0;
 }
