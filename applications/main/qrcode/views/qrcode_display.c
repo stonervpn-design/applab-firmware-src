@@ -1,5 +1,5 @@
 #include "qrcode_display.h"
-#include "../lib/qrcode.h"
+#include "../lib/qrcode/qrcode.h"
 
 #include <furi.h>
 #include <string.h>
