@@ -5,17 +5,21 @@
  * GND and read with internal pull-ups (pressed / active == level 0).
  *
  *   Encoder A/B (GPIO4 / GPIO5): quadrature rotation.
- *   Encoder push (GPIO0)       : Ok  (full Press/Long/Short/Release stream).
+ *   Encoder push (GPIO0)       : Ok, and — held while turning — the Left/Right modifier.
  *   Back button  (GPIO6)       : Back.
  *
- * Nav mapping — DUAL-AXIS rotation: each detent emits BOTH a vertical and a
- * horizontal event so plain turning works on vertical menus AND on horizontal
- * action bars (the "<Analyze  Send  Save>" style bars in Sub-GHz etc.):
- *   turn CW  -> Down + Right
- *   turn CCW -> Up   + Left
- * Whichever axis the focused view ignores is harmless. The one rough edge is the
- * on-screen keyboard / byte-input, where the cursor then moves diagonally (two
- * cells per click) — an accepted tradeoff for one-knob Left/Right selection.
+ * Nav model — SINGLE-AXIS with an Ok-held modifier (matches components/gui/modules/
+ * menu.c, which walks the grid linearly on Up/Down and jumps columns on Left/Right):
+ *   turn                 -> Up / Down      (scroll lists, walk the menu, move items)
+ *   hold Ok (push) + turn-> Left / Right   (change a setting's value, move an action
+ *                                           bar, move the keyboard cursor horizontally)
+ * Plain turning therefore NEVER changes a setting value or moves diagonally — a bare
+ * turn is always a clean single step. The Ok press stream is deferred to release so a
+ * modifier turn can never leak an Ok tap.
+ *
+ * Freeze escape hatch: hold Ok + Back together for REBOOT_COMBO_MS -> esp_restart().
+ * Works whenever the input service is still scheduled (a stuck UI / service); a total
+ * scheduler hang is caught by the task/interrupt watchdogs instead.
  *
  * Called every INPUT_POLL_MS (4 ms) from the input service — fast enough to catch
  * every quadrature transition of a hand-turned encoder, so no GPIO ISR is needed.
@@ -29,6 +33,7 @@
 #include <furi.h>
 #include <input.h>
 #include <driver/gpio.h>
+#include <esp_system.h>
 #include "boards/board.h"
 
 #define TAG "InputTEmbed"
@@ -46,6 +51,8 @@
 #define INPUT_LONG_PRESS_MS 500U
 #define INPUT_REPEAT_MS     150U
 #define KEY_DEBOUNCE_MS     30U
+/* Hold Ok + Back together this long to force a reboot (freeze escape hatch). */
+#define REBOOT_COMBO_MS     2000U
 
 static void publish(FuriPubSub* pubsub, InputKey key, InputType type, uint32_t* seq) {
     InputEvent event = {
@@ -75,6 +82,14 @@ typedef struct {
 static BtnState s_ok;
 static BtnState s_back;
 
+/* Set when the encoder turned while Ok was held (this hold was a Left/Right
+ * modifier, so suppress the Ok tap/long on release). Cleared on each Ok press. */
+static bool s_ok_mod_used;
+
+/* Ok+Back reboot combo timing. */
+static bool s_combo_armed;
+static uint32_t s_combo_started_at;
+
 /* Quadrature decoder state */
 static uint8_t s_enc_prev; /* last (A<<1|B) 2-bit reading */
 static int8_t s_enc_accum; /* signed sub-step accumulator */
@@ -102,6 +117,8 @@ void target_input_init(void) {
 
     s_ok = (BtnState){0};
     s_back = (BtnState){0};
+    s_ok_mod_used = false;
+    s_combo_armed = false;
     s_enc_accum = 0;
     s_enc_prev = (uint8_t)((gpio_get_level(ENC_A_GPIO) << 1) | gpio_get_level(ENC_B_GPIO));
     s_ready = true;
@@ -131,8 +148,9 @@ static bool debounce(BtnState* btn, bool raw_now, uint32_t now, bool* now_presse
     return false;
 }
 
-/* Read the encoder and emit dual-axis events (Down+Right / Up+Left) per detent. */
-static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq) {
+/* Read the encoder. A plain detent emits Up/Down; if Ok (the encoder push) is held
+ * it emits Left/Right instead — the value-change / horizontal modifier. */
+static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq, bool ok_held) {
     uint8_t state = (uint8_t)((gpio_get_level(ENC_A_GPIO) << 1) | gpio_get_level(ENC_B_GPIO));
     if(state == s_enc_prev) return;
 
@@ -149,12 +167,12 @@ static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq) {
             dir = -ENC_DIR;
         }
 
-        if(dir > 0) {
-            publish_tap(pubsub, InputKeyDown, seq);
-            publish_tap(pubsub, InputKeyRight, seq);
+        if(ok_held) {
+            /* Ok-held modifier: horizontal. Mark the hold so the Ok tap is suppressed. */
+            s_ok_mod_used = true;
+            publish_tap(pubsub, dir > 0 ? InputKeyRight : InputKeyLeft, seq);
         } else {
-            publish_tap(pubsub, InputKeyUp, seq);
-            publish_tap(pubsub, InputKeyLeft, seq);
+            publish_tap(pubsub, dir > 0 ? InputKeyDown : InputKeyUp, seq);
         }
     }
 }
@@ -169,26 +187,49 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
     bool raw_ok = (gpio_get_level(BTN_OK_GPIO) == 0);
     bool raw_bk = (gpio_get_level(BTN_BK_GPIO) == 0);
 
-    poll_encoder(pubsub, sequence_counter);
+    /* ---- Freeze escape hatch: Ok + Back held together -> reboot. Uses raw levels
+     *      so it works regardless of debounce/UI state, as long as this poll runs. ---- */
+    if(raw_ok && raw_bk) {
+        if(!s_combo_armed) {
+            s_combo_armed = true;
+            s_combo_started_at = now;
+        } else if((now - s_combo_started_at) >= furi_ms_to_ticks(REBOOT_COMBO_MS)) {
+            FURI_LOG_W(TAG, "Ok+Back reboot combo -> esp_restart()");
+            esp_restart();
+        }
+    } else {
+        s_combo_armed = false;
+    }
 
-    /* ---- OK = encoder push (full Press/Long/Short/Repeat/Release stream) ---- */
+    /* Encoder: plain turn = Up/Down; Ok-held + turn = Left/Right. */
+    poll_encoder(pubsub, sequence_counter, raw_ok);
+
+    /* ---- OK = encoder push. A plain tap = Ok; held + a turn = the Left/Right
+     *      modifier (see poll_encoder). The press stream is DEFERRED to release so a
+     *      modifier turn never leaks an Ok Press/Short. ---- */
     bool changed_ok, state_ok = false;
     changed_ok = debounce(&s_ok, raw_ok, now, &state_ok);
     if(changed_ok) {
         if(state_ok) {
+            /* pressed: start timing, defer the event until we know if it's a modifier */
             s_ok.press_started_at = now;
             s_ok.long_fired = false;
-            publish(pubsub, InputKeyOk, InputTypePress, sequence_counter);
+            s_ok_mod_used = false;
         } else {
-            if(!s_ok.long_fired) {
-                publish(pubsub, InputKeyOk, InputTypeShort, sequence_counter);
+            /* released */
+            if(s_ok_mod_used) {
+                /* this hold was a Left/Right modifier — emit no Ok event */
+            } else if(s_ok.long_fired) {
+                publish(pubsub, InputKeyOk, InputTypeRelease, sequence_counter);
+            } else {
+                publish_tap(pubsub, InputKeyOk, sequence_counter);
             }
-            publish(pubsub, InputKeyOk, InputTypeRelease, sequence_counter);
         }
-    } else if(s_ok.pressed) {
+    } else if(s_ok.pressed && !s_ok_mod_used) {
         if(!s_ok.long_fired && (now - s_ok.press_started_at) >= long_ticks) {
             s_ok.long_fired = true;
             s_ok.press_started_at = now;
+            publish(pubsub, InputKeyOk, InputTypePress, sequence_counter);
             publish(pubsub, InputKeyOk, InputTypeLong, sequence_counter);
         } else if(s_ok.long_fired && (now - s_ok.press_started_at) >= repeat_ticks) {
             s_ok.press_started_at = now;
