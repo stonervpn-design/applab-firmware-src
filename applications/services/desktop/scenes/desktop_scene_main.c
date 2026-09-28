@@ -96,7 +96,6 @@ void desktop_scene_main_callback(DesktopEvent event, void* context) {
 void desktop_scene_main_on_enter(void* context) {
     Desktop* desktop = (Desktop*)context;
     DesktopMainView* main_view = desktop->main_view;
-    FURI_LOG_W("Desktop", "ZZDBG3 main on_enter start");
 
     animation_manager_set_context(desktop->animation_manager, desktop);
     animation_manager_set_new_idle_callback(
@@ -108,9 +107,7 @@ void desktop_scene_main_on_enter(void* context) {
 
     desktop_main_set_callback(main_view, desktop_scene_main_callback, desktop);
 
-    FURI_LOG_W("Desktop", "ZZDBG4 before switch_to_view");
     view_dispatcher_switch_to_view(desktop->view_dispatcher, DesktopViewIdMain);
-    FURI_LOG_W("Desktop", "ZZDBG5 after switch_to_view");
 }
 
 bool desktop_scene_main_on_event(void* context, SceneManagerEvent event) {

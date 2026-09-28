@@ -16,7 +16,7 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions_m5stick_s3.csv"
 # PSRAM — ENABLED (8 MB octal). This is the big win vs the Cardputers: malloc can
 # spill to PSRAM, so BLE / WiFi / large buffers have headroom (no RAM starvation).
 # =============================================================================
-CONFIG_SPIRAM=y
+CONFIG_SPIRAM=n
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_BOOT_INIT=y
@@ -128,19 +128,8 @@ CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
 # ---------------------------------------------------------------------------
-# M5Stick bootloop ROOT-CAUSE FIX (octal PSRAM + internal-flash writes).
-# This is the only board with OCTAL PSRAM, and (no SD) it stores settings on
-# internal flash. On ESP32-S3 flash and octal PSRAM share the MSPI bus: a flash
-# erase/program disables the cache + interrupts, so PSRAM (code AND heap data)
-# is unreachable mid-write and the CPU hard-locks -> TG1WDT_SYS_RST. The desktop
-# saving default settings on first boot triggered it; the save never completed,
-# so settings never persisted and every boot re-hung == permanent bootloop.
-#
-# Fix: AUTO_SUSPEND pauses the erase/program whenever an interrupt or cache
-# access is needed, keeping PSRAM/cache reachable during the write (the M5Stick's
-# GD flash supports suspend). Also keep code/rodata in flash (XIP-off, like the
-# other boards) so PSRAM holds only heap. Disabling XIP alone did NOT fix it —
-# AUTO_SUSPEND is the load-bearing setting.
-CONFIG_SPI_FLASH_AUTO_SUSPEND=y
-CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
-CONFIG_SPIRAM_RODATA=n
+
+# --- PSRAM-OFF DIAGNOSTIC (isolate octal-PSRAM/MSPI-vs-flash-write) ---
+# Cardputer runs this same firmware with NO PSRAM; if M5Stick boots with PSRAM
+# off, the octal-PSRAM MSPI contention during internal-flash writes is the cause.
+CONFIG_SPIRAM=n
