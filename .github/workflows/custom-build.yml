@@ -232,12 +232,21 @@ jobs:
           # --depth 1 clone is fragile: once main advances past the shallow boundary the
           # rebase can't find a merge base and every retry fails. Instead, re-apply our
           # unique files onto the freshly-fetched tip each attempt and fast-forward push.
+          # Capture the linker memory summary so RAM/flash headroom is visible
+          # per build (published as size.txt) -- lets us diagnose RAM issues
+          # like M5Stick reboots without a device.
+          SIZEFILE="$RUNNER_TEMP/size.txt"
+          { echo "build_id: $BID  board: $BOARD  apps: ${{ steps.cfg.outputs.apps }}";
+            grep -iE "Total sizes|Used .*RAM|Used Flash|remaining" \
+              "$GITHUB_WORKSPACE/build_output.log" 2>/dev/null | tail -20; } > "$SIZEFILE" || true
+
           pushed=0
           for attempt in 1 2 3 4 5 6 7 8; do
             git fetch -q --depth 1 origin main
             git reset -q --hard origin/main
             mkdir -p "builds/$BID"
             cp "$FW" "builds/$BID/firmware.bin"
+            cp "$SIZEFILE" "builds/$BID/size.txt" 2>/dev/null || true
             printf '%s\n' "$MANIFEST" > "builds/$BID/manifest.json"
             if [ -n "$APPFW" ]; then
               cp "$APPFW" "builds/$BID/firmware-app.bin"
