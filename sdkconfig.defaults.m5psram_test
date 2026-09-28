@@ -1,12 +1,14 @@
-# TEST-ONLY fragment (not shipped): re-enable octal PSRAM but at 40 MHz to see if
-# the lower MSPI speed clears the octal-PSRAM-vs-internal-flash-write hang while
-# keeping all 8 MB. Overrides the shipped CONFIG_SPIRAM=n when appended last.
+# TEST-ONLY: PSRAM on (80MHz octal) + very long interrupt-WDT to learn whether the
+# flash-write interrupts-off window is FINITE (would complete) or an INFINITE stall.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
-CONFIG_SPIRAM_SPEED_40M=y
+CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=8000
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
+CONFIG_BOOTLOADER_WDT_TIME_MS=9000
