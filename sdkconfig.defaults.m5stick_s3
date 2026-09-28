@@ -128,15 +128,19 @@ CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
 
 # ---------------------------------------------------------------------------
-# Octal-PSRAM XIP vs. runtime flash writes — CRITICAL FIX (M5Stick bootloop).
-# The esp32s3 base profile enables SPIRAM_FETCH_INSTRUCTIONS + SPIRAM_RODATA
-# (code/rodata executed-in-place FROM the octal PSRAM). On this board that is
-# incompatible with writing to internal flash at runtime: a flash write locks
-# the shared MSPI bus and disables the cache, so PSRAM-resident code becomes
-# unexecutable mid-write and the CPU hard-locks -> TG1WDT_SYS_RST. The desktop
-# saving default settings on first boot triggered it, and because the save
-# never completed the settings never persisted, so every boot retried and
-# re-hung: a permanent bootloop. Keep code/rodata in flash (cached) instead;
-# the 8 MB PSRAM is still used for the heap. Overrides the base esp32s3 profile.
+# M5Stick bootloop ROOT-CAUSE FIX (octal PSRAM + internal-flash writes).
+# This is the only board with OCTAL PSRAM, and (no SD) it stores settings on
+# internal flash. On ESP32-S3 flash and octal PSRAM share the MSPI bus: a flash
+# erase/program disables the cache + interrupts, so PSRAM (code AND heap data)
+# is unreachable mid-write and the CPU hard-locks -> TG1WDT_SYS_RST. The desktop
+# saving default settings on first boot triggered it; the save never completed,
+# so settings never persisted and every boot re-hung == permanent bootloop.
+#
+# Fix: AUTO_SUSPEND pauses the erase/program whenever an interrupt or cache
+# access is needed, keeping PSRAM/cache reachable during the write (the M5Stick's
+# GD flash supports suspend). Also keep code/rodata in flash (XIP-off, like the
+# other boards) so PSRAM holds only heap. Disabling XIP alone did NOT fix it —
+# AUTO_SUSPEND is the load-bearing setting.
+CONFIG_SPI_FLASH_AUTO_SUSPEND=y
 CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
 CONFIG_SPIRAM_RODATA=n
