@@ -73,7 +73,7 @@ void desktop_settings_load(DesktopSettings* settings) {
     if(!success) {
         FURI_LOG_W(TAG, "Failed to load file, using defaults");
         memset(settings, 0, sizeof(DesktopSettings));
-        desktop_settings_save(settings);
+        FURI_LOG_W(TAG, "ZZTEST skipping save (bootloop confirm)");  // desktop_settings_save(settings);
     }
 }
 
