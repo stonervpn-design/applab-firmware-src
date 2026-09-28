@@ -155,6 +155,8 @@ jobs:
             -DSDKCONFIG_DEFAULTS="${{ steps.cfg.outputs.sdkdef }}" \
             build 2>&1 | tee "$GITHUB_WORKSPACE/build_output.log"
           echo "=== ccache stats (this build) ==="; ccache -s 2>/dev/null || true
+          # Memory usage summary (static DRAM/IRAM + remaining) for RAM diagnosis.
+          idf.py -B build size 2>&1 | tee "$GITHUB_WORKSPACE/idf_size.txt" || true
 
       - name: Merge single-file image
         shell: bash
@@ -236,9 +238,8 @@ jobs:
           # per build (published as size.txt) -- lets us diagnose RAM issues
           # like M5Stick reboots without a device.
           SIZEFILE="$RUNNER_TEMP/size.txt"
-          { echo "build_id: $BID  board: $BOARD  apps: ${{ steps.cfg.outputs.apps }}";
-            grep -iE "Total sizes|Used .*RAM|Used Flash|remaining" \
-              "$GITHUB_WORKSPACE/build_output.log" 2>/dev/null | tail -20; } > "$SIZEFILE" || true
+          { echo "build_id: $BID  board: $BOARD"; echo "apps: ${{ steps.cfg.outputs.apps }}"; echo "---";
+            cat "$GITHUB_WORKSPACE/idf_size.txt" 2>/dev/null | tail -40; } > "$SIZEFILE" || true
 
           pushed=0
           for attempt in 1 2 3 4 5 6 7 8; do
