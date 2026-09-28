@@ -515,7 +515,9 @@ static void desktop_init_settings(Desktop* desktop) {
     }
 
     desktop_settings_load(&desktop->settings);
+    FURI_LOG_W(TAG, "ZZDBG1 settings_load done");
     desktop_apply_settings(desktop);
+    FURI_LOG_W(TAG, "ZZDBG2 apply_settings done");
 }
 
 static Desktop* desktop_alloc(void) {
