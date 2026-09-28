@@ -13,18 +13,26 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_m5stick_s3.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions_m5stick_s3.csv"
 
 # =============================================================================
-# PSRAM - DISABLED. This board has 8 MB octal PSRAM, but octal PSRAM shares the
-# MSPI bus with the internal SPI flash. An internal-flash erase/program disables
-# the cache, and on this board that stalled the MSPI long enough to trip the
-# interrupt watchdog (TG1WDT_SYS_RST) during first-boot settings writes -> a hard
-# bootloop (root-caused + confirmed on-device 2026-09-28). CONFIG_SPI_FLASH_AUTO_
-# SUSPEND and disabling PSRAM XIP did NOT fix it; disabling PSRAM removes the MSPI
-# contention entirely (exactly how the no-PSRAM Cardputer runs the same firmware).
-# The port already adapts (BtSrv defers the BLE stack when PSRAM is absent).
-# Follow-up to reclaim the 8 MB: find the non-IRAM ISR firing during the flash
-# write and mark it IRAM_ATTR, then PSRAM can be re-enabled.
+# PSRAM - ENABLED (8 MB octal). malloc spills large buffers to PSRAM so BLE / WiFi
+# / big captures have headroom. SAFE for internal-flash writes ONLY because the
+# service thread stacks are forced into internal SRAM (see components/furi/core/
+# thread.c furi_thread_alloc_service). Without that fix, a high-priority interrupt
+# (the BT controller fires level-4) spilling registers onto a PSRAM-resident
+# service stack during a flash write faulted ("Cache disabled but cached memory
+# region accessed" -> DoubleException -> permanent bootloop). Root-caused + fixed
+# + confirmed booting with PSRAM + BLE on-device 2026-09-28.
 # =============================================================================
-CONFIG_SPIRAM=n
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# ALWAYSINTERNAL = largest alloc still forced internal; bigger spills to PSRAM.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=1024
+# Keep 64 KB internal reserved for DMA descriptors / small allocs / TCBs.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 CONFIG_BOOTLOADER_VDDSDIO_BOOST_3_3V=y
 
