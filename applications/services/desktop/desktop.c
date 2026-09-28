@@ -1,4 +1,5 @@
 #include "desktop_i.h"
+#include "esp_rom_sys.h"
 
 #include <string.h>
 #include <esp_heap_caps.h>
@@ -492,9 +493,15 @@ static void desktop_clock_timer_callback(void* context) {
 }
 
 static void desktop_apply_settings(Desktop* desktop) {
+    esp_rom_printf("ZZP apply_start
+");
     desktop->in_transition = true;
 
+    esp_rom_printf("ZZP before clock_reconf
+");
     desktop_clock_reconfigure(desktop);
+    esp_rom_printf("ZZP after clock_reconf
+");
 
     // Dummy mode disabled on ESP32 port — always use normal mode
     desktop_main_set_dummy_mode_state(desktop->main_view, false);
@@ -503,6 +510,8 @@ static void desktop_apply_settings(Desktop* desktop) {
         desktop_auto_lock_arm(desktop);
     }
 
+    esp_rom_printf("ZZP apply_end
+");
     desktop->in_transition = false;
 }
 
@@ -825,7 +834,11 @@ int32_t desktop_srv(void* p) {
     /* Mesh: der T-Embed ist immer Master; der Master-Service läuft on-demand in
      * der Mesh-Clients-Scene — beim Boot ist nichts zu starten. */
 
+    esp_rom_printf("ZZP before main_scene
+");
     scene_manager_next_scene(desktop->scene_manager, DesktopSceneMain);
+    esp_rom_printf("ZZP after main_scene
+");
 
     if(desktop_pin_code_is_set()) {
         desktop_lock(desktop);
