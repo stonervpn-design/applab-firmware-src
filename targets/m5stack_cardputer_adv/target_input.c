@@ -350,19 +350,26 @@ static esp_err_t tca8418_hw_init(void) {
      * 32, 42, 52 in the key numbering — see file header). Enable all of them.
      * It also uses all 8 rows (R0-R7).
      */
-    ret = tca_write(TCA8418_REG_KP_GPIO1, 0xFF); /* R0-R7 = keypad rows */
+    /* Only enable the matrix lines that are physically wired. Per the key map
+     * (tca_key_is_valid): the highest real key_id is 68 (row R6), so R7 is
+     * UNUSED, and columns C8/C9 are holes on every row (key_ids 9/10, 19/20 ...
+     * 59/60). Enabling unwired scan lines lets them float and emit ghost key
+     * events (observed as a phantom key_id=13 with no key pressed, and a
+     * phantom Fn press that sticks the Fn modifier and blocks all typing).
+     * Scan R0-R6 (0x7F) and C0-C7 (0xFF) only; leave R7 and C8/C9 disabled. */
+    ret = tca_write(TCA8418_REG_KP_GPIO1, 0x7F); /* R0-R6 = keypad rows (R7 unwired) */
     if (ret != ESP_OK) return ret;
     ret = tca_write(TCA8418_REG_KP_GPIO2, 0xFF); /* C0-C7 = keypad cols */
     if (ret != ESP_OK) return ret;
-    ret = tca_write(TCA8418_REG_KP_GPIO3, 0x03); /* C8-C9 = keypad cols */
+    ret = tca_write(TCA8418_REG_KP_GPIO3, 0x00); /* C8-C9 unwired — do NOT scan */
     if (ret != ESP_OK) return ret;
 
-    /* Enable debounce on all configured pins */
-    ret = tca_write(TCA8418_REG_DEBOUNCE1, 0xFF);
+    /* Enable debounce on the scanned pins (match the keypad config above) */
+    ret = tca_write(TCA8418_REG_DEBOUNCE1, 0x7F);
     if (ret != ESP_OK) return ret;
     ret = tca_write(TCA8418_REG_DEBOUNCE2, 0xFF);
     if (ret != ESP_OK) return ret;
-    ret = tca_write(TCA8418_REG_DEBOUNCE3, 0x03);
+    ret = tca_write(TCA8418_REG_DEBOUNCE3, 0x00);
     if (ret != ESP_OK) return ret;
 
     /*
@@ -414,13 +421,20 @@ static char resolve_text_char(uint8_t key_id, const ModifierState* m) {
     const TcaKeyInfo* info = &tca_key_table[key_id];
     if (info->base == 0) return 0;  /* Modifier or arrow key — no character */
 
-    /* Fn layer number keys → F1-F10 (not text, skip) */
+    /* Fn layer: only the keys that actually have an Fn function are special.
+     * Fn+digit = F1-F10 (not text); Fn+` = ESC; Fn+Del = forward-delete. EVERY
+     * other Fn+key (letters, symbols) has no Fn function on this keyboard, so it
+     * must still type its normal character. Previously the default returned 0,
+     * which meant a single stuck/spurious Fn (e.g. a phantom Fn press whose
+     * release was never delivered) silently blocked ALL typing while navigation
+     * kept working — the reported "can't type, must use arrows" symptom. */
     if (m->fn) {
         switch (key_id) {
         case TCA_KEY_ESC:    return 0x1B; /* ESC character (ASCII 27) when Fn+` */
         case TCA_KEY_DEL:    return 0x7F; /* DEL character (forward delete) */
-        /* Numbers become F-keys — not text characters */
-        default: return 0;
+        default:
+            if (info->base >= '0' && info->base <= '9') return 0; /* Fn+digit = F-key */
+            break; /* fall through: type the base character */
         }
     }
 
