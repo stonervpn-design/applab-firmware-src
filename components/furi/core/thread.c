@@ -223,7 +223,20 @@ FuriThread* furi_thread_alloc_service(
 
     furi_thread_init_common(thread);
 
-    thread->stack_buffer = memmgr_alloc_from_pool(stack_size);
+    /* Service stacks MUST live in internal SRAM. A service (e.g. BtSrv) can be
+       mid-execution when a flash/NVS write disables the PSRAM cache, and a
+       high-priority interrupt (the BT controller fires level-4) then spills
+       registers onto the running task's stack. On a PSRAM-resident stack that
+       spill faults ("Cache disabled but cached memory region accessed" ->
+       DoubleException -> bootloop). memmgr_alloc_from_pool() spills >1 KB to
+       PSRAM, so allocate the stack internal explicitly, mirroring
+       furi_thread_set_stack_size(); fall back to the pool only if internal SRAM
+       is momentarily exhausted. */
+    thread->stack_buffer = heap_caps_malloc(stack_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if(!thread->stack_buffer) {
+        thread->stack_buffer = memmgr_alloc_from_pool(stack_size);
+    }
+    furi_check(thread->stack_buffer, "Out of memory: service stack allocation failed");
     thread->stack_size = stack_size;
     thread->is_service = true;
 
