@@ -61,7 +61,9 @@
 /* Phase-0 diagnostic: fill the panel R/G/B/W at boot to verify the panel + pins
  * can display anything (independent of the GUI). Remove once the display is
  * confirmed working. */
-#define BOARD_DISPLAY_SELFTEST  1
+/* BOARD_DISPLAY_SELFTEST disabled 2026-09-29: panel confirmed working, so the
+ * R/G/B/W boot flash is removed. Re-enable (uncomment) only for panel bring-up. */
+// #define BOARD_DISPLAY_SELFTEST  1
 
 /* The StickS3's ST7789P3 needs the full power/VCOM/porch/gamma init (what M5GFX
  * sends); esp_lcd's minimal ST7789 init leaves it blank. See furi_hal_display.c. */
