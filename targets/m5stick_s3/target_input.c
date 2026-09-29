@@ -168,7 +168,12 @@ static void process_button(
         } else {
             publish_tap(pubsub, c->hold_key, seq); /* Back */
         }
-    } else if(s->pressed && s->long_done && c->hold_repeats && (now - s->last_rep_at) >= rep_t) {
+    } else if(
+        s->pressed && s->long_done && c->hold_repeats && !s->skip_release &&
+        (now - s->last_rep_at) >= rep_t) {
+        /* !skip_release: after a double-tap the 2nd tap is held+swallowed; without
+         * this guard its stale last_rep_at makes the repeat fire once immediately,
+         * emitting `single` right after `dbl` (double-tap Up then a stray Down). */
         s->last_rep_at = now;
         publish_tap(pubsub, c->single, seq); /* fast-scroll repeat */
     }
