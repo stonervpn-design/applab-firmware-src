@@ -264,7 +264,7 @@ if _is_public:
 OPTIONAL_APPS = {
     "subghz", "subghz_remote", "esubghz_chat", "lora_monitor", "meshtastic_sniffer",
     "nfc", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
-    "flipper_xremote", "ibutton", "ble_spam", "wlan", "esp_now", "nrf24",
+    "flipper_xremote", "ibutton", "ble_spam", "findmy", "wlan", "esp_now", "nrf24",
     "fz_nrf24_jammer", "lan_attack", "bad_usb", "u2f", "gpio", "pin_config",
     "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
