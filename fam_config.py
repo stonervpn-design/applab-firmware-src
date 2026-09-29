@@ -187,8 +187,8 @@ if _board in _boards_without_nrf24:
 # ---------------------------------------------------------------------------
 # M5Stack StickS3 — STRIPPED build (user request 2026-09-03): keep ONLY the
 # user's SubGHz stuff, the nRF24 tool (better jammer, drives the RF-Pack "2in1"),
-# and the WiFi attack suite. Everything else (NFC/IR/BLE-spam/LoRa/RFID/games/
-# JS/tools) is dropped. Whitelist (not drop-list) so the intent is explicit and
+# the WiFi attack suite, plus Bluetooth/BLE (re-added 2026-09-29 per user
+# request; BLE bootloop is root-fixed). Dropped: NFC/IR/LoRa/RFID/games/JS/tools. Whitelist (not drop-list) so the intent is explicit and
 # the set can't silently grow. Board-gated → the Cardputer build is untouched.
 # ---------------------------------------------------------------------------
 if _board == "m5stick_s3":
@@ -210,6 +210,12 @@ if _board == "m5stick_s3":
         "wlan",
         # --- nRF24: jammer + MouseJack + spectrum, on the RF-Pack S3 (SPI3). ---
         "nrf24",
+        # --- Bluetooth / BLE (re-added 2026-09-29 per user request; the BLE
+        #     bootloop is root-fixed with service stacks in internal SRAM, so
+        #     the stick keeps full PSRAM + BLE, and BadBLE already rides this
+        #     same NimBLE stack). ble_spam = BLE Toolkit (spam / walk scanner /
+        #     tracker / clone); findmy = AirTag / SmartTag / Tile beacon. ---
+        "ble_spam", "findmy",
         # --- BadUSB + BadBLE: one app, two transports. USB HID rides the S3's
         #     native USB (USB-C is on the S3 D+/D-, console is USB-Serial-JTAG,
         #     so it can switch to a TinyUSB HID device like the Cardputer does);
