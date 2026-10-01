@@ -131,6 +131,15 @@ APPS = [
     # RollBack / Rolling-PWN: capture a consecutive rolling-code sequence -> replay it
     # to resync the receiver's counter. applications_user/subghz_rollback/.
     "subghz_rollback",
+    # Flavor-parity apps (mirror the Unleashed tree + applab catalog):
+    # Enhanced Sub-GHz Chat (encrypted device-to-device chat over CC1101).
+    "esubghz_chat",
+    # Grove/QWIIC I2C bus scanner tool.
+    "grove_i2c_scan",
+    # NFC Share (ISO14443-3A device-to-device file transfer over ST25R3916).
+    "nfc_share",
+    # ST25R3916 NFC diagnostic (Tools).
+    "st25r_nfc_diag",
 ]
 
 # Boards without NFC / IR hardware – exclude the corresponding apps
@@ -144,7 +153,7 @@ _board = os.environ.get("FLIPPER_BOARD", "")
 _variant = os.environ.get("FLIPPER_VARIANT", "private").strip().lower()
 _is_public = _variant == "public"
 # M5Stack StickS3 has no onboard NFC. T-Embed CC1101 phase 1 keeps NFC (PN532) off.
-_boards_without_nfc = {"m5stick_s3", "lilygo_t_embed_cc1101"}
+_boards_without_nfc = {"lilygo_t_embed_cc1101"}
 _boards_without_ir = set()
 # Neither Cardputer has an RDM6300/RFID front-end (BOARD_HAS_RFID=0); StickS3 has none
 # either; the T-Embed CC1101 has no 125 kHz front-end.
@@ -185,45 +194,21 @@ if _board in _boards_without_nrf24:
     APPS = [a for a in APPS if a not in ("nrf24",)]
 
 # ---------------------------------------------------------------------------
-# M5Stack StickS3 — STRIPPED build (user request 2026-09-03): keep ONLY the
-# user's SubGHz stuff, the nRF24 tool (better jammer, drives the RF-Pack "2in1"),
-# the WiFi attack suite, plus Bluetooth/BLE (re-added 2026-09-29 per user
-# request; BLE bootloop is root-fixed). Dropped: NFC/IR/LoRa/RFID/games/JS/tools. Whitelist (not drop-list) so the intent is explicit and
-# the set can't silently grow. Board-gated → the Cardputer build is untouched.
+# M5Stack StickS3 — full app set (un-stripped 2026-10-01 for flavour parity with
+# the Unleashed build, per user request). Supersedes the 2026-09-03 stripped
+# whitelist. NFC is kept (external M5Stack NFC Unit, ST25R3916 @0x50 via Grove —
+# backend verified, matches Cardputer ADV; BLE bootloop is root-fixed so the
+# stick keeps PSRAM + BLE). Drop only the apps this board has no hardware for.
+# Board-gated → the Cardputer build is untouched.
 # ---------------------------------------------------------------------------
 if _board == "m5stick_s3":
-    _stick_keep = {
-        # --- core services / OS: required to boot + link (started by the loader
-        #     or referenced by desktop/settings). Not user-facing "features". ---
-        "input", "notification", "gui", "dialogs", "locale", "cli", "cli_vcp",
-        "storage", "storage_start", "power", "power_start", "power_settings",
-        "loader", "loader_start", "notification_settings", "desktop", "archive",
-        "about", "bt_settings", "passport",
-        # --- SubGHz: the main app carries the user's automotive decoder registry
-        #     (lib/subghz/protocols) + all Sub-GHz protocols. ---
-        "subghz", "cli_subghz", "subghz_load_dangerous_settings",
-        # De Bruijn fixed-code brute forcer (OpenSesame-style OOK sweep).
-        "subghz_debruijn",
-        # RollBack / Rolling-PWN sequence capture + replay.
-        "subghz_rollback",
-        # --- WiFi attacks ---
-        "wlan",
-        # --- nRF24: jammer + MouseJack + spectrum, on the RF-Pack S3 (SPI3). ---
-        "nrf24",
-        # --- Bluetooth / BLE (re-added 2026-09-29 per user request; the BLE
-        #     bootloop is root-fixed with service stacks in internal SRAM, so
-        #     the stick keeps full PSRAM + BLE, and BadBLE already rides this
-        #     same NimBLE stack). ble_spam = BLE Toolkit (spam / walk scanner /
-        #     tracker / clone); findmy = AirTag / SmartTag / Tile beacon. ---
-        "ble_spam", "findmy",
-        # --- BadUSB + BadBLE: one app, two transports. USB HID rides the S3's
-        #     native USB (USB-C is on the S3 D+/D-, console is USB-Serial-JTAG,
-        #     so it can switch to a TinyUSB HID device like the Cardputer does);
-        #     BLE HID rides NimBLE (peripheral role already on for this board).
-        #     Pulls in ble_hid/ble_profile/assets as fap_libs. ---
-        "bad_usb",
+    _stick_drop = {
+        # LoRa / GPS / mesh (Cap-LoRa-1262 addon not on this board)
+        "lora_monitor", "meshtastic_sniffer", "wardriver",
+        # external-HW / heavy
+        "wiegand", "doom", "wolf3d",
     }
-    APPS = [a for a in APPS if a in _stick_keep]
+    APPS = [a for a in APPS if a not in _stick_drop]
 
 # LilyGO T-Embed CC1101 (phase 1): real CC1101 + nRF24 + IR + SD + WiFi/BLE + games/
 # tools/JS all kept. Dropped: NFC/RFID apps (PN532 deferred to phase 2, no 125 kHz or
@@ -269,12 +254,13 @@ if _is_public:
 # against, so it is ALWAYS compiled. Mirrors the shared applab catalog.
 OPTIONAL_APPS = {
     "subghz", "subghz_remote", "esubghz_chat", "lora_monitor", "meshtastic_sniffer",
-    "nfc", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
+    "nfc", "nfc_share", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
     "flipper_xremote", "ibutton", "ble_spam", "findmy", "wlan", "esp_now", "nrf24",
     "fz_nrf24_jammer", "lan_attack", "bad_usb", "u2f", "gpio", "pin_config",
     "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
     "clock", "qrcode", "pocketlab", "defender",
+    "subghz_debruijn", "subghz_rollback",
 }
 # Hidden inter-app link deps: a selected app whose C sources call functions DEFINED in
 # another app's translation unit needs that provider co-included or the link fails
