@@ -33,6 +33,9 @@ void furi_hal_init_early(void);
 void furi_hal_deinit_early(void);
 void furi_hal_init(void);
 
+/* Grove / Port.A 5V boost toggle (Grove I2C Scan app). No-op on non-PMIC boards. */
+void furi_hal_grove_5v_set(bool on);
+
 #ifdef __cplusplus
 }
 #endif

@@ -100,6 +100,31 @@ static void furi_hal_m5pm1_init(void) {
 }
 #endif
 
+/* Grove / Port.A 5V boost toggle (used by the Grove I2C Scan app). On boards with
+ * the M5PM1 PMIC (StickS3) this flips reg 0x06 bit3; on every other board the Grove
+ * rail isn't PMIC-gated, so this is a no-op. Kept in sync with the Unleashed tree. */
+void furi_hal_grove_5v_set(bool on) {
+#ifdef BOARD_HAS_M5PM1
+    uint8_t reg = 0x06, v = 0;
+    if(i2c_master_write_read_device(
+           BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, &reg, 1, &v, 1, pdMS_TO_TICKS(50)) != ESP_OK) {
+        return;
+    }
+    if(on) {
+        v |= (uint8_t)(1u << 3);
+    } else {
+        v &= (uint8_t)~(1u << 3);
+    }
+    uint8_t buf[2] = {0x06, v};
+    esp_err_t e = i2c_master_write_to_device(
+        BOARD_PMIC_I2C_PORT, BOARD_PMIC_ADDR, buf, 2, pdMS_TO_TICKS(50));
+    ESP_LOGI(TAG, "Grove 5V %s (reg0x06=0x%02X, err=%s)",
+             on ? "ON" : "OFF", v, esp_err_to_name(e));
+#else
+    (void)on;
+#endif
+}
+
 
 void furi_hal_init_early(void) {
     furi_hal_cortex_init_early();
