@@ -1,0 +1,14 @@
+App(
+    appid="subghz_rollback",
+    name="RollBack",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    entry_point="subghz_rollback_app",
+    stack_size=4 * 1024,
+    requires=[
+        "gui",
+    ],
+    order=55,
+    icon="A_Plugins_14",
+    fap_category="Sub-GHz",
+    fap_description="Rolling-PWN/RollBack: capture a consecutive fob sequence then replay it to resync the counter",
+)

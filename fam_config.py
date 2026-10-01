@@ -136,6 +136,12 @@ APPS = [
     # Offline SubGhz BinRAW classifier (github.com/maxwalks/subhound): reads
     # /ext/subghz/*.sub, 17-stage heuristic classifier; no live radio. src in flipper-app/.
     "subhound",
+    # De Bruijn fixed-code brute forcer (OpenSesame): one continuous OOK sweep covers
+    # all 2^N codes (Princeton/CAME/NICE/Holtek). applications_user/subghz_debruijn/.
+    "subghz_debruijn",
+    # RollBack / Rolling-PWN: capture a consecutive rolling-code sequence -> replay it
+    # to resync the receiver's counter. applications_user/subghz_rollback/.
+    "subghz_rollback",
 ]
 
 # Boards without NFC / IR hardware – exclude the corresponding apps
@@ -280,12 +286,13 @@ if _is_public:
 # dropping it breaks the link. This set mirrors the applab catalog.
 OPTIONAL_APPS = {
     "subghz", "subghz_remote", "esubghz_chat", "lora_monitor", "meshtastic_sniffer",
-    "nfc", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
-    "flipper_xremote", "ibutton", "ble_spam", "wlan", "esp_now", "nrf24",
+    "nfc", "nfc_share", "nfc_magic", "mifare_fuzzer", "lfrfid", "wiegand", "infrared",
+    "flipper_xremote", "ibutton", "ble_spam", "findmy", "wlan", "esp_now", "nrf24",
     "fz_nrf24_jammer", "lan_attack", "bad_usb", "u2f", "gpio", "pin_config",
     "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
     "clock", "qrcode", "pocketlab", "defender",
+    "subghz_debruijn", "subghz_rollback",
 }
 # ── Hidden inter-app link dependencies ───────────────────────────────────────
 # A handful of apps' C sources call functions that are DEFINED in ANOTHER app's
