@@ -244,6 +244,16 @@ if _board in _boards_without_wolf3d:
 if _is_public:
     _car_apps = {"can_commander", "tagtinker", "camera_hunter", "doorbell_brute"}
     APPS = [a for a in APPS if a not in _car_apps]
+    # Public build ships the community-published ProtoPirate app (its OWN decoders,
+    # from github.com/RocketGod-git/ProtoPirate) as a standalone MENUEXTERNAL app —
+    # none of the private in-tree SubGhz Automotive decoders. Ported to a static
+    # protocol registry (five RX plugins compiled in, TX/emulate disabled).
+    # Selection-only (owner directive 2026-08-10): add it to a PUBLIC build ONLY when
+    # the applab request explicitly selects it (FLIPPER_APPS lists it) — never baked
+    # into the default full public bins.
+    _pp_sel = {a.strip() for a in os.environ.get("FLIPPER_APPS", "").split(",") if a.strip()}
+    if "proto_pirate" in _pp_sel and "proto_pirate" not in APPS:
+        APPS.append("proto_pirate")
 
 # -- On-demand build service (applab): custom app subset ----------------------------
 # FLIPPER_APPS = comma-separated appids to KEEP. Applied AFTER all board/variant
