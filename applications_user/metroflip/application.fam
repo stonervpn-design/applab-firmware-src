@@ -1,0 +1,35 @@
+# Metroflip — ESP32 static port (NFC transit-card reader).
+#
+# Upstream Metroflip is built around fal_embedded PLUGIN modules: each card parser
+# (opal, calypso, troika, ...) ships as a separate .fal ELF loaded at runtime by the
+# Flipper plugin manager. This ESP32 port has NO FAP plugin loader (plugin_manager is
+# a stub), so the whole app is compiled into a single image and the card plugins are
+# wired statically in metroflip_static_plugins.c (resolved by card_type via each
+# plugin's stock _ep()). Mirrors the ProtoPirate static port.
+#
+# Dropped on this port: the Suica (Japan) plugin — it ships a separate 142-icon
+# bundle (fap_icon_assets_symbol="suica") and the generator emits one icon bundle per
+# app; selecting Suica degrades to "unsupported". Everything else is built in.
+
+App(
+    appid="metroflip",
+    name="Metroflip",
+    apptype=FlipperAppType.MENUEXTERNAL,
+    targets=["all"],
+    entry_point="metroflip",
+    requires=["gui", "nfc"],
+    stack_size=4 * 1024,
+    fap_description="Read public transport cards from around the world",
+    fap_version="2.0",
+    fap_icon="images/mf_icon.png",
+    fap_category="NFC",
+    fap_icon_assets="images",
+    fap_file_assets="files",
+    fap_author="luu176 (Metroflip) / ESP32 static port",
+    sources=[
+        # Everything recursively, incl. scenes/plugins/*.c (the card parsers) and
+        # api/**/*.c — all compiled directly into the app.
+        "*.c*",
+        "!tools",
+    ],
+)

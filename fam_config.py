@@ -142,6 +142,9 @@ APPS = [
     # RollBack / Rolling-PWN: capture a consecutive rolling-code sequence -> replay it
     # to resync the receiver's counter. applications_user/subghz_rollback/.
     "subghz_rollback",
+    # Metroflip — transit-card reader (community app, github.com/ClementPrimot/Metroflip),
+    # ported to a static plugin registry for this port (no .fal loader). Suica dropped.
+    "metroflip",
 ]
 
 # Boards without NFC / IR hardware – exclude the corresponding apps
@@ -292,7 +295,7 @@ OPTIONAL_APPS = {
     "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
     "clock", "qrcode", "pocketlab", "defender",
-    "subghz_debruijn", "subghz_rollback",
+    "subghz_debruijn", "subghz_rollback", "metroflip",
 }
 # ── Hidden inter-app link dependencies ───────────────────────────────────────
 # A handful of apps' C sources call functions that are DEFINED in ANOTHER app's
