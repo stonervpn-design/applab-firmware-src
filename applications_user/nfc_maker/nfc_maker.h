@@ -9,7 +9,7 @@
 #include "nfc_maker_icons.h"
 #include <gui/scene_manager.h>
 #include <gui/modules/submenu.h>
-#include "dropin/text_input.h"
+#include <gui/modules/text_input.h>
 #include <gui/modules/byte_input.h>
 #include <gui/modules/popup.h>
 #include "scenes/nfc_maker_scene.h"
