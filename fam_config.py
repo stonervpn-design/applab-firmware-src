@@ -143,6 +143,8 @@ APPS = [
     # Metroflip — transit-card reader (community app, github.com/ClementPrimot/Metroflip),
     # ported to a static plugin registry for this port (no .fal loader). Suica dropped.
     "metroflip",
+    # NFC Maker (@Willy-JL) — generate NFC NDEF files (BT/contact/link/email/phone/text/wifi).
+    "nfc_maker",
 ]
 
 # Boards without NFC / IR hardware – exclude the corresponding apps
@@ -273,7 +275,7 @@ OPTIONAL_APPS = {
     "grove_i2c_scan", "bus_tools", "power_monitor", "doom", "wolf3d", "asteroids",
     "blackjack", "flipper_pong", "game15", "dice_app", "flippergotchi", "mp3_player",
     "clock", "qrcode", "pocketlab", "defender",
-    "subghz_debruijn", "subghz_rollback", "metroflip",
+    "subghz_debruijn", "subghz_rollback", "metroflip", "nfc_maker",
 }
 # Hidden inter-app link deps: a selected app whose C sources call functions DEFINED in
 # another app's translation unit needs that provider co-included or the link fails
