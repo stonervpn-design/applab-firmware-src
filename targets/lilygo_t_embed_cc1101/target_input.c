@@ -4,7 +4,7 @@
  * Hardware: an EC11-style rotary encoder plus two momentary buttons, all wired to
  * GND and read with internal pull-ups (pressed / active == level 0).
  *
- *   Encoder A/B (GPIO4 / GPIO5): quadrature rotation.
+ *   Encoder A/B (GPIO4 / GPIO5): quadrature rotation -> hardware PCNT peripheral.
  *   Encoder push (GPIO0)       : Ok.
  *   Back button  (GPIO6)       : Back.
  *
@@ -14,19 +14,29 @@
  *   - the keyboard (text_input.c) walks every key in reading order on Up/Down,
  *   - settings (variable_item_list.c) scroll on Up/Down, and Ok toggles "editing"
  *     so a turn then changes the focused value and Ok confirms.
- * So the encoder emits ONLY Up/Down — no Left/Right, no modifier. Turning never
- * changes a value by itself (you press Ok to edit first), and there is nothing to
- * hold or remember.
+ * So the encoder emits ONLY Up/Down — no Left/Right, no modifier.
+ *
+ * Why PCNT (and not software polling):
+ *   The encoder is decoded by the ESP32-S3 PCNT (pulse-counter) peripheral in x4
+ *   quadrature mode, with its hardware glitch filter enabled. PCNT latches EVERY
+ *   A/B edge in hardware, so no transition is ever missed regardless of how fast
+ *   the knob is spun or how coarsely we poll — and the glitch filter rejects
+ *   contact bounce. The old software decoder sampled A/B every 4 ms and lost any
+ *   edge that fell between samples (and mis-scored bounce), which made the UI
+ *   "stick" for several detents and then jump several rows at once. PCNT fixes
+ *   that at the source: the poll just reads the accumulated hardware count and
+ *   converts whole detents into Up/Down taps.
  *
  * Freeze escape hatch: hold Ok + Back together for REBOOT_COMBO_MS -> esp_restart().
  * Works whenever the input service is still scheduled (a stuck UI / service); a total
  * scheduler hang is caught by the task/interrupt watchdogs instead.
  *
- * Called every INPUT_POLL_MS (4 ms) from the input service — fast enough to catch
- * every quadrature transition of a hand-turned encoder, so no GPIO ISR is needed.
+ * Called every INPUT_POLL_MS (4 ms) from the input service. The poll cadence no
+ * longer gates accuracy (PCNT counts in hardware); it only bounds input latency.
  *
  * Flip ENC_DIR if scrolling goes the wrong way; adjust ENC_COUNTS_PER_DETENT
- * (4 or 2 for most EC11s) if one physical click scrolls by the wrong number of steps.
+ * (4 for x4 decoding; 2 if an EC11 emits half-steps per click) if one physical
+ * click scrolls by the wrong number of steps.
  */
 
 #include "target_input.h"
@@ -34,6 +44,7 @@
 #include <furi.h>
 #include <input.h>
 #include <driver/gpio.h>
+#include <driver/pulse_cnt.h>
 #include <esp_system.h>
 #include "boards/board.h"
 
@@ -46,8 +57,16 @@
 
 /* +1 = CW scrolls Down; flip to -1 if the encoder scrolls the wrong way. */
 #define ENC_DIR                 (+1)
-/* Quadrature counts per physical detent (EC11: usually 4, some 2). */
+/* Quadrature counts per physical detent (x4 decoding: 4; some EC11s: 2). */
 #define ENC_COUNTS_PER_DETENT   4
+
+/* PCNT counter limits. Kept well clear of the per-poll travel so the hardware
+ * counter never auto-zeros mid-turn; we re-center it in software long before. */
+#define ENC_PCNT_HIGH_LIMIT     1000
+#define ENC_PCNT_LOW_LIMIT      (-1000)
+#define ENC_PCNT_RECENTER       512
+/* Hardware debounce for the A/B contacts (ns). PCNT drops pulses shorter than this. */
+#define ENC_GLITCH_NS           1000U
 
 #define INPUT_LONG_PRESS_MS 500U
 #define INPUT_REPEAT_MS     150U
@@ -87,24 +106,18 @@ static BtnState s_back;
 static bool s_combo_armed;
 static uint32_t s_combo_started_at;
 
-/* Quadrature decoder state */
-static uint8_t s_enc_prev; /* last (A<<1|B) 2-bit reading */
-static int8_t s_enc_accum; /* signed sub-step accumulator */
+/* PCNT quadrature decoder state */
+static pcnt_unit_handle_t s_enc_pcnt;
+static int s_enc_last; /* last raw hardware count read */
+static int8_t s_enc_accum; /* signed sub-step remainder toward the next detent */
 
 static bool s_ready = false;
 
-/* Transition table: index = (prev_state<<2)|new_state, prev/new = (A<<1|B).
- * Yields +1 / -1 for the 8 valid gray-code transitions, 0 for none/invalid. */
-static const int8_t s_qdec[16] = {
-    0, -1, +1, 0,
-    +1, 0, 0, -1,
-    -1, 0, 0, +1,
-    0, +1, -1, 0};
-
 void target_input_init(void) {
+    /* Buttons (Ok = encoder push, Back) are plain GPIO inputs with pull-ups.
+     * The encoder A/B lines are owned by the PCNT peripheral, configured below. */
     gpio_config_t cfg = {
-        .pin_bit_mask = (1ULL << BOARD_PIN_ENCODER_A) | (1ULL << BOARD_PIN_ENCODER_B) |
-                        (1ULL << BOARD_PIN_ENCODER_BTN) | (1ULL << BOARD_PIN_BUTTON_KEY),
+        .pin_bit_mask = (1ULL << BOARD_PIN_ENCODER_BTN) | (1ULL << BOARD_PIN_BUTTON_KEY),
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -116,11 +129,82 @@ void target_input_init(void) {
     s_back = (BtnState){0};
     s_combo_armed = false;
     s_enc_accum = 0;
-    s_enc_prev = (uint8_t)((gpio_get_level(ENC_A_GPIO) << 1) | gpio_get_level(ENC_B_GPIO));
+    s_enc_last = 0;
+    s_enc_pcnt = NULL;
+
+    /* ---- PCNT: x4 quadrature decode of encoder A/B in hardware ----
+     * Init is fail-soft on purpose: PCNT bring-up is extremely unlikely to fail,
+     * but if it ever does we must NOT abort (that bootloops a flashed device).
+     * We log, leave s_enc_pcnt NULL so poll_encoder() no-ops, and still bring up
+     * the buttons + reboot combo so the device remains usable. */
+    esp_err_t err;
+    pcnt_unit_config_t unit_cfg = {
+        .high_limit = ENC_PCNT_HIGH_LIMIT,
+        .low_limit = ENC_PCNT_LOW_LIMIT,
+    };
+    pcnt_glitch_filter_config_t filter_cfg = {.max_glitch_ns = ENC_GLITCH_NS};
+    pcnt_chan_config_t chan_a_cfg = {
+        .edge_gpio_num = BOARD_PIN_ENCODER_A,
+        .level_gpio_num = BOARD_PIN_ENCODER_B,
+    };
+    pcnt_chan_config_t chan_b_cfg = {
+        .edge_gpio_num = BOARD_PIN_ENCODER_B,
+        .level_gpio_num = BOARD_PIN_ENCODER_A,
+    };
+    pcnt_channel_handle_t chan_a = NULL;
+    pcnt_channel_handle_t chan_b = NULL;
+
+    do {
+        pcnt_unit_handle_t unit = NULL;
+        if((err = pcnt_new_unit(&unit_cfg, &unit)) != ESP_OK) break;
+        if((err = pcnt_unit_set_glitch_filter(unit, &filter_cfg)) != ESP_OK) break;
+
+        /* Channel A: edges on A, gated by the level of B. */
+        if((err = pcnt_new_channel(unit, &chan_a_cfg, &chan_a)) != ESP_OK) break;
+        if((err = pcnt_channel_set_edge_action(
+                chan_a,
+                PCNT_CHANNEL_EDGE_ACTION_DECREASE,
+                PCNT_CHANNEL_EDGE_ACTION_INCREASE)) != ESP_OK)
+            break;
+        if((err = pcnt_channel_set_level_action(
+                chan_a,
+                PCNT_CHANNEL_LEVEL_ACTION_KEEP,
+                PCNT_CHANNEL_LEVEL_ACTION_INVERSE)) != ESP_OK)
+            break;
+
+        /* Channel B: edges on B, gated by the level of A. */
+        if((err = pcnt_new_channel(unit, &chan_b_cfg, &chan_b)) != ESP_OK) break;
+        if((err = pcnt_channel_set_edge_action(
+                chan_b,
+                PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+                PCNT_CHANNEL_EDGE_ACTION_DECREASE)) != ESP_OK)
+            break;
+        if((err = pcnt_channel_set_level_action(
+                chan_b,
+                PCNT_CHANNEL_LEVEL_ACTION_KEEP,
+                PCNT_CHANNEL_LEVEL_ACTION_INVERSE)) != ESP_OK)
+            break;
+
+        /* EC11 commons tie to GND -> internal pull-ups on A/B. */
+        gpio_set_pull_mode(ENC_A_GPIO, GPIO_PULLUP_ONLY);
+        gpio_set_pull_mode(ENC_B_GPIO, GPIO_PULLUP_ONLY);
+
+        if((err = pcnt_unit_enable(unit)) != ESP_OK) break;
+        if((err = pcnt_unit_clear_count(unit)) != ESP_OK) break;
+        if((err = pcnt_unit_start(unit)) != ESP_OK) break;
+
+        s_enc_pcnt = unit; /* publish only once fully configured */
+    } while(0);
+
+    if(s_enc_pcnt == NULL) {
+        FURI_LOG_E(TAG, "PCNT encoder init failed (0x%x) - encoder disabled", (int)err);
+    }
+
     s_ready = true;
     FURI_LOG_I(
         TAG,
-        "T-Embed encoder input init (A=GPIO%d B=GPIO%d OK=GPIO%d BACK=GPIO%d)",
+        "T-Embed input init, PCNT encoder %s (A=GPIO%d B=GPIO%d OK=GPIO%d BACK=GPIO%d)",
+        s_enc_pcnt ? "ok" : "DISABLED",
         (int)BOARD_PIN_ENCODER_A,
         (int)BOARD_PIN_ENCODER_B,
         (int)BOARD_PIN_ENCODER_BTN,
@@ -144,24 +228,34 @@ static bool debounce(BtnState* btn, bool raw_now, uint32_t now, bool* now_presse
     return false;
 }
 
-/* Read the encoder and emit one Up/Down tap per detent. */
+/* Read the hardware pulse count and emit one Up/Down tap per whole detent. */
 static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq) {
-    uint8_t state = (uint8_t)((gpio_get_level(ENC_A_GPIO) << 1) | gpio_get_level(ENC_B_GPIO));
-    if(state == s_enc_prev) return;
+    if(s_enc_pcnt == NULL) return; /* PCNT bring-up failed; encoder disabled */
+    int count = 0;
+    if(pcnt_unit_get_count(s_enc_pcnt, &count) != ESP_OK) return;
 
-    s_enc_accum += s_qdec[(s_enc_prev << 2) | state];
-    s_enc_prev = state;
+    int delta = count - s_enc_last;
+    s_enc_last = count;
 
-    while(s_enc_accum >= ENC_COUNTS_PER_DETENT || s_enc_accum <= -ENC_COUNTS_PER_DETENT) {
-        int dir;
-        if(s_enc_accum >= ENC_COUNTS_PER_DETENT) {
-            s_enc_accum -= ENC_COUNTS_PER_DETENT;
-            dir = ENC_DIR;
-        } else {
-            s_enc_accum += ENC_COUNTS_PER_DETENT;
-            dir = -ENC_DIR;
+    if(delta != 0) {
+        s_enc_accum += (int8_t)(ENC_DIR * delta);
+
+        while(s_enc_accum >= ENC_COUNTS_PER_DETENT || s_enc_accum <= -ENC_COUNTS_PER_DETENT) {
+            if(s_enc_accum >= ENC_COUNTS_PER_DETENT) {
+                s_enc_accum -= ENC_COUNTS_PER_DETENT;
+                publish_tap(pubsub, InputKeyDown, seq);
+            } else {
+                s_enc_accum += ENC_COUNTS_PER_DETENT;
+                publish_tap(pubsub, InputKeyUp, seq);
+            }
         }
-        publish_tap(pubsub, dir > 0 ? InputKeyDown : InputKeyUp, seq);
+    }
+
+    /* Re-center the hardware counter well before it reaches a limit, so the
+     * (count - last) delta never has to span a hardware auto-zero. */
+    if(count >= ENC_PCNT_RECENTER || count <= -ENC_PCNT_RECENTER) {
+        pcnt_unit_clear_count(s_enc_pcnt);
+        s_enc_last = 0;
     }
 }
 

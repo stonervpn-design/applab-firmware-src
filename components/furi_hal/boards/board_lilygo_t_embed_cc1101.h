@@ -196,11 +196,16 @@
 #define BOARD_PIN_RFID_TX       UINT16_MAX
 #define BOARD_RFID_UART_NUM     1
 
-/* ---- NFC (PN532, IRQ=17 RST=45) — DISABLED for phase 1 (deferred to phase 2) ---- */
+/* ---- NFC — onboard PN532 (factory-fitted on the T-Embed CC1101 Plus) ----
+ * On the shared main I2C bus (SDA=GPIO8 / SCL=GPIO18), I2C addr 0x24, with IRQ on
+ * GPIO17 and RESET on GPIO45 (confirmed against LilyGo's T-Embed-CC1101 board
+ * defines). RST MUST be driven: furi_hal_nfc drives it HIGH at init to release the
+ * PN532 from reset — leaving it floating can hold the chip in reset. IRQ gives a
+ * fast card-ready signal; the backend falls back to polling without it. */
 #define BOARD_PIN_NFC_SCL       BOARD_PIN_QWIIC_SCL
 #define BOARD_PIN_NFC_SDA       BOARD_PIN_QWIIC_SDA
-#define BOARD_PIN_NFC_IRQ       UINT16_MAX
-#define BOARD_PIN_NFC_RST       UINT16_MAX
+#define BOARD_PIN_NFC_IRQ       17
+#define BOARD_PIN_NFC_RST       45
 #define BOARD_NFC_I2C_PORT      I2C_NUM_0
 #define BOARD_NFC_I2C_ADDR      0x24
 #define BOARD_HAS_ST25R3916     0
@@ -224,7 +229,7 @@
 
 #define BOARD_HAS_IBUTTON       0
 #define BOARD_HAS_RFID          0
-#define BOARD_HAS_NFC           0  /* PN532 — phase 2 */
+#define BOARD_HAS_NFC           1  /* onboard PN532 @0x24 (SDA8/SCL18, IRQ17, RST45) */
 #define BOARD_HAS_SUBGHZ        1
 #define BOARD_HAS_MIC           0
 #define BOARD_HAS_IMU           0
