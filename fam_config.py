@@ -162,8 +162,9 @@ _variant = os.environ.get("FLIPPER_VARIANT", "private").strip().lower()
 _is_public = _variant == "public"
 # StickS3 NFC = external M5Stack NFC Unit (ST25R3916 @0x50 on Grove/QWIIC), backend
 # verified working — so the core `nfc` app IS kept (matches Cardputer ADV).
-# T-Embed CC1101 phase 1 keeps NFC (PN532) off.
-_boards_without_nfc = {"lilygo_t_embed_cc1101"}
+# T-Embed CC1101 Plus ships a factory onboard PN532 (I2C 0x24, IRQ17/RST45) — NFC app
+# enabled 2026-10-11 now the HAL backend is wired (BOARD_HAS_NFC=1) and flash fits.
+_boards_without_nfc = set()
 _boards_without_ir = set()
 # Neither Cardputer has an RDM6300/RFID front-end (BOARD_HAS_RFID=0); StickS3 has none
 # either; the T-Embed CC1101 has no 125 kHz front-end.
