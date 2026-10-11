@@ -8,13 +8,14 @@
  *   Encoder push (GPIO0)       : Ok.
  *   Back button  (GPIO6)       : Back.
  *
- * Nav model — SINGLE AXIS, deliberately simple: a turn is always Up/Down, and Ok
- * selects. The whole UI is built for this one knob:
- *   - the menu (menu.c MenuStyleWii) walks the grid LINEARLY on Up/Down,
- *   - the keyboard (text_input.c) walks every key in reading order on Up/Down,
- *   - settings (variable_item_list.c) scroll on Up/Down, and Ok toggles "editing"
- *     so a turn then changes the focused value and Ok confirms.
- * So the encoder emits ONLY Up/Down — no Left/Right, no modifier.
+ * Nav model — one knob, two axes via a modifier:
+ *   - a plain turn is Up/Down (CW = Down, CCW = Up): menus, keyboard and settings
+ *     all walk linearly on Up/Down, and Ok selects / toggles editing;
+ *   - HOLD Ok (the encoder push) and turn for Left/Right (CW = Right, CCW = Left).
+ *     This reaches the horizontal affordances some apps bind to Left/Right — e.g.
+ *     ProtoPirate's receive screen opens "Config" on Left and deletes on Right.
+ * When a turn happens while Ok is held, that Ok press is consumed as the modifier:
+ * no Ok Short/Long/Repeat is emitted for it (so you don't also trigger "select").
  *
  * Why PCNT (and not software polling):
  *   The encoder is decoded by the ESP32-S3 PCNT (pulse-counter) peripheral in x4
@@ -102,6 +103,10 @@ typedef struct {
 static BtnState s_ok;
 static BtnState s_back;
 
+/* Set when the current Ok hold has been used as a Left/Right turn-modifier, so its
+ * release does not also emit an Ok Short (and Long/Repeat are suppressed). */
+static bool s_ok_rot_mod;
+
 /* Ok+Back reboot combo timing. */
 static bool s_combo_armed;
 static uint32_t s_combo_started_at;
@@ -127,6 +132,7 @@ void target_input_init(void) {
 
     s_ok = (BtnState){0};
     s_back = (BtnState){0};
+    s_ok_rot_mod = false;
     s_combo_armed = false;
     s_enc_accum = 0;
     s_enc_last = 0;
@@ -228,8 +234,9 @@ static bool debounce(BtnState* btn, bool raw_now, uint32_t now, bool* now_presse
     return false;
 }
 
-/* Read the hardware pulse count and emit one Up/Down tap per whole detent. */
-static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq) {
+/* Read the hardware pulse count and emit one tap per whole detent. With Ok held
+ * (ok_held), a detent is Left/Right (the turn-modifier); otherwise it is Up/Down. */
+static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq, bool ok_held) {
     if(s_enc_pcnt == NULL) return; /* PCNT bring-up failed; encoder disabled */
     int count = 0;
     if(pcnt_unit_get_count(s_enc_pcnt, &count) != ESP_OK) return;
@@ -241,12 +248,18 @@ static void poll_encoder(FuriPubSub* pubsub, uint32_t* seq) {
         s_enc_accum += (int8_t)(ENC_DIR * delta);
 
         while(s_enc_accum >= ENC_COUNTS_PER_DETENT || s_enc_accum <= -ENC_COUNTS_PER_DETENT) {
-            if(s_enc_accum >= ENC_COUNTS_PER_DETENT) {
+            bool positive = (s_enc_accum >= ENC_COUNTS_PER_DETENT);
+            if(positive) {
                 s_enc_accum -= ENC_COUNTS_PER_DETENT;
-                publish_tap(pubsub, InputKeyDown, seq);
             } else {
                 s_enc_accum += ENC_COUNTS_PER_DETENT;
-                publish_tap(pubsub, InputKeyUp, seq);
+            }
+            if(ok_held) {
+                /* Ok held -> horizontal axis; consume the Ok press as the modifier. */
+                s_ok_rot_mod = true;
+                publish_tap(pubsub, positive ? InputKeyRight : InputKeyLeft, seq);
+            } else {
+                publish_tap(pubsub, positive ? InputKeyDown : InputKeyUp, seq);
             }
         }
     }
@@ -283,24 +296,29 @@ void target_input_poll(FuriPubSub* pubsub, uint32_t* sequence_counter) {
         s_combo_armed = false;
     }
 
-    /* Encoder: a turn is Up/Down. That is all — the UI edits values via Ok. */
-    poll_encoder(pubsub, sequence_counter);
+    /* Encoder: plain turn = Up/Down; turn while Ok is held = Left/Right. Uses the
+     * debounced Ok state (and only before a long-press) as the modifier gate. */
+    bool ok_held_modifier = s_ok.pressed && !s_ok.long_fired;
+    poll_encoder(pubsub, sequence_counter, ok_held_modifier);
 
-    /* ---- OK = encoder push (full Press/Long/Short/Repeat/Release stream) ---- */
+    /* ---- OK = encoder push (full Press/Long/Short/Repeat/Release stream) ----
+     * If this hold got used as a Left/Right turn-modifier (s_ok_rot_mod), we emit
+     * no Ok Short/Long/Repeat for it — only the balancing Press/Release. */
     bool changed_ok, state_ok = false;
     changed_ok = debounce(&s_ok, raw_ok, now, &state_ok);
     if(changed_ok) {
         if(state_ok) {
             s_ok.press_started_at = now;
             s_ok.long_fired = false;
+            s_ok_rot_mod = false;
             publish(pubsub, InputKeyOk, InputTypePress, sequence_counter);
         } else {
-            if(!s_ok.long_fired) {
+            if(!s_ok.long_fired && !s_ok_rot_mod) {
                 publish(pubsub, InputKeyOk, InputTypeShort, sequence_counter);
             }
             publish(pubsub, InputKeyOk, InputTypeRelease, sequence_counter);
         }
-    } else if(s_ok.pressed) {
+    } else if(s_ok.pressed && !s_ok_rot_mod) {
         if(!s_ok.long_fired && (now - s_ok.press_started_at) >= long_ticks) {
             s_ok.long_fired = true;
             s_ok.press_started_at = now;
