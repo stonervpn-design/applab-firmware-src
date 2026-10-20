@@ -1,18 +1,21 @@
-# ProtoPirate — ESP32 static port (RX / decode).
+# ProtoPirate 4.0 — ESP32 static port (RX / decode + offline tools).
 #
-# Upstream ProtoPirate is built around fal_embedded PLUGIN modules: each RX
-# registry, each TX protocol, and each tool scene ships as a separate .fal ELF
-# loaded at runtime by the Flipper plugin manager. This ESP32 port has NO FAP
-# plugin loader (plugin_manager is a stub), so the whole app is compiled into a
-# single image and the five RX registry plugins are wired statically in
-# helpers/protopirate_protocol_plugin_host.c (calls their _ep() directly).
+# Upstream ProtoPirate ships each feature as a runtime-loaded .fal PLUGIN: the
+# five RX protocol registries, the per-protocol TX encoders, and the shared
+# "tool" scenes (config, about, saved-info, sub-decode, brute-force,
+# remote-analyzer, welcome). This ESP32 port has NO FAP plugin loader
+# (shared_plugin_load in helpers/protopirate_plugins.c is wired to call each
+# plugin's compiled-in _ep() directly), so the whole app is built into ONE
+# image. Every source is compiled exactly once via the recursive "*.c*" glob;
+# the exclusions below drop only what cannot be flattened or what duplicates a
+# firmware-provided module.
 #
-# Disabled here (see defines.h): TX/emulate (its 21 protocols are macro-generated
-# one-per-plugin from a single source and cannot be flattened into one image) and
-# the timing tuner. Decoding of received signals is unaffected. The offline
-# sub-decode and PSA brute-force TOOL scenes remain present but are plugin-loaded,
-# so on this port they fail to load gracefully (error toast + back) until/unless
-# their tool-scene host is also ported to static wiring.
+# Enabled and statically wired: RX decoding, the offline sub-decode tool, the PSA
+# brute-force tool, the models database, the remote analyzer, and TX/emulate. The
+# 23 per-protocol TX encoders ship upstream as tx_<key>.fal built from one shared
+# template (single ep symbol, not flattenable); this port defines them once each
+# with unique symbols in protocols/plugins/protopirate_tx_static_plugins.c.
+# Disabled (see defines.h): the timing tuner and the welcome screen.
 
 App(
     appid="proto_pirate",
@@ -23,28 +26,30 @@ App(
     requires=["gui", "subghz"],
     stack_size=4 * 1024,
     fap_description="Decode car key fob signals from Sub-GHz",
-    fap_version="3.2",
+    fap_version="4.1",
     fap_icon="images/protopirate_10px.png",
     fap_category="Sub-GHz",
     fap_icon_assets="images",
-    fap_file_assets="keystore",
+    fap_file_assets="assets",
     fap_author="RocketGod-git (ProtoPirate) / ESP32 static port",
-    cdefines=["PROTOPIRATE_PROTOCOL_RX_ONLY=1"],
+    # NOTE: PROTOPIRATE_PROTOCOL_RX_ONLY is intentionally NOT set here. Upstream
+    # compiles each protocol .c twice (RX-only in registries, TX-only per tx_<key>.fal);
+    # this single-image port compiles each .c once, so it must build BOTH halves —
+    # decoder and encoder (PROTOPIRATE_WITH_ENCODER, gated in defines.h on emulate).
+    cdefines=["PROTOPIRATE_SUB_DECODE_PLUGIN_BUILD", "PROTOPIRATE_BRUTEFORCE_PLUGIN_BUILD", "PROTOPIRATE_REMOTE_ANALYZER_PLUGIN_BUILD", "PROTOPIRATE_CONFIG_PLUGIN_BUILD"],
     sources=[
-        # Everything, recursively — including the five RX registry plugin .c
-        # (protocols/plugins/protopirate_{am,am_vag,fm,fm_f4,fm_honda1}_plugin.c)
-        # and all decoder sources, compiled directly into the app.
+        # Everything, recursively — compiled once each. Includes the five RX
+        # registry plugin .c and every shared tool-scene plugin .c, whose _ep()
+        # are called directly by the static loader.
         "*.c*",
-        # Tool-scene + emulate PLUGIN wrappers are separate ELF entry points that
-        # the static build never loads; leaving them in would add stray eps.
-        "!scenes/plugins",
-        # TX protocol plugin template: macro-compiled once-per-protocol on real
-        # Flipper via per-instance cdefines; it can't be built a single time here.
-        "!protocols/plugins/protopirate_tx_protocol_plugin.c",
-        # Emulate (TX) disabled — scene relies on the .fam excluding it.
-        "!scenes/protopirate_scene_emulate.c",
-        # Timing tuner disabled.
+        # TX/emulate is ON: scene_emulate.c, emulate_plugin.c and the per-protocol
+        # TX plugins (protopirate_tx_static_plugins.c) are all compiled in.
+        # --- timing tuner: disabled ---
         "!scenes/protopirate_scene_timing_tuner.c",
+        "!scenes/plugins/protopirate_timing_tuner_plugin.c",
         "!protocols/protocol_timings.c",
+        # --- welcome screen: disabled (upstream default) ---
+        "!scenes/protopirate_scene_welcome.c",
+        "!scenes/plugins/protopirate_welcome_plugin.c",
     ],
 )

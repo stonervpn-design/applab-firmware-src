@@ -13,6 +13,12 @@ set -e
 # ESP-IDF xtensa toolchain would be "not found". If it isn't already on PATH,
 # auto-locate the standard ESP-IDF install under ~/.espressif (pure-bash paths,
 # avoiding the MSYS env-var path-conversion that mangles an injected Windows path).
+# The cmd.exe launcher (buildFap_adv.bat) injects the located toolchain bin
+# dir via FAP_TOOLCHAIN_BIN; honor it (bash spawned from cmd has no $HOME for
+# the fallback glob below). Harmless when unset.
+if [ -n "$FAP_TOOLCHAIN_BIN" ]; then
+    export PATH="$FAP_TOOLCHAIN_BIN:$PATH"
+fi
 if ! command -v xtensa-esp32s3-elf-gcc >/dev/null 2>&1; then
     for _tc in "$HOME/.espressif/tools/xtensa-esp-elf"/*/xtensa-esp-elf/bin; do
         [ -x "$_tc/xtensa-esp32s3-elf-gcc.exe" ] && { export PATH="$_tc:$PATH"; break; }
@@ -324,6 +330,12 @@ build_for_target() {
 
     TARGET_CFLAGS+=(-DFAP_VERSION=\"1.0\")
     [ -n "$FAP_CDEFINES" ] && TARGET_CFLAGS+=($FAP_CDEFINES)
+    # ESP32 static port: honor cdefines=[...] from application.fam. Upstream passes
+    # per-plugin build flags there; this port compiles all plugins into one FAP and
+    # needs them (the plugins guard their bodies on these before any #include, so
+    # defines.h is too late). One-line cdefines list expected.
+    FAM_CDEFINES=$(grep -oE 'cdefines=\[[^]]*\]' "$APP_DIR/application.fam" 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"')
+    for _d in $FAM_CDEFINES; do TARGET_CFLAGS+=(-D"$_d"); done
     # Extra compiler flags (space-separated), e.g. to relax GCC 14 warnings
     # that upstream apps written for older toolchains trip over:
     #   FAP_EXTRA_CFLAGS="-Wno-incompatible-pointer-types -Wno-int-conversion"
@@ -507,6 +519,23 @@ build_for_target() {
     python3 "$PROJECT_DIR/tools/check_fap_symbols.py" "$API_FILE" "$BUILD_DIR/undef_syms.txt" || true
 
     echo "  ✓ $OUTPUT ($SIZE bytes, $SECTIONS sections)"
+
+    # Stage fap_file_assets into the firmware's SD runtime tree. buildFap only
+    # bakes fap_icon_assets into the FAP; file assets (e.g. ProtoPirate's
+    # keystore + models DB, required for keystore-backed decode and TX/emulate
+    # rolling-code generation) must reach the SD separately. The app reads them
+    # via the "/assets/..." prefix, which the firmware rewrites to
+    # "/ext/apps_assets/<appid>/...". Mirror tools/fam/generate.py by copying the
+    # asset dir's CONTENTS into ext/apps_assets/<appid>, the same tree the flasher
+    # deploys for built-in apps.
+    local FFA
+    FFA=$(grep 'fap_file_assets=' "$APP_DIR/application.fam" 2>/dev/null | sed 's/.*fap_file_assets="\([^"]*\)".*/\1/' | head -1)
+    if [ -n "$FFA" ] && [ -d "$APP_DIR/$FFA" ]; then
+        local ASSETS_DEST="$PROJECT_DIR/$FW_BUILD_DIR/esp-idf/main/generated/fam_runtime_root/ext/apps_assets/$APP_ID"
+        mkdir -p "$ASSETS_DEST"
+        cp -R "$APP_DIR/$FFA/." "$ASSETS_DEST/"
+        echo "  ✓ staged fap_file_assets ($FFA/) → ext/apps_assets/$APP_ID/"
+    fi
 }
 
 # ── Main: build for all targets ─────────────────────────────────────
